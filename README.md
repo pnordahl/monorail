@@ -253,7 +253,7 @@ Manually selecting targets gives one the ability to execute commands independent
   * getting new developers up to speed working on a target codebase, as one can define all setup code in a set of commands and execute it against the target
   * run any command for any target in the entire repo, at will
 
-To illustate manually selecting targets, we will run the `setup` command we defined but did not execute previously. We will also use the `-v` flag to `monorail-bash` to instruct it to emit additional information. Execute the following:
+To illustrate manually selecting targets, we will run the `setup` command we defined but did not execute previously. We will also use the `-v` flag to `monorail-bash` to instruct it to emit additional information. Execute the following:
 
 	monorail-bash -v exec -t group1/foo/bar -c setup
 
