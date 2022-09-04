@@ -1,7 +1,7 @@
 # monorail
-> A monorepo overlay for version control systems.
+> Transform any git repository into a monorepo.
 
-![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=master)
+![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=main)
 
 `monorail` transforms any git repo into a trunk-based development monorepo. It uses a file describing the various directory paths and relationship between those paths, extracts changes from git since the last tag, and derives what has changed. These changes can then be fed to other programs (e.g. `monorail-bash`) that can act on those changes.
 
@@ -52,7 +52,7 @@ In this tutorial, you'll learn:
 
 _NOTE: this tutorial assumes a UNIX-like environment._
 
-First, create a fresh `git` repository (_not_ bare) that has been configured with at least one remote named `origin`. The easiest way to do this is to create a new repo on Github, and clone it locally.
+First, create a fresh `git` repository (_not_ bare) that has been configured with at least one remote named `origin`. The easiest way to do this is to create a new repo on Github, and clone it locally. 
 
 To get started, generate the following directory structure with `mkdir -p group1/foo/bar/support/script && touch Monorail.toml`:
 
@@ -80,6 +80,13 @@ path = "group1"
 
   [[group.target]]
   path = "foo/bar"
+```
+
+If your repository trunk branch is `main`, also set the following (the default value is `master`):
+
+```
+[vcs.git]
+trunk = "main"
 ```
 
 ## Inspecting changes
