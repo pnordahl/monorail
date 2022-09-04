@@ -1,0 +1,74 @@
+# See https://github.com/toml-lang/toml#spec for details on how TOML is structured.
+
+[vcs]
+# One of: ["git"]. The version control system that the repository uses.
+# Required
+use = ""
+
+[vcs.git]
+# The branch used for trunk-based development and tagged releases.
+# * Default: "master"
+trunk = "master"
+
+# The remote to push release tags to.
+# * Default: "origin"
+remote = "origin"
+
+# A prefix for the tag refspec to use when pushing release tags.
+# * Default: "refs/tags"
+tags_refspec_prefix = "refs/tags"
+
+[extension]
+# The extension to use for running commands.
+# * Required. One of: ["bash"]
+use = ""
+
+# Configuration for the bash extension 'exec' subcommand. 
+[extension.bash.exec]
+# The path to the entrypoint script for any group or target. The value is relative to each group and target.
+# * Default: "support/script/monorail-exec.sh"
+entrypoint = "support/script/monorail-exec.sh"
+
+# A list of scripts to source (in order) prior to execution of an entrypoint script. The values are relative to the repository root.
+# * Default: []
+source = []
+
+# An array of groups to configure.
+[[group]]
+# The path for this group element. The value is relative to the repository root.
+# * Required
+path = "group1"
+
+# Path prefixes for which matching changes should affect all targets of this group.
+# * Default: []
+link = [
+    "vendor",
+]
+# Path prefixes that are available for this group's targets to reference in their 
+# own `depend` entry. Projects that reference any of these elements will be affected 
+# by changes that match the prefixes here.
+# Note that these paths should not resolve to any target.
+# * Default: []
+depend = [
+    "common/library1",
+]
+
+# An array of targets for this group.
+[[group.target]]
+# The path to this target. The value is relative to the group's `path` value.
+# * Required
+path = "target1"
+
+# Path prefixes to ignore when determining if a change should affect this target.
+# These are evaluated last, and will not override a group `link` or a `depend` that
+# this target declares.
+# * Default: []
+ignore = [
+    "ignore1.txt"
+]
+# References to path prefixes in this group's `depend`, declaring that changes to these 
+# paths outside the target should affect this target.
+# * Default: []
+depend = [
+    "common/library1"
+]

@@ -1,0 +1,56 @@
+name: monorail
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - '*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  monorail:
+    name: monorail
+    runs-on: ubuntu-latest
+    steps:
+      - name: prep
+        run: |
+          sudo chown -R $USER:$USER ${{ github.workspace }}
+          git config --global user.name "FIRST_NAME LAST_NAME"
+          git config --global user.email "MY_NAME@example.com"
+
+      - name: deps
+        uses: actions/checkout@v2
+
+      - name: rust stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: clippy
+        uses: actions-rs/cargo@v1
+        with:
+          toolchain: stable
+          command: clippy
+          args: -- -D warnings
+
+      - name: build
+        uses: actions-rs/cargo@v1
+        with:
+          toolchain: stable
+          command: build
+          args: --verbose --all
+
+      - name: test
+        uses: actions-rs/cargo@v1
+        with:
+          toolchain: stable
+          command: test
+          args: -- --nocapture
+
+
