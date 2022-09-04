@@ -1,11 +1,5 @@
 [package]
 name = "monorail"
-version = "1.0.0"
-authors = ["Patrick Nordahl <plnordahl@gmail.com>"]
-edition = "2018"
-
-[package]
-name = "postal"
 description = "Transform any git repository into a monorepo."
 license = "MIT"
 homepage = "https://github.com/pnordahl/monorail"
