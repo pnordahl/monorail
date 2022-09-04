@@ -1,4 +1,4 @@
-# monorail 🧐
+# monorail
 > A monorepo overlay for version control systems.
 
 ![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=master)
