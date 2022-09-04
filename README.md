@@ -2,6 +2,7 @@
 > Transform any git repository into a monorepo.
 
 ![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=main)
+[![Cargo](https://img.shields.io/crates/v/monorail.svg)](https://crates.io/crates/monorail)
 
 `monorail` transforms any git repo into a trunk-based development monorepo. It uses a file describing the various directory paths and relationship between those paths, extracts changes from git since the last tag, and derives what has changed. These changes can then be fed to other programs (e.g. `monorail-bash`) that can act on those changes.
 
