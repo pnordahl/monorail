@@ -7,7 +7,6 @@ repository = "https://github.com/pnordahl/monorail"
 version = "1.0.0"
 authors = ["Patrick Nordahl <plnordahl@gmail.com>"]
 edition = "2021"
-links = "monorail"
 keywords = ["monorail", "monorepo"]
 
 [dependencies]
