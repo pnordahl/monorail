@@ -1,10 +1,10 @@
 [package]
 name = "monorail"
-description = "Transform any git repository into a monorepo."
+description = "A monorepo overlay for version control systems."
 license = "MIT"
 homepage = "https://github.com/pnordahl/monorail"
 repository = "https://github.com/pnordahl/monorail"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Patrick Nordahl <plnordahl@gmail.com>"]
 edition = "2021"
 keywords = ["monorail", "monorepo"]

@@ -20,7 +20,7 @@ fn get_app<'a, 'b>() -> clap::App<'a, 'b> {
     App::new("monorail")
     .version(env!("CARGO_PKG_VERSION"))
     .author("Patrick Nordahl <plnordahl@gmail.com>")
-    .about("A monorepo overlay for version control systems")
+    .about("A monorepo overlay for version control systems.")
     .arg(
         Arg::with_name("config-file")
             .short("f")

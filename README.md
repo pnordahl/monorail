@@ -4,7 +4,7 @@
 ![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=main)
 [![Cargo](https://img.shields.io/crates/v/monorail.svg)](https://crates.io/crates/monorail)
 
-`monorail` transforms any git repo into a trunk-based development monorepo. It uses a file describing the various directory paths and relationship between those paths, extracts changes from git since the last tag, and derives what has changed. These changes can then be fed to other programs (e.g. `monorail-bash`) that can act on those changes.
+`monorail` transforms any git repo into a trunk-based development monorepo. It uses a file describing the various directory paths and relationship between those paths, extracts changes from git since the last tag, and derives what has changed. These changes can then be fed to other programs (e.g. `monorail-bash`) that can act on those changes. While `monorail` currently supports only `git` as the VCS backend, support for others could be added.
 
 `monorail` boils down to:
 
@@ -20,13 +20,15 @@ See the [tutorial](#tutorial) below for a practical walkthrough of how `monorail
 Ensure the following are installed and available on your system path:
 * [Rust](https://www.rust-lang.org/tools/install)
 * bash
-* [`jq`](https://stedolan.github.io/jq/download/), used by the `monorail-bash` extension
+* [`jq`](https://stedolan.github.io/jq/download/), used by the `monorail-bash` extension for the default `--output-format` of `json`
 
 `monorail` and all extensions can be installed from source by cloning the repository and executing the following, from the root of the repo:
 
 	./install.sh 
 	
 By default, it will place these in `/usr/local/bin`, if another location is preferred, use `./install.sh <destination>`.
+
+Note that while `monorail` can be installed from crates.io via `cargo install`, `cargo` does not support installing additional resources such as the script entrypoint for `monorail-bash`. The `install.sh` script handles both the binary and extension installation.
 
 ## Commands
 
