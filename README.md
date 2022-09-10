@@ -44,53 +44,83 @@ Create a `Monorail.toml` configuration file in the root of the repository you wa
 * command: a function, defined by a target, that can be invoked in an executor-dependent fashion
 * target: a path containing related files; the lowest level object that can be targeted by a command
 * group: a path containing a collection of targets and related configuration
+* depend: a path that can be declared by a target as a dependency, causing any change on that path to be considered a change for targets that do
+* link: a path that can be declared as an automatic dependency for all targets in a group, causing any change on that path to be considered a change for all targets
 
 # Tutorial
+
+_NOTE: this tutorial assumes a UNIX-like environment._
+
 In this tutorial, you'll learn:
 
+  * how to declare group, target, depend, and link
   * how to inspect changes
   * how to define commands
   * how to execute commands
   * how to release
 
-_NOTE: this tutorial assumes a UNIX-like environment._
+First, create a fresh `git` repository, and another to act as a remote:
 
-First, create a fresh `git` repository (_not_ bare) that has been configured with at least one remote named `origin`. The easiest way to do this is to create a new repo on Github, and clone it locally. 
+_NOTE_: This assumes a `init.defaultBranch` of `master` or empty string, the default for `git`. If yours is something else, change the `master` in the `git push` command to that.
 
-To get started, generate the following directory structure with `mkdir -p group1/foo/bar/support/script && touch Monorail.toml`:
+```sh
+git init monorail-tutorial
+git init monorail-tutorial-remote
+REMOTE_TRUNK=$(git -C monorail-tutorial-remote branch --show-current)
+git -C monorail-tutorial-remote checkout -b x
+pushd monorail-tutorial
+git remote add origin ../monorail-tutorial-remote
+git commit --allow-empty -m "HEAD"
+git push --set-upstream origin $REMOTE_TRUNK
+popd
+```
+
+_NOTE_: the commit is to create a valid HEAD reference, and the branch checkout in the remote is to avoid `receive.denyCurrentBranch` errors from `git` when we push during the tutorial.
+
+To get started, generate a directory structure with the following shell commands:
+
+```sh
+cd monorail-tutorial
+mkdir -p group1/target1
+touch Monorail.toml
+```
+... which yields the following directory structure:
 
 ```
-group1
-  foo/
-    bar/
-      support/
-        script/
-          monorail-exec.sh
-Monorail.toml
+├── Monorail.toml
+└── group1
+    └── target1
 ```
 
-Enter the following into `Monorail.toml`:
+_NOTE_: the remainder of this tutorial will apply updates to the `Monorail.toml` file with heredoc strings, for convenience.
 
-```
+Execute the following to specify the new group and target in `Monorail.toml`, as well as an `extension` to be used later in the tutorial:
+
+```sh
+cat <<EOF > Monorail.toml
 [vcs]
 use = "git"
 
-[extension]
+[vcs.git]
+trunk = "$(git branch --show-current)"
+
+[extension] 
 use = "bash"
 
 [[group]]
 path = "group1"
 
   [[group.target]]
-  path = "foo/bar"
+  	path = "target1"
+
+EOF
 ```
 
-If your repository trunk branch is `main`, also set the following (the default value is `master`):
+### Recap
 
-```
-[vcs.git]
-trunk = "main"
-```
+Your `monorail` config file (default: `Monorail.toml`) describes your existing repository layout in terms of `monorail` concepts. A `target` is a path to be developed/deployed/tested as a unit, e.g. a backend service, web app, etc. A `group` is a set of _related targets_, and defines what can be shared amongst targets (more on sharing later).
+
+Finally, many of `monorail`s capabilities are path-based. Our definition of `group.path` (relative to the repository root) and `target.path` (relative to the specified `group.path`) declare where these objects live in our repository.
 
 ## Inspecting changes
 
@@ -117,11 +147,13 @@ Begin by viewing the output of `inspect change`:
 }
 ```
 
-As expected there are no changes.
-
-Create a file in the path of one of the targets specified in `Monorail.toml` above. From the root of the repo, execute `touch group1/foo/bar/baz.txt`.
+As expected there are no changes, and `monorail` is able to interrogate `git` and use the `Monorail.toml` config successfully. The meaning of the `file`, `target`, `link`, and `depend` fields will be explained as the tutorial progresses.
 
 ### Inspect showing a change
+
+To show what an actual change looks like in `monorail` output, create a new file in `target1`:
+
+	touch group1/target1/foo.txt
 
 View changes again:
 
@@ -134,14 +166,14 @@ View changes again:
       "change": {
         "file": [
           {
-            "name": "group1/foo/bar/baz.txt",
-            "target": "group1/foo/bar",
+            "name": "group1/target1/foo.txt",
+            "target": "group1/target1",
             "action": "use",
             "reason": "target_match"
           }
         ],
         "target": [
-          "group1/foo/bar"
+          "group1/target1"
         ],
         "link": [],
         "depend": []
@@ -151,12 +183,16 @@ View changes again:
 }
 ```
 
-Our newly added file has been identified as matching target `group1/foo/bar`. 
+`monorail` has identified that the newly added file represents a meaningful change, based on our configuration in `Monorail.toml`.
+
+The `change.file` array contains a list of objects containing metadata about the change detected. It contains the `name` of the file (a path relative to the repository root), the `target` the file belongs to, the `action` taken by `monorail` during change detection (e.g. it was `use`d), and the `reason` that `action` was taken (e.g. it matched a declared target).
+
+The `change.target` array contains a list of paths relative to the repo root for targets detected as changed. This list is de-duped across all `change.file` entries; a target will appear at most once in this list.
 
 ### Inspect showing a change, after commit or push
-This understanding persists between commits and pushes. Commit your changes: 
+This understanding of what has changed persists between commits and pushes. Commit your changes: 
 
-	git add * && git commit -am "first commit"
+	git add * && git commit -am "x"
 
 Then, view changes again:
 
@@ -169,14 +205,14 @@ Then, view changes again:
       "change": {
         "file": [
           {
-            "name": "group1/foo/bar/baz.txt",
-            "target": "group1/foo/bar",
+            "name": "group1/target1/foo.txt",
+            "target": "group1/target1",
             "action": "use",
             "reason": "target_match"
           }
         ],
         "target": [
-          "group1/foo/bar"
+          "group1/target1"
         ],
         "link": [],
         "depend": []
@@ -186,7 +222,7 @@ Then, view changes again:
 }
 ```
 
-`monorail` still knows about the change to target `group1/foo/bar`. 
+`monorail` still knows about the change to target `group1/target1`.
 
 Push, and view changes again:
 
@@ -194,12 +230,213 @@ Push, and view changes again:
 
 The output remains the same.
 
+
+## Declaring dependencies and links
+
+`monorail` allows for targets to depend on paths outside of the `path` each target has declared. This allows for reference paths containing utility code, serialization files (e.g. protobuf definitions), configuration, etc. When these paths have changes, it triggers targets that depend on them to be changed.
+
+
+### Dependencies
+
+Begin by creating a directory to be used as a dependency, and a directory to hold a new target, `target2`:
+
+```sh
+mkdir -p group1/common/library1
+mkdir group1/target2
+```
+
+Execute the following to adjust the `[[group]]` section of `Monorail.toml` to add `library1` as a depend-able path, specify `target2`, and make `target2` depend on `library1`:
+
+```sh
+cat <<EOF > Monorail.toml
+[vcs]
+use = "git"
+
+[vcs.git]
+trunk = "$(git branch --show-current)"
+
+[extension] 
+use = "bash"
+
+[[group]]
+path = "group1"
+depend = [
+	"common/library1"
+]
+
+  [[group.target]]
+  	path = "target1"
+
+  [[group.target]]
+  	path = "target2"
+
+  	depend = [
+  		"common/library1"
+  	]
+
+EOF
+```
+
+The `depend` declaration in the `group` section indicates that this path _can_ be depended on. The `target.depend` is where you specify zero or more of these paths your target _does_ depend on.
+
+To trigger change detection, create a file in library1:
+
+	touch group1/common/library1/foo.proto
+
+and then `monorail inspect change | jq .`:
+
+```json
+{
+  "group": {
+    "group1": {
+      "change": {
+        "file": [
+        	{
+            "name": "group1/common/library1/foo.proto",
+            "target": null,
+            "action": "use",
+            "reason": "target_depend_effect"
+          },
+          {
+            "name": "group1/target1/foo.txt",
+            "target": "group1/target1",
+            "action": "use",
+            "reason": "target_match"
+          }
+        ],
+        "target": [
+          "group1/target2",
+          "group1/target1"
+        ],
+        "link": [],
+        "depend": [
+          "group1/common/library1"
+        ]
+      }
+    }
+  }
+}
+```
+
+Our original file entry is still there, but another for the newly-created file has appeared. It has a `target` of `null` because it does not lie in the path of a target, and a `reason` that indicates it is being used due to a target depending on a path containing the file (`target_depend_effect`).
+
+An entry of `group1/target2` has appeared in `group.target`, indicating that this target is now part of the set of targets that have changed. We didn't change any files in `target2` (indeed, none exist!), but did modify a path that `target2` depends on.
+
+Furthermore, an entry has appeared in `group.depend` for our library path.
+
+
+### Links
+
+A `link` works similarly to a `depend`, but applies to all targets in a group without them opting-in. To demonstrate, we will create a third target and a contrived `Lockfile` to link all targets to:
+
+	mkdir group1/target3
+	touch group1/Lockfile
+
+Execute the following to adjust the `[[group]]` section of `Monorail.toml` to specify this new target, as well as a group `link`:
+
+```sh
+cat <<EOF > Monorail.toml
+[vcs]
+use = "git"
+
+[vcs.git]
+trunk = "$(git branch --show-current)"
+
+[extension] 
+use = "bash"
+
+[[group]]
+path = "group1"
+depend = [
+	"common/library1"
+]
+link = [
+	"Lockfile"
+]
+
+  [[group.target]]
+  	path = "target1"
+
+  [[group.target]]
+  	path = "target2"
+
+  	depend = [
+  		"common/library1"
+  	]
+  [[group.target]]
+  	path = "target3"
+
+EOF
+```
+
+Executing `monocle inspect change | jq .` yields:
+
+```json
+{
+  "group": {
+    "group1": {
+      "change": {
+        "file": [
+        	{
+            "name": "group1/Lockfile",
+            "target": null,
+            "action": "use",
+            "reason": "group_link_effect"
+          },
+        	{
+            "name": "group1/common/library1/foo.proto",
+            "target": null,
+            "action": "use",
+            "reason": "target_depend_effect"
+          },
+          {
+            "name": "group1/target1/foo.txt",
+            "target": "group1/target1",
+            "action": "use",
+            "reason": "target_match"
+          }
+        ],
+        "target": [
+          "group1/target3",
+          "group1/target2",
+          "group1/target1"
+        ],
+        "link": [
+          "group1/Lockfile"
+        ],
+        "depend": [
+          "group1/common/library1"
+        ]
+      }
+    }
+  }
+}
+```
+
+Again, our original changes to `target1` and `library1` remain. A new `change.file` for `Lockfile` has appeared, a new `change.target` for the new `target3` target has been added, and `change.link` now has a path to the `Lockfile` we changed.
+
+Note that `target3` did not need to explicitly depend on `Lockfile`; simply being a member of `group1` does this.
+
 ## Defining commands
 
-Commands are stored in a file on a per-target basis, the path to which is defined in `Monorail.toml`. In our case, that path will be `support/script/monorail-exec.sh` (the default) relative to `group1/foo/bar`. Create this file with: `touch group1/foo/bar/support/script/monorail-exec.sh`. Inside, we will define a simple script containing three commands:
+Commands are run by extensions, which are "runners" for user-defined code. We have already specified the following in `Monorail.toml`, so we will proceed with `monorail-bash`:
+
+```
+[extension]
+use = "bash"
+```
+
+Commands are stored in a file on a per-target basis, the path to which is defined in `Monorail.toml`. In our case, that path will be `support/script/monorail-exec.sh` (the default) relative to `group1/target1`.
+
+Create the path to this file with: 
+
+	mkdir -p group1/target1/support/script
+
+In the `group1/target1/support/script/monorail-exec.sh` file, we will define a script containing three commands:
 
 
 ```sh
+cat <<"EOF" > group1/target1/support/script/monorail-exec.sh
 #!/usr/bin/env bash
 
 function command1() {
@@ -216,73 +453,97 @@ function command2() {
 function setup() {
   echo "Installing everything you need"
 }
+EOF
 ```
 
-Commands can be named any valid UTF-8 string, and are free to do anything a normal `bash` script can do: call external build tools, perform network requests, etc.
+Command names can be named any valid UTF-8 string, and are free to do anything a normal `bash` script can do: source other scripts, call external build tools, perform network requests, etc. One of the benefits of `monorail` is that it does not limit the build tooling you can use.
 
 ## Executing commands
 
 With the command script defined, it can be called with `monorail-bash exec`. This can be done in one of two ways:
 
-  * implicitly, from change detection
+  * implicitly, from the change detection output of `monorail`
   * explicitly, by specifying a list of targets
 
 
 ### Implicit
 
-When done implicitly, `monorail-bash exec` uses the same processes that power `monorail inspect change` to derive targets and execute commands against them. To illustrate this use the following (`SOME_EXTRA_VAR` just illustrates that context can be passed to entrypoint scripts): 
+When done implicitly, `monorail-bash exec` uses the same processes that power `monorail inspect change` to derive changed targets and execute commands against them. To illustrate this use the following (`SOME_EXTRA_VAR` just shows that parent shell values can be passed to commands): 
 
-	SOME_EXTRA_VAR=foo monorail-bash exec -c command1 -c command2 
+	SOME_EXTRA_VAR=foo monorail-bash -v exec -c command1 -c command2
 
 ```
+Sep 10 07:34:07 monorail-bash : 'monorail' path:    monorail
+Sep 10 07:34:07 monorail-bash : 'jq' path:          jq
+Sep 10 07:34:07 monorail-bash : 'git' path:         git
+Sep 10 07:34:07 monorail-bash : use libgit2 status: false
+Sep 10 07:34:07 monorail-bash : 'monorail' config:  Monorail.toml
+Sep 10 07:34:07 monorail-bash : working directory:  /Users/patrick/lab/github.com/pnordahl/monorail-tutorial
+Sep 10 07:34:07 monorail-bash : command:            command1
+Sep 10 07:34:07 monorail-bash : command:            command2
+Sep 10 07:34:07 monorail-bash : start:              
+Sep 10 07:34:07 monorail-bash : end:                
+Sep 10 07:34:07 monorail-bash : target (inferred):             group1/Lockfile
+Sep 10 07:34:07 monorail-bash : target (inferred):             group1/common/library1
+Sep 10 07:34:07 monorail-bash : target (inferred):             group1/target2
+Sep 10 07:34:07 monorail-bash : target (inferred):             group1/target3
+Sep 10 07:34:07 monorail-bash : target (inferred):             group1/target1
+Sep 10 07:34:07 monorail-bash : NOTE: Ignoring command for non-directory target; command: command1, target: group1/Lockfile
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command1, target: group1/common/library1
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command1, target: group1/target2
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command1, target: group1/target3
+Sep 10 07:34:07 monorail-bash : Executing command; command: command1, target: group1/target1
 Hello, from command1
 The calling environment is inherited: foo
+Sep 10 07:34:07 monorail-bash : NOTE: Ignoring command for non-directory target; command: command2, target: group1/Lockfile
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command2, target: group1/common/library1
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command2, target: group1/target2
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command2, target: group1/target3
+Sep 10 07:34:07 monorail-bash : Executing command; command: command2, target: group1/target1
 Hello, from command2
 some data
 ```
 
-The requested commands were executed in the desired order and did what was expected. 
+The majority of this output is workflow and debugging information, but it's worth noting a few key pieces.
 
-Executing arbitrary functions against the changes detected by `monorail` has a number of applications, including:
+* commands were executed in the order specified by the `-c` options.
+* paths we specified as `depend` and `link` entries could have specified their own implementations of the `command1` and `command2` commands
+* paths that point to individual files cannot specify a command implementation (e.g. our Lockfile)
+* paths without implementations for `command1` and/or `command2` were noted and ignored
 
-  * executing commands against all projects you're currently working on, without specifically targeting them; `monorail` change detection ensures that for each changed target, the requested commands are executed sequentially
-  * running specific commands against all changed targets as part of CI
+Executing arbitrary bash functions against the changes detected by `monorail` has a number of applications, including:
+
+  * executing commands against all projects you've modified, without specifically targeting them; `monorail-bash` ensures that for each changed target, the requested commands are executed sequentially
+  * running specific commands against all changed targets as part of CI (e.g. `check`, `build`, `test`, `deploy`, etc.)
 
 ### Explicit
 
 Manually selecting targets gives one the ability to execute commands independent of VCS change detection. Applications include:
 
-  * getting new developers up to speed working on a target codebase, as one can define all setup code in a set of commands and execute it against the target
-  * run any command for any target in the entire repo, at will
+  * getting new developers up to speed working on a target codebase, as one can define all setup code in a set of commands and execute it against the target, e.g. a `bootstrap` command
+  * run any command for any target in the entire repo, as desired
 
-To illustrate manually selecting targets, we will run the `setup` command we defined but did not execute previously. We will also use the `-v` flag to `monorail-bash` to instruct it to emit additional information. Execute the following:
+To illustrate manually selecting targets, we will run the `setup` command we defined but did not execute previously. Execute the following (removing the `-v` to cut down on the visual noise):
 
-	monorail-bash -v exec -t group1/foo/bar -c setup
+	monorail-bash exec -t group1/target1 -c setup
 
 ```
-Jan 21 15:13:21 monorail-bash : 'monorail' path:     monorail
-Jan 21 15:13:21 monorail-bash : 'jq' path:          jq
-Jan 21 15:13:21 monorail-bash : 'monorail' config:   Monorail.toml
-Jan 21 15:13:21 monorail-bash : working directory:  /Users/patrick/scratch/monorail-tutorial
-Jan 21 15:13:21 monorail-bash : commands:           setup
-Jan 21 15:13:21 monorail-bash : targets:            group1/foo/bar
-Jan 21 15:13:21 monorail-bash : start:
-Jan 21 15:13:21 monorail-bash : end:
-Jan 21 15:13:21 monorail-bash : Executing command; command: setup, target: group1/foo/bar
 Installing everything you need
 ```
 
-Before running our defined `setup` command, `monorail-bash -v` has emitted the configuration it's using, as well as a workflow message `Executing command; command: setup, target: group1/foo/bar`. 
+For more information, execute `monorail-bash -h`, and `monorail-bash exec -h`.
 
 ## Releasing
 
-`monorail` uses the backend VCS native mechanisms, e.g. tags in `git` as "release" markers. When a release is performed, it applies to all targets that were changed since the last release.
+`monorail` uses the backend VCS native mechanisms, e.g. tags in `git` as "release" markers. This creates a "checkpoint" for change detection. Without release tags, `monorail` is forced to search `git` history back to the first commit. This would be ineffecient and make change detection useless as all targets would be considered changed over a long enough timeline.
+
+When a release is performed, it applies to all targets that were changed since the previous release (or the first commit of the repository, if no releases yet exist).
 
 First, let's commit and push our current changes:
 
 	git add * && git commit -am "update commands" && git push
 
-Assuming that target commands have been run to our satisfaction and we have committed all that we intend to, we can dry run a patch release with: 
+Assuming that we have committed all that we intend to, and target commands have been run to our satisfaction (e.g. CI has passed for the merge of our branch), we can dry-run a patch release with: 
 
 	monorail release --dry-run -t patch | jq .
 
@@ -290,7 +551,11 @@ Assuming that target commands have been run to our satisfaction and we have comm
 {
   "id": "v0.0.1",
   "targets": [
-    "group1/foo/bar"
+    "group1/Lockfile",
+    "group1/common/library1",
+    "group1/target1",
+    "group1/target2",
+    "group1/target3"
   ],
   "dry_run": true
 }
@@ -306,7 +571,7 @@ Now, run a real release:
 {
   "id": "v0.0.1",
   "targets": [
-    "group1/foo/bar"
+    "group1/target1"
   ],
   "dry_run": false
 }
@@ -331,12 +596,30 @@ To show that the release cleared out `monorail`s view of changes, execute:
 }
 ```
 
-While there are more subtleties we could show (multiple groups, multiple targets, dependencies, links, etc.), these are extensions of the fundamentals illustrated by this tutorial. Refer to `Monorail.reference.toml` for more information.
+Finally, our newly-pushed tag is now in the remote. To see this, execute:
 
+	git -C ../monorail-tutorial-remote show -s --format=%B v0.0.1
+
+... which outputs
+
+```
+tag v0.0.1
+Tagger: you <email@domain.com>
+
+group1/Lockfile
+group1/common/library1
+group1/target1
+group1/target2
+group1/target3
+```
+
+This concludes the tutorial. Now that you have seen how the core concepts of `monorail` and extensions work, you're ready to use it in real projects. Experiment with group and target layouts, commands, CI, and working on a trunk-based development workflow that works for your teams.
+
+Refer to `Monorail.reference.toml` for more specific information about the various configuration available for `monorail` and extensions.
 
 ## Invariants
 
-In order to work, `monorail` requires the following implicit invariants:
+In order to work, `monorail` requires the following invariants be satisfied:
 
   1. groups may not reference paths in other groups
   2. targets may not reference paths in other targets
@@ -353,3 +636,5 @@ This will build the project and run the tests:
 cargo build
 cargo test -- --nocapture
 ```
+
+You can use `install.sh` to build a release binary of `monorail` and copy it, along with extensions, into your PATH.

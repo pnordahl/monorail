@@ -52,11 +52,11 @@ function process_exec {
 		use_libgit2_status=true
 	fi
 	if [ "$verbose" = true ]; then
-		log_verbose "$(printf "'monorail' path:     %s" "$monorail_path")"
+		log_verbose "$(printf "'monorail' path:    %s" "$monorail_path")"
 		log_verbose "$(printf "'jq' path:          %s" "$jq_path")"
 		log_verbose "$(printf "'git' path:         %s" "$git_path")"
 		log_verbose "$(printf "use libgit2 status: %s" "$use_libgit2_status")"
-		log_verbose "$(printf "'monorail' config:   %s" "$config_file")"
+		log_verbose "$(printf "'monorail' config:  %s" "$config_file")"
 		log_verbose "$(printf "working directory:  %s" "$working_directory")"
 		for command in "${commands[@]}"; do
 			log_verbose "$(printf "command:            %s" "$command")"
@@ -173,7 +173,7 @@ function execute_target_command {
 	local script=$3
 	pushd "$working_directory" > /dev/null || return
 	if [ ! -d "$target" ]; then
-		log_verbose  "$(printf "Ignoring command for non-directory target; command: %s, target: %s" "$command" "$target")"
+		log_verbose  "$(printf "NOTE: Ignoring command for non-directory target; command: %s, target: %s" "$command" "$target")"
 		popd > /dev/null || return
 		return
 	fi
@@ -186,10 +186,10 @@ function execute_target_command {
 				log_verbose "$(printf "Executing command; command: %s, target: %s" "$command" "$target")"
 				$command
 			else
-				log_verbose "$(printf "Undefined command; command: %s, target: %s" "$command" "$target")"
+				log_verbose "$(printf "NOTE: Undefined command; command: %s, target: %s" "$command" "$target")"
 			fi
 		else
-			log_verbose "$(printf "Script not found; command: %s, target: %s" "$command" "$target")"
+			log_verbose "$(printf "NOTE: Script not found; command: %s, target: %s" "$command" "$target")"
 		fi
 	)
 	code=$?
