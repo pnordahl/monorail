@@ -33,19 +33,19 @@ pub enum ErrorClass {
 }
 
 #[derive(Debug, Serialize)]
-pub struct MonocleError {
+pub struct MonorailError {
     pub class: ErrorClass,
     pub message: String,
 }
-impl Error for MonocleError {}
-impl fmt::Display for MonocleError {
+impl Error for MonorailError {}
+impl fmt::Display for MonorailError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "class: {:?}, message: {}", self.class, self.message)
     }
 }
-impl From<git2::Error> for MonocleError {
+impl From<git2::Error> for MonorailError {
     fn from(error: git2::Error) -> Self {
-        MonocleError {
+        MonorailError {
             class: ErrorClass::Git2,
             message: format!(
                 "class: {:?}, code: {:?}, message: {:?}",
@@ -56,64 +56,64 @@ impl From<git2::Error> for MonocleError {
         }
     }
 }
-impl From<&str> for MonocleError {
+impl From<&str> for MonorailError {
     fn from(error: &str) -> Self {
-        MonocleError {
+        MonorailError {
             class: ErrorClass::Generic,
             message: error.to_string(),
         }
     }
 }
-impl From<String> for MonocleError {
+impl From<String> for MonorailError {
     fn from(error: String) -> Self {
-        MonocleError {
+        MonorailError {
             class: ErrorClass::Generic,
             message: error,
         }
     }
 }
-impl From<std::io::Error> for MonocleError {
+impl From<std::io::Error> for MonorailError {
     fn from(error: std::io::Error) -> Self {
-        MonocleError {
+        MonorailError {
             class: ErrorClass::Io,
             message: error.to_string(),
         }
     }
 }
-impl From<std::str::Utf8Error> for MonocleError {
+impl From<std::str::Utf8Error> for MonorailError {
     fn from(error: std::str::Utf8Error) -> Self {
-        MonocleError {
+        MonorailError {
             class: ErrorClass::Utf8Error,
             message: error.to_string(),
         }
     }
 }
-impl From<toml::de::Error> for MonocleError {
+impl From<toml::de::Error> for MonorailError {
     fn from(error: toml::de::Error) -> Self {
-        MonocleError {
+        MonorailError {
             class: ErrorClass::TomlDeserialize,
             message: error.to_string(),
         }
     }
 }
-impl From<serde_json::error::Error> for MonocleError {
+impl From<serde_json::error::Error> for MonorailError {
     fn from(error: serde_json::error::Error) -> Self {
-        MonocleError {
+        MonorailError {
             class: ErrorClass::SerdeJSON,
             message: error.to_string(),
         }
     }
 }
-impl From<std::num::ParseIntError> for MonocleError {
+impl From<std::num::ParseIntError> for MonorailError {
     fn from(error: std::num::ParseIntError) -> Self {
-        MonocleError {
+        MonorailError {
             class: ErrorClass::SerdeJSON,
             message: error.to_string(),
         }
     }
 }
 
-fn exit_with_error(err: MonocleError, fmt: &str) {
+fn exit_with_error(err: MonorailError, fmt: &str) {
     write_output(std::io::stderr(), &err, fmt).unwrap();
     std::process::exit(1);
 }
@@ -294,7 +294,7 @@ fn libgit2_start_end_diff_changes(
 }
 fn handle_cmd_output(
     output: std::io::Result<std::process::Output>,
-) -> Result<Vec<u8>, MonocleError> {
+) -> Result<Vec<u8>, MonorailError> {
     match output {
         Ok(output) => {
             if output.status.success() {
@@ -310,7 +310,7 @@ fn handle_cmd_output(
 fn git_cmd_status(
     git_path: &str,
     workdir: Option<&std::path::Path>,
-) -> Result<Vec<u8>, MonocleError> {
+) -> Result<Vec<u8>, MonorailError> {
     handle_cmd_output(
         std::process::Command::new(git_path)
             .args(&[
@@ -371,7 +371,7 @@ fn git_all_changes(
     end_oid: git2::Oid,
     use_libgit2: bool,
     git_path: &str,
-) -> Result<Vec<RawChange>, MonocleError> {
+) -> Result<Vec<RawChange>, MonorailError> {
     let mut changes = libgit2_start_end_diff_changes(repo, start_oid, end_oid)?;
 
     let mut status = match use_libgit2 {
@@ -387,7 +387,7 @@ fn git_all_changes(
 
 // A universal oid lookup function, allowing users to freely pass refs, revs, sha, or oid
 // and still resolve.
-fn libgit2_find_oid(repo: &git2::Repository, s: &str) -> Result<git2::Oid, MonocleError> {
+fn libgit2_find_oid(repo: &git2::Repository, s: &str) -> Result<git2::Oid, MonorailError> {
     // first, attempt a direct lookup (for SHA)
     match git2::Oid::from_str(s) {
         Ok(o) => Ok(o),
@@ -425,7 +425,7 @@ pub fn handle_release<'a>(
     cfg: &'a Config,
     input: HandleReleaseInput,
     wd: &str,
-) -> Result<ReleaseOutput, MonocleError> {
+) -> Result<ReleaseOutput, MonorailError> {
     match cfg.vcs.r#use {
         VcsKind::Git => {
             let repo = git2::Repository::open(wd)?;
@@ -543,7 +543,7 @@ pub fn handle_release<'a>(
     }
 }
 
-fn increment_semver(semver: &str, release_type: &str) -> Result<String, MonocleError> {
+fn increment_semver(semver: &str, release_type: &str) -> Result<String, MonorailError> {
     let v: Vec<&str> = semver.trim_start_matches('v').split('.').collect();
     if v.len() != 3 {
         return Err(format!("semver should have 3 parts, it has {}", v.len()).into());
@@ -579,7 +579,7 @@ pub fn handle_inspect_change<'a>(
     cfg: &'a Config,
     input: HandleInspectChangeInput,
     wd: &str,
-) -> Result<InspectChangeOutput, MonocleError> {
+) -> Result<InspectChangeOutput, MonorailError> {
     match cfg.vcs.r#use {
         VcsKind::Git => {
             let repo = git2::Repository::open(wd)?;
@@ -640,7 +640,7 @@ impl fmt::Display for CommandOutputRecord<'_> {
 struct ProcessedChange {
     file: GroupChangeFile,
     group_path: Option<String>,
-    target_paths: Option<Vec<String>>,
+    project_paths: Option<Vec<String>>,
     depend_path: Option<String>,
     link_path: Option<String>,
     ignore_path: Option<String>,
@@ -650,7 +650,7 @@ impl ProcessedChange {
         ProcessedChange {
             file: GroupChangeFile::new(name, target),
             group_path: None,
-            target_paths: None,
+            project_paths: None,
             depend_path: None,
             link_path: None,
             ignore_path: None,
@@ -670,25 +670,25 @@ impl TargetLookup {
 }
 
 struct GroupLookup {
-    target_paths: Option<Vec<String>>,
-    depend2targets: HashMap<String, HashSet<String>>,
+    project_paths: Option<Vec<String>>,
+    depend2projects: HashMap<String, HashSet<String>>,
     prefixed_link: Option<Trie<u8>>,
     prefixed_depend: Option<Trie<u8>>,
-    prefixed_targets: Option<Trie<u8>>,
+    prefixed_projects: Option<Trie<u8>>,
     target_lookups: HashMap<String, TargetLookup>,
 }
 impl GroupLookup {
     pub fn new() -> Self {
         GroupLookup {
-            target_paths: None,
-            depend2targets: HashMap::new(),
+            project_paths: None,
+            depend2projects: HashMap::new(),
             prefixed_link: None,
             prefixed_depend: None,
-            prefixed_targets: None,
+            prefixed_projects: None,
             target_lookups: HashMap::new(),
         }
     }
-    pub fn populate(&mut self, group: &Group) -> Result<(), MonocleError> {
+    pub fn populate(&mut self, group: &Group) -> Result<(), MonorailError> {
         let mut depend_hs: HashSet<String> = HashSet::new();
         if let Some(depends) = &group.depend {
             let mut builder = TrieBuilder::new();
@@ -706,10 +706,10 @@ impl GroupLookup {
             }
             self.prefixed_link = Some(builder.build());
         }
-        if let Some(targets) = &group.target {
+        if let Some(projects) = &group.project {
             let mut v: Vec<String> = Vec::new();
             let mut builder = TrieBuilder::new();
-            for p in targets {
+            for p in projects {
                 let prefixed_target = format!("{}/{}", &group.path, &p.path);
                 v.push(prefixed_target.to_owned());
                 let mut target_lookup = TargetLookup::new();
@@ -717,15 +717,15 @@ impl GroupLookup {
                     for d in depends {
                         let prefixed = format!("{}/{}", &group.path, d);
                         if depend_hs.contains(prefixed.as_str()) {
-                            if self.depend2targets.contains_key(&prefixed) {
-                                self.depend2targets
+                            if self.depend2projects.contains_key(&prefixed) {
+                                self.depend2projects
                                     .get_mut(&prefixed)
                                     .unwrap()
                                     .insert(prefixed_target.to_owned());
                             } else {
                                 let mut hs = HashSet::new();
                                 hs.insert(prefixed_target.to_owned());
-                                self.depend2targets.insert(prefixed.to_owned(), hs);
+                                self.depend2projects.insert(prefixed.to_owned(), hs);
                             }
                         } else {
                             return Err(format!(
@@ -748,8 +748,8 @@ impl GroupLookup {
                 self.target_lookups
                     .insert(prefixed_target.to_owned(), target_lookup);
             }
-            self.target_paths = Some(v);
-            self.prefixed_targets = Some(builder.build());
+            self.project_paths = Some(v);
+            self.prefixed_projects = Some(builder.build());
         }
         Ok(())
     }
@@ -758,7 +758,7 @@ impl GroupLookup {
 fn process_inspect_change(
     changes: &[RawChange],
     cfg: &Config,
-) -> Result<InspectChangeOutput, MonocleError> {
+) -> Result<InspectChangeOutput, MonorailError> {
     let mut output = InspectChangeOutput::new();
 
     if let Some(cfg_groups) = &cfg.group {
@@ -786,9 +786,9 @@ fn process_inspect_change(
                 if let Some(group_path) = pc.group_path {
                     if let Some(group_inspect) = output.group.get_mut(&group_path) {
                         if pc.file.action == FileActionKind::Use {
-                            if let Some(target_paths) = pc.target_paths {
-                                for pn in target_paths {
-                                    group_inspect.change.target.insert(pn.to_string());
+                            if let Some(project_paths) = pc.project_paths {
+                                for pn in project_paths {
+                                    group_inspect.change.project.insert(pn.to_string());
                                 }
                             }
                             if let Some(link_path) = pc.link_path {
@@ -811,7 +811,7 @@ fn get_processed_changes(
     change: &RawChange,
     group_lookups: &HashMap<String, GroupLookup>,
     groups_trie: &Trie<u8>,
-) -> Result<Vec<ProcessedChange>, MonocleError> {
+) -> Result<Vec<ProcessedChange>, MonorailError> {
     let mut pcs: Vec<ProcessedChange> = vec![];
     let group_matches = groups_trie.common_prefix_search(&change.name);
     match group_matches.len() {
@@ -829,7 +829,7 @@ fn get_processed_changes(
                             let mut pc = ProcessedChange::new(&change.name, None);
                             pc.group_path = Some(group_path_match.to_owned());
                             pc.link_path = Some(link_path);
-                            pc.target_paths = group_lookup.target_paths.clone();
+                            pc.project_paths = group_lookup.project_paths.clone();
                             pc.file.action = FileActionKind::Use;
                             pc.file.reason = FileReasonKind::GroupLinkEffect;
                             pcs.push(pc);
@@ -845,10 +845,10 @@ fn get_processed_changes(
                             let depend_path =
                                 String::from_utf8_lossy(&group_depend_matches[0]).to_string();
                             pc.depend_path = Some(depend_path.to_owned());
-                            match group_lookup.depend2targets.get(&depend_path) {
-                                Some(targets) => {
-                                    pc.target_paths =
-                                        Some(targets.iter().map(|p| p.to_owned()).collect());
+                            match group_lookup.depend2projects.get(&depend_path) {
+                                Some(projects) => {
+                                    pc.project_paths =
+                                        Some(projects.iter().map(|p| p.to_owned()).collect());
                                     pc.file.action = FileActionKind::Use;
                                     pc.file.reason = FileReasonKind::TargetDependEffect;
                                     pcs.push(pc);
@@ -859,26 +859,26 @@ fn get_processed_changes(
                         }
                     }
 
-                    if let Some(prefixed_targets) = &group_lookup.prefixed_targets {
-                        let group_target_matches =
-                            prefixed_targets.common_prefix_search(&change.name);
-                        for m in group_target_matches.iter() {
+                    if let Some(prefixed_projects) = &group_lookup.prefixed_projects {
+                        let group_project_matches =
+                            prefixed_projects.common_prefix_search(&change.name);
+                        for m in group_project_matches.iter() {
                             let mut pc = ProcessedChange::new(&change.name, None);
                             pc.group_path = Some(group_path_match.to_owned());
-                            let target_match = String::from_utf8_lossy(m).to_string();
-                            let target_lookup = group_lookup.target_lookups.get(&target_match);
+                            let project_match = String::from_utf8_lossy(m).to_string();
+                            let target_lookup = group_lookup.target_lookups.get(&project_match);
                             match target_lookup {
                                 Some(target_lookup) => {
-                                    pc.target_paths = Some(vec![target_match.to_owned()]);
-                                    pc.file.target = Some(target_match);
+                                    pc.project_paths = Some(vec![project_match.to_owned()]);
+                                    pc.file.target = Some(project_match);
                                     if let Some(prefixed_ignore) = &target_lookup.prefixed_ignore {
-                                        let target_ignore_matches =
+                                        let project_ignore_matches =
                                             prefixed_ignore.common_prefix_search(&change.name);
-                                        if !target_ignore_matches.is_empty() {
-                                            let target_ignore_match =
-                                                String::from_utf8_lossy(&target_ignore_matches[0])
+                                        if !project_ignore_matches.is_empty() {
+                                            let project_ignore_match =
+                                                String::from_utf8_lossy(&project_ignore_matches[0])
                                                     .to_string();
-                                            pc.ignore_path = Some(target_ignore_match);
+                                            pc.ignore_path = Some(project_ignore_match);
                                             pc.file.action = FileActionKind::Ignore;
                                             pc.file.reason = FileReasonKind::TargetIgnoreEffect;
                                             pcs.push(pc);
@@ -965,7 +965,7 @@ impl IntoIterator for GroupInspect {
 #[derive(Serialize, Debug)]
 pub struct GroupChange {
     pub file: Vec<GroupChangeFile>,
-    pub target: HashSet<String>,
+    pub project: HashSet<String>,
     pub link: HashSet<String>,
     pub depend: HashSet<String>,
 }
@@ -973,7 +973,7 @@ impl GroupChange {
     fn new() -> Self {
         GroupChange {
             file: Vec::new(),
-            target: HashSet::new(),
+            project: HashSet::new(),
             link: HashSet::new(),
             depend: HashSet::new(),
         }
@@ -989,7 +989,7 @@ impl IntoIterator for GroupChange {
         let v: Vec<String> = self
             .link
             .into_iter()
-            .chain(self.depend.into_iter().chain(self.target.into_iter()))
+            .chain(self.depend.into_iter().chain(self.project.into_iter()))
             .collect::<Vec<String>>();
         v.into_iter()
     }
@@ -1022,11 +1022,11 @@ pub enum FileActionKind {
 pub enum FileReasonKind {
     #[serde(rename = "group_link_effect")]
     GroupLinkEffect,
-    #[serde(rename = "target_match")]
+    #[serde(rename = "project_match")]
     TargetMatch,
-    #[serde(rename = "target_ignore_effect")]
+    #[serde(rename = "project_ignore_effect")]
     TargetIgnoreEffect,
-    #[serde(rename = "target_depend_effect")]
+    #[serde(rename = "project_depend_effect")]
     TargetDependEffect,
     #[serde(rename = "inert")]
     Inert,
@@ -1037,7 +1037,7 @@ struct RawChange {
     name: String,
 }
 
-fn write_output<W, T>(mut writer: W, value: &T, output_format: &str) -> Result<(), MonocleError>
+fn write_output<W, T>(mut writer: W, value: &T, output_format: &str) -> Result<(), MonorailError>
 where
     W: Write,
     T: Serialize,
@@ -1158,16 +1158,16 @@ struct Group {
     path: String,
     link: Option<Vec<String>>,
     depend: Option<Vec<String>>,
-    target: Option<Vec<Target>>,
+    project: Option<Vec<Project>>,
 }
 #[derive(Serialize, Deserialize, Debug)]
-struct Target {
+struct Project {
     path: String,
     ignore: Option<Vec<String>>,
     depend: Option<Vec<String>>,
 }
 impl Config {
-    pub fn new(file_path: &str) -> Result<Config, MonocleError> {
+    pub fn new(file_path: &str) -> Result<Config, MonorailError> {
         let path = Path::new(file_path);
 
         let file = File::open(&path)?;
@@ -1178,7 +1178,7 @@ impl Config {
         let config = toml::from_str(contents.as_str())?;
         Ok(config)
     }
-    pub fn validate(&self) -> Result<(), MonocleError> {
+    pub fn validate(&self) -> Result<(), MonorailError> {
         Ok(())
     }
 }
@@ -1210,8 +1210,8 @@ depend = [
     "common/log",
     "common/error"
 ]
-[[group.target]]
-path = "target/anvil"
+[[group.project]]
+path = "target/project1"
 ignore = [
     "README.md"
 ]
@@ -1417,14 +1417,14 @@ depend = [
     #[test]
     fn test_trie() {
         let mut builder = TrieBuilder::new();
-        builder.push("rust/target/anvil/README.md");
+        builder.push("rust/target/project1/README.md");
         builder.push("rust/common/log");
         builder.push("rust/common/error");
         builder.push("rust/foo/log");
 
         let trie = builder.build();
 
-        assert_eq!(trie.exact_match("rust/target/anvil/README.md"), true);
+        assert_eq!(trie.exact_match("rust/target/project1/README.md"), true);
         let matches = trie.common_prefix_search("rust/common/log/bar.rs");
         assert_eq!(String::from_utf8_lossy(&matches[0]), "rust/common/log");
     }
@@ -1435,39 +1435,39 @@ depend = [
     }
 
     #[test]
-    fn test_process_inspect_change_target_file() {
+    fn test_process_inspect_change_project_file() {
         let changes = vec![RawChange {
-            name: "rust/target/anvil/lib.rs".to_string(),
+            name: "rust/target/project1/lib.rs".to_string(),
         }];
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let o = process_inspect_change(&changes, &c).unwrap();
 
         let gc = &o.group.get("rust").unwrap().change;
         let gcf = gc.file.get(0).unwrap();
-        assert_eq!(gcf.name, "rust/target/anvil/lib.rs".to_string());
+        assert_eq!(gcf.name, "rust/target/project1/lib.rs".to_string());
         assert_eq!(gcf.action, FileActionKind::Use);
         assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
 
-        assert!(gc.target.contains("rust/target/anvil"));
+        assert!(gc.project.contains("rust/target/project1"));
         assert!(gc.link.is_empty());
         assert!(gc.depend.is_empty());
     }
 
     #[test]
-    fn test_process_inspect_change_target() {
+    fn test_process_inspect_change_project() {
         let changes = vec![RawChange {
-            name: "rust/target/anvil/".to_string(),
+            name: "rust/target/project1/".to_string(),
         }];
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let o = process_inspect_change(&changes, &c).unwrap();
 
         let gc = &o.group.get("rust").unwrap().change;
         let gcf = gc.file.get(0).unwrap();
-        assert_eq!(gcf.name, "rust/target/anvil/".to_string());
+        assert_eq!(gcf.name, "rust/target/project1/".to_string());
         assert_eq!(gcf.action, FileActionKind::Use);
         assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
 
-        assert!(gc.target.contains("rust/target/anvil"));
+        assert!(gc.project.contains("rust/target/project1"));
         assert!(gc.link.is_empty());
         assert!(gc.depend.is_empty());
     }
@@ -1486,13 +1486,13 @@ depend = [
         assert_eq!(gcf.action, FileActionKind::Use);
         assert_eq!(gcf.reason, FileReasonKind::GroupLinkEffect);
 
-        assert!(gc.target.contains("rust/target/anvil"));
+        assert!(gc.project.contains("rust/target/project1"));
         assert!(gc.link.contains("rust/vendor"));
         assert!(gc.depend.is_empty());
     }
 
     #[test]
-    fn test_process_inspect_change_target_depend() {
+    fn test_process_inspect_change_project_depend() {
         let changes = vec![RawChange {
             name: "rust/common/log/src/lib.rs".to_string(),
         }];
@@ -1505,26 +1505,26 @@ depend = [
         assert_eq!(gcf.action, FileActionKind::Use);
         assert_eq!(gcf.reason, FileReasonKind::TargetDependEffect);
 
-        assert!(gc.target.contains("rust/target/anvil"));
+        assert!(gc.project.contains("rust/target/project1"));
         assert!(gc.link.is_empty());
         assert!(gc.depend.contains("rust/common/log"));
     }
 
     #[test]
-    fn test_process_inspect_change_target_ignore() {
+    fn test_process_inspect_change_project_ignore() {
         let changes = vec![RawChange {
-            name: "rust/target/anvil/README.md".to_string(),
+            name: "rust/target/project1/README.md".to_string(),
         }];
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let o = process_inspect_change(&changes, &c).unwrap();
 
         let gc = &o.group.get("rust").unwrap().change;
         let gcf = gc.file.get(0).unwrap();
-        assert_eq!(gcf.name, "rust/target/anvil/README.md".to_string());
+        assert_eq!(gcf.name, "rust/target/project1/README.md".to_string());
         assert_eq!(gcf.action, FileActionKind::Ignore);
         assert_eq!(gcf.reason, FileReasonKind::TargetIgnoreEffect);
 
-        assert!(gc.target.is_empty());
+        assert!(gc.project.is_empty());
         assert!(gc.link.is_empty());
         assert!(gc.depend.is_empty());
     }
@@ -1542,7 +1542,7 @@ depend = [
         assert_eq!(gcf.action, FileActionKind::Ignore);
         assert_eq!(gcf.reason, FileReasonKind::Inert);
 
-        assert!(gc.target.is_empty());
+        assert!(gc.project.is_empty());
         assert!(gc.link.is_empty());
         assert!(gc.depend.is_empty());
     }
@@ -1555,10 +1555,10 @@ depend = [
         gl.populate(&c.group.unwrap().get(0).unwrap()).unwrap();
 
         assert!(gl
-            .depend2targets
+            .depend2projects
             .get("rust/common/log")
             .unwrap()
-            .contains("rust/target/anvil"));
+            .contains("rust/target/project1"));
         assert_eq!(
             gl.prefixed_link
                 .unwrap()
@@ -1572,20 +1572,20 @@ depend = [
             vec![Vec::from("rust/common/log")]
         );
         assert_eq!(
-            gl.prefixed_targets
+            gl.prefixed_projects
                 .unwrap()
-                .common_prefix_search("rust/target/anvil/src/foo.rs"),
-            vec![Vec::from("rust/target/anvil")]
+                .common_prefix_search("rust/target/project1/src/foo.rs"),
+            vec![Vec::from("rust/target/project1")]
         );
         assert_eq!(
             gl.target_lookups
-                .get("rust/target/anvil")
+                .get("rust/target/project1")
                 .unwrap()
                 .prefixed_ignore
                 .as_ref()
                 .unwrap()
-                .common_prefix_search("rust/target/anvil/README.md"),
-            vec![Vec::from("rust/target/anvil/README.md")]
+                .common_prefix_search("rust/target/project1/README.md"),
+            vec![Vec::from("rust/target/project1/README.md")]
         );
     }
 

@@ -39,35 +39,35 @@ source = []
 # * Required
 path = "group1"
 
-# Path prefixes for which matching changes should affect all targets of this group.
+# Path prefixes for which matching changes should affect all projects of this group.
 # * Default: []
 link = [
     "vendor",
 ]
-# Path prefixes that are available for this group's targets to reference in their 
+# Path prefixes that are available for this group's projects to reference in their 
 # own `depend` entry. Projects that reference any of these elements will be affected 
 # by changes that match the prefixes here.
-# Note that these paths should not resolve to any target.
+# Note that these paths should not resolve to any other target.
 # * Default: []
 depend = [
     "common/library1",
 ]
 
-# An array of targets for this group.
-[[group.target]]
-# The path to this target. The value is relative to the group's `path` value.
+# An array of projects for this group.
+[[group.project]]
+# The path to this project. The value is relative to the group's `path` value.
 # * Required
-path = "target1"
+path = "project1"
 
-# Path prefixes to ignore when determining if a change should affect this target.
+# Path prefixes to ignore when determining if a change should affect this project.
 # These are evaluated last, and will not override a group `link` or a `depend` that
-# this target declares.
+# this project declares.
 # * Default: []
 ignore = [
     "ignore1.txt"
 ]
 # References to path prefixes in this group's `depend`, declaring that changes to these 
-# paths outside the target should affect this target.
+# paths outside the project should affect this project.
 # * Default: []
 depend = [
     "common/library1"
