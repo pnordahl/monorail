@@ -40,12 +40,13 @@ Create a `Monorail.toml` configuration file in the root of the repository you wa
 
 ## Vocabulary
 
+* project: a path to be developed/deployed/tested as a single unit
+* group: a path containing a collection of projects and related configuration
+* depend: a path that can be declared by a project as a dependency, causing any change on that path to be considered a change for projects that do
+* link: a path that can be declared as an automatic dependency for all projects in a group, causing any change on that path to be considered a change for all projects
+* target: an umbrella term for a path that can have changes detected, and commands run against it. One of group, project, depend, or link.
 * extension: runs user-defined code written in a supported language; e.g. `bash`
 * command: a function, defined by a target, that can be invoked in an executor-dependent fashion
-* target: a path containing related files; the lowest level object that can be targeted by a command
-* group: a path containing a collection of targets and related configuration
-* depend: a path that can be declared by a target as a dependency, causing any change on that path to be considered a change for targets that do
-* link: a path that can be declared as an automatic dependency for all targets in a group, causing any change on that path to be considered a change for all targets
 
 # Tutorial
 
@@ -53,7 +54,7 @@ _NOTE: this tutorial assumes a UNIX-like environment._
 
 In this tutorial, you'll learn:
 
-  * how to declare group, target, depend, and link
+  * how to declare a group, project, depend, and link
   * how to inspect changes
   * how to define commands
   * how to execute commands
@@ -81,7 +82,7 @@ To get started, generate a directory structure with the following shell commands
 
 ```sh
 cd monorail-tutorial
-mkdir -p group1/target1
+mkdir -p group1/project1
 touch Monorail.toml
 ```
 ... which yields the following directory structure:
@@ -89,12 +90,12 @@ touch Monorail.toml
 ```
 ├── Monorail.toml
 └── group1
-    └── target1
+    └── project1
 ```
 
 _NOTE_: the remainder of this tutorial will apply updates to the `Monorail.toml` file with heredoc strings, for convenience.
 
-Execute the following to specify the new group and target in `Monorail.toml`, as well as an `extension` to be used later in the tutorial:
+Execute the following to specify the new group and project in `Monorail.toml`, as well as an `extension` to be used later in the tutorial:
 
 ```sh
 cat <<EOF > Monorail.toml
@@ -110,17 +111,17 @@ use = "bash"
 [[group]]
 path = "group1"
 
-  [[group.target]]
-  	path = "target1"
+  [[group.project]]
+  	path = "project1"
 
 EOF
 ```
 
 ### Recap
 
-Your `monorail` config file (default: `Monorail.toml`) describes your existing repository layout in terms of `monorail` concepts. A `target` is a path to be developed/deployed/tested as a unit, e.g. a backend service, web app, etc. A `group` is a set of _related targets_, and defines what can be shared amongst targets (more on sharing later).
+Your `monorail` config file (default: `Monorail.toml`) describes your existing repository layout in terms of `monorail` concepts. A `project` is a path to be developed/deployed/tested as a unit, e.g. a backend service, web app, etc. A `group` is a set of _related projects_, and defines what can be shared amongst projects (more on sharing later).
 
-Finally, many of `monorail`s capabilities are path-based. Our definition of `group.path` (relative to the repository root) and `target.path` (relative to the specified `group.path`) declare where these objects live in our repository.
+Finally, many of `monorail`s capabilities are path-based. Our definition of `group.path` (relative to the repository root) and `project.path` (relative to the specified `group.path`) declare where these objects live in our repository.
 
 ## Inspecting changes
 
@@ -138,7 +139,7 @@ Begin by viewing the output of `inspect change`:
     "group1": {
       "change": {
         "file": [],
-        "target": [],
+        "project": [],
         "link": [],
         "depend": []
       }
@@ -147,13 +148,13 @@ Begin by viewing the output of `inspect change`:
 }
 ```
 
-As expected there are no changes, and `monorail` is able to interrogate `git` and use the `Monorail.toml` config successfully. The meaning of the `file`, `target`, `link`, and `depend` fields will be explained as the tutorial progresses.
+As expected there are no changes, and `monorail` is able to interrogate `git` and use the `Monorail.toml` config successfully. The meaning of the `file`, `project`, `link`, and `depend` fields will be explained as the tutorial progresses.
 
 ### Inspect showing a change
 
-To show what an actual change looks like in `monorail` output, create a new file in `target1`:
+To show what an actual change looks like in `monorail` output, create a new file in `project1`:
 
-	touch group1/target1/foo.txt
+	touch group1/project1/foo.txt
 
 View changes again:
 
@@ -166,14 +167,14 @@ View changes again:
       "change": {
         "file": [
           {
-            "name": "group1/target1/foo.txt",
-            "target": "group1/target1",
+            "name": "group1/project1/foo.txt",
+            "project": "group1/project1",
             "action": "use",
-            "reason": "target_match"
+            "reason": "project_match"
           }
         ],
-        "target": [
-          "group1/target1"
+        "project": [
+          "group1/project1"
         ],
         "link": [],
         "depend": []
@@ -185,9 +186,9 @@ View changes again:
 
 `monorail` has identified that the newly added file represents a meaningful change, based on our configuration in `Monorail.toml`.
 
-The `change.file` array contains a list of objects containing metadata about the change detected. It contains the `name` of the file (a path relative to the repository root), the `target` the file belongs to, the `action` taken by `monorail` during change detection (e.g. it was `use`d), and the `reason` that `action` was taken (e.g. it matched a declared target).
+The `change.file` array contains a list of objects containing metadata about the change detected. It contains the `name` of the file (a path relative to the repository root), the `project` the file belongs to, the `action` taken by `monorail` during change detection (e.g. it was `use`d), and the `reason` that `action` was taken (e.g. it matched a declared project).
 
-The `change.target` array contains a list of paths relative to the repo root for targets detected as changed. This list is de-duped across all `change.file` entries; a target will appear at most once in this list.
+The `change.project` array contains a list of paths relative to the repo root for projects detected as changed. This list is de-duped across all `change.file` entries; a project will appear at most once in this list.
 
 ### Inspect showing a change, after commit or push
 This understanding of what has changed persists between commits and pushes. Commit your changes: 
@@ -205,14 +206,14 @@ Then, view changes again:
       "change": {
         "file": [
           {
-            "name": "group1/target1/foo.txt",
-            "target": "group1/target1",
+            "name": "group1/project1/foo.txt",
+            "project": "group1/project1",
             "action": "use",
-            "reason": "target_match"
+            "reason": "project_match"
           }
         ],
-        "target": [
-          "group1/target1"
+        "project": [
+          "group1/project1"
         ],
         "link": [],
         "depend": []
@@ -222,7 +223,7 @@ Then, view changes again:
 }
 ```
 
-`monorail` still knows about the change to target `group1/target1`.
+`monorail` still knows about the change to the project `group1/project1`.
 
 Push, and view changes again:
 
@@ -233,19 +234,19 @@ The output remains the same.
 
 ## Declaring dependencies and links
 
-`monorail` allows for targets to depend on paths outside of the `path` each target has declared. This allows for reference paths containing utility code, serialization files (e.g. protobuf definitions), configuration, etc. When these paths have changes, it triggers targets that depend on them to be changed.
+`monorail` allows for projects to depend on paths outside of the `path` each project has declared. This allows for reference paths containing utility code, serialization files (e.g. protobuf definitions), configuration, etc. When these paths have changes, it triggers projects that depend on them to be changed.
 
 
 ### Dependencies
 
-Begin by creating a directory to be used as a dependency, and a directory to hold a new target, `target2`:
+Begin by creating a directory to be used as a dependency, and a directory to hold a new project, `project2`:
 
 ```sh
 mkdir -p group1/common/library1
-mkdir group1/target2
+mkdir group1/project2
 ```
 
-Execute the following to adjust the `[[group]]` section of `Monorail.toml` to add `library1` as a depend-able path, specify `target2`, and make `target2` depend on `library1`:
+Execute the following to adjust the `[[group]]` section of `Monorail.toml` to add `library1` as a depend-able path, specify `project2`, and make `project2` depend on `library1`:
 
 ```sh
 cat <<EOF > Monorail.toml
@@ -264,11 +265,11 @@ depend = [
 	"common/library1"
 ]
 
-  [[group.target]]
-  	path = "target1"
+  [[group.project]]
+  	path = "project1"
 
-  [[group.target]]
-  	path = "target2"
+  [[group.project]]
+  	path = "project2"
 
   	depend = [
   		"common/library1"
@@ -277,7 +278,7 @@ depend = [
 EOF
 ```
 
-The `depend` declaration in the `group` section indicates that this path _can_ be depended on. The `target.depend` is where you specify zero or more of these paths your target _does_ depend on.
+The `depend` declaration in the `group` section indicates that this path _can_ be depended on. The `project.depend` is where you specify zero or more of these paths your project _does_ depend on.
 
 To trigger change detection, create a file in library1:
 
@@ -293,20 +294,20 @@ and then `monorail inspect change | jq .`:
         "file": [
         	{
             "name": "group1/common/library1/foo.proto",
-            "target": null,
+            "project": null,
             "action": "use",
-            "reason": "target_depend_effect"
+            "reason": "project_depend_effect"
           },
           {
-            "name": "group1/target1/foo.txt",
-            "target": "group1/target1",
+            "name": "group1/project1/foo.txt",
+            "project": "group1/project1",
             "action": "use",
-            "reason": "target_match"
+            "reason": "project_match"
           }
         ],
-        "target": [
-          "group1/target2",
-          "group1/target1"
+        "project": [
+          "group1/project2",
+          "group1/project1"
         ],
         "link": [],
         "depend": [
@@ -318,21 +319,21 @@ and then `monorail inspect change | jq .`:
 }
 ```
 
-Our original file entry is still there, but another for the newly-created file has appeared. It has a `target` of `null` because it does not lie in the path of a target, and a `reason` that indicates it is being used due to a target depending on a path containing the file (`target_depend_effect`).
+Our original file entry is still there, but another for the newly-created file has appeared. It has a `project` of `null` because it does not lie in the path of a project, and a `reason` that indicates it is being used due to a project depending on a path containing the file (`project_depend_effect`).
 
-An entry of `group1/target2` has appeared in `group.target`, indicating that this target is now part of the set of targets that have changed. We didn't change any files in `target2` (indeed, none exist!), but did modify a path that `target2` depends on.
+An entry of `group1/project2` has appeared in `group.project`, indicating that this project is now part of the set of projects that have changed. We didn't change any files in `project2` (indeed, none exist!), but did modify a path that `project2` depends on.
 
 Furthermore, an entry has appeared in `group.depend` for our library path.
 
 
 ### Links
 
-A `link` works similarly to a `depend`, but applies to all targets in a group without them opting-in. To demonstrate, we will create a third target and a contrived `Lockfile` to link all targets to:
+A `link` works similarly to a `depend`, but applies to all projects in a group without them opting-in. To demonstrate, we will create a third project and a contrived `Lockfile` to link all projects to:
 
-	mkdir group1/target3
+	mkdir group1/project3
 	touch group1/Lockfile
 
-Execute the following to adjust the `[[group]]` section of `Monorail.toml` to specify this new target, as well as a group `link`:
+Execute the following to adjust the `[[group]]` section of `Monorail.toml` to specify this new project, as well as a group `link`:
 
 ```sh
 cat <<EOF > Monorail.toml
@@ -354,17 +355,17 @@ link = [
 	"Lockfile"
 ]
 
-  [[group.target]]
-  	path = "target1"
+  [[group.project]]
+  	path = "project1"
 
-  [[group.target]]
-  	path = "target2"
+  [[group.project]]
+  	path = "project2"
 
   	depend = [
   		"common/library1"
   	]
-  [[group.target]]
-  	path = "target3"
+  [[group.project]]
+  	path = "project3"
 
 EOF
 ```
@@ -379,27 +380,27 @@ Executing `monocle inspect change | jq .` yields:
         "file": [
         	{
             "name": "group1/Lockfile",
-            "target": null,
+            "project": null,
             "action": "use",
             "reason": "group_link_effect"
           },
         	{
             "name": "group1/common/library1/foo.proto",
-            "target": null,
+            "project": null,
             "action": "use",
-            "reason": "target_depend_effect"
+            "reason": "project_depend_effect"
           },
           {
-            "name": "group1/target1/foo.txt",
-            "target": "group1/target1",
+            "name": "group1/project1/foo.txt",
+            "project": "group1/project1",
             "action": "use",
-            "reason": "target_match"
+            "reason": "project_match"
           }
         ],
-        "target": [
-          "group1/target3",
-          "group1/target2",
-          "group1/target1"
+        "project": [
+          "group1/project3",
+          "group1/project2",
+          "group1/project1"
         ],
         "link": [
           "group1/Lockfile"
@@ -413,9 +414,9 @@ Executing `monocle inspect change | jq .` yields:
 }
 ```
 
-Again, our original changes to `target1` and `library1` remain. A new `change.file` for `Lockfile` has appeared, a new `change.target` for the new `target3` target has been added, and `change.link` now has a path to the `Lockfile` we changed.
+Again, our original changes to `project1` and `library1` remain. A new `change.file` for `Lockfile` has appeared, a new `change.project` for the `project3` has been added, and `change.link` now has a path to the `Lockfile` we changed.
 
-Note that `target3` did not need to explicitly depend on `Lockfile`; simply being a member of `group1` does this.
+Note that `project3` did not need to explicitly depend on `Lockfile`; simply being a member of `group1` does this.
 
 ## Defining commands
 
@@ -426,17 +427,17 @@ Commands are run by extensions, which are "runners" for user-defined code. We ha
 use = "bash"
 ```
 
-Commands are stored in a file on a per-target basis, the path to which is defined in `Monorail.toml`. In our case, that path will be `support/script/monorail-exec.sh` (the default) relative to `group1/target1`.
+Commands are stored in a file on a per-target basis, the path to which is defined in `Monorail.toml`. In our case, that path will be `support/script/monorail-exec.sh` (the default) relative to `group1/project1`.
 
 Create the path to this file with: 
 
-	mkdir -p group1/target1/support/script
+	mkdir -p group1/project1/support/script
 
-In the `group1/target1/support/script/monorail-exec.sh` file, we will define a script containing three commands:
+In the `group1/project1/support/script/monorail-exec.sh` file, we will define a script containing three commands:
 
 
 ```sh
-cat <<"EOF" > group1/target1/support/script/monorail-exec.sh
+cat <<"EOF" > group1/project1/support/script/monorail-exec.sh
 #!/usr/bin/env bash
 
 function command1() {
@@ -485,21 +486,21 @@ Sep 10 07:34:07 monorail-bash : start:
 Sep 10 07:34:07 monorail-bash : end:                
 Sep 10 07:34:07 monorail-bash : target (inferred):             group1/Lockfile
 Sep 10 07:34:07 monorail-bash : target (inferred):             group1/common/library1
-Sep 10 07:34:07 monorail-bash : target (inferred):             group1/target2
-Sep 10 07:34:07 monorail-bash : target (inferred):             group1/target3
-Sep 10 07:34:07 monorail-bash : target (inferred):             group1/target1
+Sep 10 07:34:07 monorail-bash : target (inferred):             group1/project2
+Sep 10 07:34:07 monorail-bash : target (inferred):             group1/project3
+Sep 10 07:34:07 monorail-bash : target (inferred):             group1/project1
 Sep 10 07:34:07 monorail-bash : NOTE: Ignoring command for non-directory target; command: command1, target: group1/Lockfile
 Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command1, target: group1/common/library1
-Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command1, target: group1/target2
-Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command1, target: group1/target3
-Sep 10 07:34:07 monorail-bash : Executing command; command: command1, target: group1/target1
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command1, target: group1/project2
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command1, target: group1/project3
+Sep 10 07:34:07 monorail-bash : Executing command; command: command1, target: group1/project1
 Hello, from command1
 The calling environment is inherited: foo
 Sep 10 07:34:07 monorail-bash : NOTE: Ignoring command for non-directory target; command: command2, target: group1/Lockfile
 Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command2, target: group1/common/library1
-Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command2, target: group1/target2
-Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command2, target: group1/target3
-Sep 10 07:34:07 monorail-bash : Executing command; command: command2, target: group1/target1
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command2, target: group1/project2
+Sep 10 07:34:07 monorail-bash : NOTE: Script not found; command: command2, target: group1/project3
+Sep 10 07:34:07 monorail-bash : Executing command; command: command2, target: group1/project1
 Hello, from command2
 some data
 ```
@@ -513,19 +514,19 @@ The majority of this output is workflow and debugging information, but it's wort
 
 Executing arbitrary bash functions against the changes detected by `monorail` has a number of applications, including:
 
-  * executing commands against all projects you've modified, without specifically targeting them; `monorail-bash` ensures that for each changed target, the requested commands are executed sequentially
+  * executing commands against all projects/dependencies/links you've modified, without specifically targeting them; `monorail-bash` ensures that for each changed target, the requested commands are executed sequentially
   * running specific commands against all changed targets as part of CI (e.g. `check`, `build`, `test`, `deploy`, etc.)
 
 ### Explicit
 
 Manually selecting targets gives one the ability to execute commands independent of VCS change detection. Applications include:
 
-  * getting new developers up to speed working on a target codebase, as one can define all setup code in a set of commands and execute it against the target, e.g. a `bootstrap` command
+  * getting new developers up to speed working on a codebase, as one can define all setup code in a set of commands and execute it against the target, e.g. a `bootstrap` command
   * run any command for any target in the entire repo, as desired
 
 To illustrate manually selecting targets, we will run the `setup` command we defined but did not execute previously. Execute the following (removing the `-v` to cut down on the visual noise):
 
-	monorail-bash exec -t group1/target1 -c setup
+	monorail-bash exec -t group1/project1 -c setup
 
 ```
 Installing everything you need
@@ -553,9 +554,9 @@ Assuming that we have committed all that we intend to, and target commands have 
   "targets": [
     "group1/Lockfile",
     "group1/common/library1",
-    "group1/target1",
-    "group1/target2",
-    "group1/target3"
+    "group1/project1",
+    "group1/project2",
+    "group1/project3"
   ],
   "dry_run": true
 }
@@ -571,7 +572,11 @@ Now, run a real release:
 {
   "id": "v0.0.1",
   "targets": [
-    "group1/target1"
+    "group1/Lockfile",
+    "group1/common/library1",
+    "group1/project1",
+    "group1/project2",
+    "group1/project3"
   ],
   "dry_run": false
 }
@@ -587,7 +592,7 @@ To show that the release cleared out `monorail`s view of changes, execute:
     "group1": {
       "change": {
         "file": [],
-        "target": [],
+        "project": [],
         "link": [],
         "depend": []
       }
@@ -608,12 +613,12 @@ Tagger: you <email@domain.com>
 
 group1/Lockfile
 group1/common/library1
-group1/target1
-group1/target2
-group1/target3
+group1/project1
+group1/project2
+group1/project3
 ```
 
-This concludes the tutorial. Now that you have seen how the core concepts of `monorail` and extensions work, you're ready to use it in real projects. Experiment with group and target layouts, commands, CI, and working on a trunk-based development workflow that works for your teams.
+This concludes the tutorial. Now that you have seen how the core concepts of `monorail` and extensions work, you're ready to use it in real projects. Experiment with repository layouts, commands, CI, and working on a trunk-based development workflow that works for your teams.
 
 Refer to `Monorail.reference.toml` for more specific information about the various configuration available for `monorail` and extensions.
 
@@ -623,7 +628,7 @@ In order to work, `monorail` requires the following invariants be satisfied:
 
   1. groups may not reference paths in other groups
   2. targets may not reference paths in other targets
-  3. only paths specified in a group's `link`, or `depend` configuration may be shared between targets of that group
+  3. only paths specified in a group's `link`, or `depend` configuration may be shared between projects of that group
 
 _If any of these are violated, the behavior of `monorail` commands that analyze changes to the repository is undefined._
 

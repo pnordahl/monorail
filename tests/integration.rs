@@ -18,14 +18,14 @@ use = "bash"
 [[group]]
 path = "group1"
 
-	[[group.target]]
-	path = "target1"
+	[[group.project]]
+	path = "project1"
 
-	[[group.target]]
-	path = "target1/x"
+	[[group.project]]
+	path = "project1/x"
 
-    [[group.target]]
-    path = "target2"
+    [[group.project]]
+    path = "project2"
 "#;
 
 #[test]
@@ -116,10 +116,10 @@ fn test_handle_git_release() {
 
     // generate initial changeset for use in first release
     let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
-    let _f1 = create_file(&repo_path, "group1/target1/x", "foo.txt", b"x");
+    let _f1 = create_file(&repo_path, "group1/project1/x", "foo.txt", b"x");
     let oid2 = commit_file(
         &repo,
-        "group1/target1/x/foo.txt",
+        "group1/project1/x/foo.txt",
         Some("HEAD"),
         &[&get_commit(&repo, oid1)],
     );
@@ -140,7 +140,7 @@ fn test_handle_git_release() {
     .unwrap();
     assert_eq!(
         o.targets,
-        vec!["group1/target1".to_string(), "group1/target1/x".to_string()]
+        vec!["group1/project1".to_string(), "group1/project1/x".to_string()]
     );
     assert_eq!(o.id, "v0.0.1".to_string());
     assert_eq!(o.dry_run, true);
@@ -159,7 +159,7 @@ fn test_handle_git_release() {
     .unwrap();
     assert_eq!(
         o.targets,
-        vec!["group1/target1".to_string(), "group1/target1/x".to_string()]
+        vec!["group1/project1".to_string(), "group1/project1/x".to_string()]
     );
     assert_eq!(o.id, "v0.0.1".to_string());
     assert_eq!(o.dry_run, false);
@@ -167,13 +167,13 @@ fn test_handle_git_release() {
     // first tag in the repo
     let lt = libgit2_latest_tag(&repo, oid2).unwrap().unwrap();
     assert_eq!(lt.name().unwrap(), "v0.0.1");
-    assert_eq!(lt.message().unwrap(), "group1/target1\ngroup1/target1/x");
+    assert_eq!(lt.message().unwrap(), "group1/project1\ngroup1/project1/x");
 
     // generate another changeset to test a second release
-    let _f2 = create_file(&repo_path, "group1/target1/x", "bar.txt", b"x");
+    let _f2 = create_file(&repo_path, "group1/project1/x", "bar.txt", b"x");
     let oid3 = commit_file(
         &repo,
-        "group1/target1/x/bar.txt",
+        "group1/project1/x/bar.txt",
         Some("HEAD"),
         &[&get_commit(&repo, oid2)],
     );
@@ -191,7 +191,7 @@ fn test_handle_git_release() {
 
     assert_eq!(
         o2.targets,
-        vec!["group1/target1".to_string(), "group1/target1/x".to_string()]
+        vec!["group1/project1".to_string(), "group1/project1/x".to_string()]
     );
     assert_eq!(o2.id, "v0.1.0".to_string());
     assert_eq!(o2.dry_run, false);
@@ -199,7 +199,7 @@ fn test_handle_git_release() {
     // check subsequent tag exists
     let lt2 = libgit2_latest_tag(&repo, oid3).unwrap().unwrap();
     assert_eq!(lt2.name().unwrap(), "v0.1.0");
-    assert_eq!(lt2.message().unwrap(), "group1/target1\ngroup1/target1/x");
+    assert_eq!(lt2.message().unwrap(), "group1/project1\ngroup1/project1/x");
 }
 
 // TODO: test_handle_git_release_err_latest_bad_semver
@@ -218,7 +218,7 @@ function call_me {
     let _oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
     let _f1 = create_file(
         &repo_path,
-        "group1/target1/support/script",
+        "group1/project1/support/script",
         "monorail-exec.sh",
         SCRIPT.as_bytes(),
     );
@@ -241,7 +241,7 @@ function call_me {
         .output()
         .expect("failed to run monorail-bash");
 
-    let mut file = File::open(Path::new(&repo_path).join("group1/target1/output.txt")).unwrap();
+    let mut file = File::open(Path::new(&repo_path).join("group1/project1/output.txt")).unwrap();
     let mut contents = String::new();
     file.read_to_string(&mut contents).unwrap();
     assert_eq!(contents, "called\n");
@@ -268,13 +268,13 @@ function call_me {
     let _oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
     let _f1 = create_file(
         &repo_path,
-        "group1/target1/support/script",
+        "group1/project1/support/script",
         "monorail-exec.sh",
         SCRIPT.as_bytes(),
     );
     let _f2 = create_file(
         &repo_path,
-        "group1/target2/support/script",
+        "group1/project2/support/script",
         "monorail-exec.sh",
         SCRIPT2.as_bytes(),
     );
@@ -292,19 +292,19 @@ function call_me {
                 .to_str()
                 .unwrap(),
             "-t",
-            "group1/target1",
+            "group1/project1",
             "-c",
             "call_me",
         ])
         .output()
         .expect("failed to run monorail-bash");
-    let mut file = File::open(Path::new(&repo_path).join("group1/target1/output.txt")).unwrap();
+    let mut file = File::open(Path::new(&repo_path).join("group1/project1/output.txt")).unwrap();
     let mut contents = String::new();
     file.read_to_string(&mut contents).unwrap();
     assert_eq!(contents, "called\n");
 
     assert!(!Path::new(&repo_path)
-        .join("group1/target2/should_not_exist.txt")
+        .join("group1/project2/should_not_exist.txt")
         .exists());
 
     purge_repo(&repo_path);
@@ -323,7 +323,7 @@ function call_me {
     let _oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
     let _f1 = create_file(
         &repo_path,
-        "group1/target1/support/script",
+        "group1/project1/support/script",
         "monorail-exec.sh",
         SCRIPT.as_bytes(),
     );
@@ -375,10 +375,10 @@ fn test_handle_inspect_change() {
 
     // prep repo with some changes
     let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
-    let _f1 = create_file(&repo_path, "group1/target1/x", "foo.txt", b"x");
+    let _f1 = create_file(&repo_path, "group1/project1/x", "foo.txt", b"x");
     let _oid2 = commit_file(
         &repo,
-        "group1/target1/x/foo.txt",
+        "group1/project1/x/foo.txt",
         Some("HEAD"),
         &[&get_commit(&repo, oid1)],
     );
@@ -399,19 +399,19 @@ fn test_handle_inspect_change() {
     let gc = &o.group.get("group1").unwrap().change;
 
     let gcf = gc.file.get(0).unwrap();
-    assert_eq!(gcf.name, "group1/target1/x/foo.txt".to_string());
-    assert_eq!(gcf.target, Some("group1/target1".into()));
+    assert_eq!(gcf.name, "group1/project1/x/foo.txt".to_string());
+    assert_eq!(gcf.target, Some("group1/project1".into()));
     assert_eq!(gcf.action, FileActionKind::Use);
     assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
 
     let gcf = gc.file.get(1).unwrap();
-    assert_eq!(gcf.name, "group1/target1/x/foo.txt".to_string());
-    assert_eq!(gcf.target, Some("group1/target1/x".into()));
+    assert_eq!(gcf.name, "group1/project1/x/foo.txt".to_string());
+    assert_eq!(gcf.target, Some("group1/project1/x".into()));
     assert_eq!(gcf.action, FileActionKind::Use);
     assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
 
-    assert!(gc.target.contains("group1/target1"));
-    assert!(gc.target.contains("group1/target1/x"));
+    assert!(gc.project.contains("group1/project1"));
+    assert!(gc.project.contains("group1/project1/x"));
     assert!(gc.link.is_empty());
     assert!(gc.depend.is_empty());
 
