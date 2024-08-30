@@ -140,7 +140,10 @@ fn test_handle_git_release() {
     .unwrap();
     assert_eq!(
         o.targets,
-        vec!["group1/project1".to_string(), "group1/project1/x".to_string()]
+        vec![
+            "group1/project1".to_string(),
+            "group1/project1/x".to_string()
+        ]
     );
     assert_eq!(o.id, "v0.0.1".to_string());
     assert_eq!(o.dry_run, true);
@@ -159,7 +162,10 @@ fn test_handle_git_release() {
     .unwrap();
     assert_eq!(
         o.targets,
-        vec!["group1/project1".to_string(), "group1/project1/x".to_string()]
+        vec![
+            "group1/project1".to_string(),
+            "group1/project1/x".to_string()
+        ]
     );
     assert_eq!(o.id, "v0.0.1".to_string());
     assert_eq!(o.dry_run, false);
@@ -191,7 +197,10 @@ fn test_handle_git_release() {
 
     assert_eq!(
         o2.targets,
-        vec!["group1/project1".to_string(), "group1/project1/x".to_string()]
+        vec![
+            "group1/project1".to_string(),
+            "group1/project1/x".to_string()
+        ]
     );
     assert_eq!(o2.id, "v0.1.0".to_string());
     assert_eq!(o2.dry_run, false);
