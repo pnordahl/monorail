@@ -70,7 +70,7 @@ pub fn commit_file(
 pub fn create_file(repo_path: &str, dir: &str, file_name: &str, content: &[u8]) -> std::fs::File {
     fs::create_dir_all(std::path::Path::new(repo_path).join(dir)).unwrap();
     let fpath = std::path::Path::new(repo_path).join(dir).join(file_name);
-    let mut file = std::fs::File::create(&fpath).unwrap();
+    let mut file = std::fs::File::create(fpath).unwrap();
     file.write_all(content).unwrap();
     file
 }

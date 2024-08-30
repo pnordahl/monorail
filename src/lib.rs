@@ -314,7 +314,7 @@ fn git_cmd_status(
 ) -> Result<Vec<u8>, MonorailError> {
     handle_cmd_output(
         std::process::Command::new(git_path)
-            .args(&[
+            .args([
                 "status",
                 "--porcelain",
                 "--untracked-files=all",
@@ -356,11 +356,10 @@ fn libgit2_status_changes(repo: &git2::Repository) -> Result<Vec<RawChange>, git
     opts.recurse_untracked_dirs(true);
     let statuses = repo.statuses(Some(&mut opts))?;
     for s in statuses.iter() {
-        match s.path() {
-            Some(path) => v.push(RawChange {
+        if let Some(path) = s.path() {
+            v.push(RawChange {
                 name: path.to_string(),
-            }),
-            None => (),
+            });
         }
     }
     Ok(v)
@@ -422,8 +421,8 @@ pub struct ReleaseOutput {
     pub dry_run: bool,
 }
 
-pub fn handle_release<'a>(
-    cfg: &'a Config,
+pub fn handle_release(
+    cfg: &Config,
     input: HandleReleaseInput,
     wd: &str,
 ) -> Result<ReleaseOutput, MonorailError> {
@@ -517,7 +516,7 @@ pub fn handle_release<'a>(
                 // NOTE: shelling out to `git` to avoid having to do a full remote/auth/ssh integration with libgit, for now
                 let output = std::process::Command::new(input.git_path)
                     .arg("-C")
-                    .arg(&wd)
+                    .arg(wd)
                     .arg("push")
                     .arg(&cfg.vcs.git.remote)
                     .arg(&format!(
@@ -576,8 +575,8 @@ pub struct HandleInspectChangeInput<'a> {
     pub git_path: &'a str,
     pub use_libgit2_status: bool,
 }
-pub fn handle_inspect_change<'a>(
-    cfg: &'a Config,
+pub fn handle_inspect_change(
+    cfg: &Config,
     input: HandleInspectChangeInput,
     wd: &str,
 ) -> Result<InspectChangeOutput, MonorailError> {
@@ -610,30 +609,6 @@ pub fn handle_inspect_change<'a>(
                 cfg,
             )
         }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct CommandOutputRecord<'a> {
-    timestamp: u64,
-    command: &'a str,
-    target: &'a str,
-    source: &'a str,
-    child_pid: Option<u32>,
-    message: &'a str,
-}
-impl fmt::Display for CommandOutputRecord<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "[ {} | {} | {} | {:<6} | {:<8} ]: {}",
-            self.timestamp,
-            self.command,
-            self.target,
-            self.child_pid.unwrap_or(0),
-            self.source,
-            self.message
-        )
     }
 }
 
@@ -830,7 +805,7 @@ fn get_processed_changes(
                             let mut pc = ProcessedChange::new(&change.name, None);
                             pc.group_path = Some(group_path_match.to_owned());
                             pc.link_path = Some(link_path);
-                            pc.project_paths = group_lookup.project_paths.clone();
+                            pc.project_paths.clone_from(&group_lookup.project_paths);
                             pc.file.action = FileActionKind::Use;
                             pc.file.reason = FileReasonKind::GroupLinkEffect;
                             pcs.push(pc);
@@ -846,16 +821,13 @@ fn get_processed_changes(
                             let depend_path =
                                 String::from_utf8_lossy(&group_depend_matches[0]).to_string();
                             pc.depend_path = Some(depend_path.to_owned());
-                            match group_lookup.depend2projects.get(&depend_path) {
-                                Some(projects) => {
-                                    pc.project_paths =
-                                        Some(projects.iter().map(|p| p.to_owned()).collect());
-                                    pc.file.action = FileActionKind::Use;
-                                    pc.file.reason = FileReasonKind::TargetDependEffect;
-                                    pcs.push(pc);
-                                    return Ok(pcs);
-                                }
-                                None => (),
+                            if let Some(projects) = group_lookup.depend2projects.get(&depend_path) {
+                                pc.project_paths =
+                                    Some(projects.iter().map(|p| p.to_owned()).collect());
+                                pc.file.action = FileActionKind::Use;
+                                pc.file.reason = FileReasonKind::TargetDependEffect;
+                                pcs.push(pc);
+                                return Ok(pcs);
                             }
                         }
                     }
@@ -922,10 +894,6 @@ fn get_processed_changes(
 }
 
 #[derive(Serialize, Debug)]
-struct ErrorOutput<'a> {
-    error: &'a str,
-}
-#[derive(Serialize, Debug)]
 pub struct InspectChangeOutput {
     pub group: HashMap<String, GroupInspect>,
 }
@@ -990,7 +958,7 @@ impl IntoIterator for GroupChange {
         let v: Vec<String> = self
             .link
             .into_iter()
-            .chain(self.depend.into_iter().chain(self.project.into_iter()))
+            .chain(self.depend.into_iter().chain(self.project))
             .collect::<Vec<String>>();
         v.into_iter()
     }
@@ -1171,7 +1139,7 @@ impl Config {
     pub fn new(file_path: &str) -> Result<Config, MonorailError> {
         let path = Path::new(file_path);
 
-        let file = File::open(&path)?;
+        let file = File::open(path)?;
         let mut buf_reader = BufReader::new(file);
         let mut contents = String::new();
         buf_reader.read_to_string(&mut contents)?;
