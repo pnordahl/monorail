@@ -1,36 +1,36 @@
 # See https://github.com/toml-lang/toml#spec for details on how TOML is structured.
 
 [vcs]
-# One of: ["git"]. The version control system that the repository uses.
-# Required
-use = ""
+# The version control system that the repository uses.
+# Required. One of: ["git"]
+use = "git"
 
 [vcs.git]
 # The branch used for trunk-based development and tagged releases.
-# * Default: "master"
+# * Optional. Default: "master"
 trunk = "master"
 
 # The remote to push release tags to.
-# * Default: "origin"
+# * Optional. Default: "origin"
 remote = "origin"
 
 # A prefix for the tag refspec to use when pushing release tags.
-# * Default: "refs/tags"
+# * Optional. Default: "refs/tags"
 tags_refspec_prefix = "refs/tags"
 
 [extension]
 # The extension to use for running commands.
 # * Required. One of: ["bash"]
-use = ""
+use = "bash"
 
 # Configuration for the bash extension 'exec' subcommand. 
 [extension.bash.exec]
 # The path to the entrypoint script for any group or target. The value is relative to each group and target.
-# * Default: "support/script/monorail-exec.sh"
+# * Optional. Default: "support/script/monorail-exec.sh"
 entrypoint = "support/script/monorail-exec.sh"
 
 # A list of scripts to source (in order) prior to execution of an entrypoint script. The values are relative to the repository root.
-# * Default: []
+# * Optional. Default: []
 source = []
 
 # An array of groups to configure.
@@ -40,7 +40,7 @@ source = []
 path = "group1"
 
 # Path prefixes for which matching changes should affect all projects of this group.
-# * Default: []
+# * Optional. Default: []
 link = [
     "vendor",
 ]
@@ -48,7 +48,7 @@ link = [
 # own `depend` entry. Projects that reference any of these elements will be affected 
 # by changes that match the prefixes here.
 # Note that these paths should not resolve to any other target.
-# * Default: []
+# * Optional. Default: []
 depend = [
     "common/library1",
 ]
@@ -62,13 +62,13 @@ path = "project1"
 # Path prefixes to ignore when determining if a change should affect this project.
 # These are evaluated last, and will not override a group `link` or a `depend` that
 # this project declares.
-# * Default: []
+# * Optional. Default: []
 ignore = [
     "ignore1.txt"
 ]
 # References to path prefixes in this group's `depend`, declaring that changes to these 
 # paths outside the project should affect this project.
-# * Default: []
+# * Optional. Default: []
 depend = [
     "common/library1"
 ]

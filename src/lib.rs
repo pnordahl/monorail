@@ -30,6 +30,7 @@ pub enum ErrorClass {
     Command,
     SerdeJSON,
     Utf8Error,
+    ParseIntError,
 }
 
 #[derive(Debug, Serialize)]
@@ -107,7 +108,7 @@ impl From<serde_json::error::Error> for MonorailError {
 impl From<std::num::ParseIntError> for MonorailError {
     fn from(error: std::num::ParseIntError) -> Self {
         MonorailError {
-            class: ErrorClass::SerdeJSON,
+            class: ErrorClass::ParseIntError,
             message: error.to_string(),
         }
     }
