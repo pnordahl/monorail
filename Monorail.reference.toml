@@ -33,42 +33,35 @@ entrypoint = "support/script/monorail-exec.sh"
 # * Optional. Default: []
 source = []
 
-# An array of groups to configure.
-[[group]]
-# The path for this group element. The value is relative to the repository root.
+# An array of targets to configure.
+[[targets]]
+# The path for this target. The value is relative to the repository root. Targets with 
+# duplicate paths will return an error.
+# Change paths that lie in this directory structure will add this target
+# to the output target list.
 # * Required
-path = "group1"
+path = "target1"
 
-# Path prefixes for which matching changes should affect all projects of this group.
+# Path for which matching changes should affect all targets that are subdirectories of this target. 
+# Change paths that lie in this directory structure will add this target
+# and all targets that lie in subdirectories to the output target list.
 # * Optional. Default: []
-link = [
-    "vendor",
-]
-# Path prefixes that are available for this group's projects to reference in their 
-# own `depend` entry. Projects that reference any of these elements will be affected 
-# by changes that match the prefixes here.
-# Note that these paths should not resolve to any other target.
-# * Optional. Default: []
-depend = [
-    "common/library1",
+links = [
+    "target1/vendor",
 ]
 
-# An array of projects for this group.
-[[group.project]]
-# The path to this project. The value is relative to the group's `path` value.
-# * Required
-path = "project1"
-
-# Path prefixes to ignore when determining if a change should affect this project.
-# These are evaluated last, and will not override a group `link` or a `depend` that
-# this project declares.
+# Path prefixes to ignore when determining if a change should affect this target.
+# These are evaluated last, and will override a matching 'link' or 'uses'.
+# Change paths that lie in subdirectories will remove this target from the output list.
 # * Optional. Default: []
-ignore = [
-    "ignore1.txt"
+ignores = [
+    "target1/ignore1"
 ]
-# References to path prefixes in this group's `depend`, declaring that changes to these 
-# paths outside the project should affect this project.
+# References to path prefixes outside of this target's path that should affect 
+# this target.
+# Change paths that lie in this directory structure will add this target
+# to the output target list.
 # * Optional. Default: []
-depend = [
+uses = [
     "common/library1"
 ]

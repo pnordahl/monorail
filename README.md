@@ -40,13 +40,22 @@ Create a `Monorail.toml` configuration file in the root of the repository you wa
 
 ## Vocabulary
 
-* project: a path to be developed/deployed/tested as a single unit
-* group: a path containing a collection of projects and related configuration
-* depend: a path that can be declared by a project as a dependency, causing any change on that path to be considered a change for projects that do
-* link: a path that can be declared as an automatic dependency for all projects in a group, causing any change on that path to be considered a change for all projects
-* target: an umbrella term for a path that can have changes detected, and commands run against it. One of group, project, depend, or link.
-* extension: runs user-defined code written in a supported language; e.g. `bash`
-* command: a function, defined by a target, that can be invoked in an executor-dependent fashion
+Monorail has a simple lexicon:
+
+* vcs: the repository version control system, and internal functions that `monorail` uses to detect changes
+* change: a CRUD operation reported by the vcs as a filesystem path
+
+`monorail` works by labeling filesystem paths within a repository as meaningful. These labels determine how changes reported by the vcs are interpreted. The label types are:
+
+* target: a unique container that can be referenced by change detection and script execution; targets are _recursive_, which means that targets can lie within other targets
+* links: a set of paths that recursively affect a target and any targets that lie in its path
+* uses: a set of paths that affect a target
+* ignores: a set of paths that do not affect a target
+
+For executing code against targets, two more terms:
+
+* extension: runs user-defined code written in a supported language
+* command: a function optionally defined in a target's script
 
 # Tutorial
 

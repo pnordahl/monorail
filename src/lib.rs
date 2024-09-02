@@ -33,7 +33,7 @@ pub enum ErrorClass {
     ParseIntError,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Eq, PartialEq)]
 pub struct MonorailError {
     pub class: ErrorClass,
     pub message: String,
@@ -631,15 +631,24 @@ struct Lookups<'a> {
     ignore2targets: HashMap<&'a String, Vec<&'a String>>,
 }
 impl<'a> Lookups<'a> {
-    fn new(cfg: &'a Config) -> Self {
+    fn new(cfg: &'a Config) -> Result<Self, MonorailError> {
         let mut targets_builder = TrieBuilder::new();
         let mut links_builder = TrieBuilder::new();
         let mut ignores_builder = TrieBuilder::new();
         let mut uses_builder = TrieBuilder::new();
         let mut use2targets = HashMap::new();
         let mut ignore2targets = HashMap::new();
+
+        let mut seen_targets = HashSet::new();
         if let Some(targets) = cfg.targets.as_ref() {
-            targets.iter().for_each(|target| {
+            if let Err(e) = targets.iter().try_for_each(|target| {
+                if seen_targets.contains(&target.path) {
+                    return Err(MonorailError {
+                        class: ErrorClass::Generic,
+                        message: format!("Duplicate target path provided: {}", &target.path),
+                    });
+                }
+                seen_targets.insert(&target.path);
                 targets_builder.push(&target.path);
                 if let Some(links) = target.links.as_ref() {
                     links.iter().for_each(|s| {
@@ -658,16 +667,19 @@ impl<'a> Lookups<'a> {
                         use2targets.entry(s).or_insert(vec![]).push(&target.path);
                     });
                 }
-            });
+                Ok(())
+            }) {
+                return Err(e);
+            }
         }
-        Self {
+        Ok(Self {
             targets: targets_builder.build(),
             links: links_builder.build(),
             ignores: ignores_builder.build(),
             uses: uses_builder.build(),
             use2targets,
             ignore2targets,
-        }
+        })
     }
 }
 
@@ -688,7 +700,7 @@ pub fn process_inspect_change<'a>(
     cfg: &'a Config,
     changes: &'a [RawChange],
 ) -> Result<InspectChangeOutput<'a>, MonorailError> {
-    let lookups = Lookups::new(cfg);
+    let lookups = Lookups::new(cfg)?;
     let mut output = InspectChangeOutput::new();
     let mut changed_targets = HashSet::new();
 
@@ -740,24 +752,34 @@ pub fn process_inspect_change<'a>(
                 }
             });
 
-        let mut ignored_targets = vec![];
-        if lookups.ignores.exact_match(&c.name) {
-            if let Some(v) = lookups.ignore2targets.get(&c.name) {
-                // println!("  [ignores (exact_match)] {}", &c.name);
-                v.iter().for_each(|t| {
-                    // println!("  [ignores targets] removing {}", t);
-                    targets.remove(t.as_str());
-                    ignored_targets.push(t.to_string());
-                });
-            }
-        }
+        let mut ignore = HashSet::new();
+        lookups
+            .ignores
+            .common_prefix_search(&c.name)
+            .for_each(|m: String| {
+                if let Some(v) = lookups.ignore2targets.get(&m) {
+                    // println!("  [ignores] {}", &c.name);
+                    v.iter().for_each(|t| {
+                        // println!("  [ignores targets] removing {}", t);
+                        targets.remove(t.as_str());
+                        ignore.insert(t.to_string());
+                    });
+                }
+            });
+        // if lookups.ignores.exact_match(&c.name) {
+
+        // }
 
         // println!("  [change targets] {:?}", targets);
         targets.iter().for_each(|t| {
             changed_targets.insert(t.to_owned());
         });
+
         let mut added_targets = targets.into_iter().collect::<Vec<String>>();
+        let mut ignored_targets = ignore.into_iter().collect::<Vec<String>>();
         added_targets.sort();
+        ignored_targets.sort();
+
         output.changes.push(ProcessedChange {
             path: c.name.as_str(),
             added_targets,
@@ -996,13 +1018,14 @@ path = "rust"
 links = [
     "rust/.cargo",
     "rust/vendor",
-    "rust/Cargo.toml"
+    "rust/Cargo.toml",
 ]
 
 [[targets]]
 path = "rust/target/project1"
 ignores = [
-    "rust/target/project1/README.md"
+    "rust/target/project1/README.md",
+    "rust/vendor"
 ]
 uses = [
     "rust/common/log"
@@ -1268,7 +1291,7 @@ uses = [
 
     #[test]
     fn test_process_inspect_change_group_link() {
-        let name = "rust/vendor/foo/bar.rs".to_string();
+        let name = "rust/.cargo/test.txt".to_string();
         let targets = vec!["rust".to_string(), "rust/target/project1".to_string()];
 
         let changes = vec![RawChange { name: name.clone() }];
@@ -1308,6 +1331,26 @@ uses = [
 
     #[test]
     fn test_process_inspect_change_project_ignore() {
+        let name = "rust/vendor/test.txt".to_string();
+        let expected_targets = vec!["rust".to_string()];
+
+        let changes = vec![RawChange { name: name.clone() }];
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let o = process_inspect_change(&c, &changes).unwrap();
+
+        assert_eq!(
+            o.changes,
+            vec![ProcessedChange {
+                path: &name,
+                added_targets: expected_targets.clone(),
+                ignored_targets: vec!["rust/target/project1".to_string()]
+            }]
+        );
+        assert_eq!(o.targets, expected_targets);
+    }
+
+    #[test]
+    fn test_process_inspect_change_project_ignore_file() {
         let name = "rust/target/project1/README.md".to_string();
         let expected_targets = vec!["rust".to_string()];
 
@@ -1349,7 +1392,7 @@ uses = [
     #[test]
     fn test_lookups() {
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-        let l = Lookups::new(&c);
+        let l = Lookups::new(&c).unwrap();
 
         assert_eq!(
             l.targets
@@ -1418,5 +1461,36 @@ uses = [
         );
 
         assert_eq!(git_cmd_status_changes(Vec::from("")), vec![]);
+    }
+
+    #[test]
+    fn test_err_duplicate_target_path() {
+        let config_str: &'static str = r#"
+[vcs]
+use = "git"
+
+[vcs.git]
+trunk = "master"
+remote = "origin"
+
+[extension]
+use = "bash"
+
+[[targets]]
+path = "rust"
+
+[[targets]]
+path = "rust"
+"#;
+        let name = "rust/".to_string();
+        let changes = vec![RawChange { name }];
+        let c: Config = toml::from_str(config_str).unwrap();
+        assert_eq!(
+            process_inspect_change(&c, &changes).err().unwrap(),
+            MonorailError {
+                class: ErrorClass::Generic,
+                message: "Duplicate target path provided: rust".to_string()
+            }
+        );
     }
 }
