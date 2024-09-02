@@ -15,17 +15,18 @@ remote = "origin"
 [extension]
 use = "bash"
 
-[[group]]
+[[targets]]
 path = "group1"
 
-	[[group.project]]
-	path = "project1"
+[[targets]]
+path = "group1/project1"
 
-	[[group.project]]
-	path = "project1/x"
+[[targets]]
+path = "group1/project1/x"
 
-    [[group.project]]
-    path = "project2"
+[[targets]]
+path = "group1/project2"
+
 "#;
 
 #[test]
@@ -141,6 +142,7 @@ fn test_handle_git_release() {
     assert_eq!(
         o.targets,
         vec![
+            "group1".to_string(),
             "group1/project1".to_string(),
             "group1/project1/x".to_string()
         ]
@@ -163,6 +165,7 @@ fn test_handle_git_release() {
     assert_eq!(
         o.targets,
         vec![
+            "group1".to_string(),
             "group1/project1".to_string(),
             "group1/project1/x".to_string()
         ]
@@ -173,7 +176,10 @@ fn test_handle_git_release() {
     // first tag in the repo
     let lt = libgit2_latest_tag(&repo, oid2).unwrap().unwrap();
     assert_eq!(lt.name().unwrap(), "v0.0.1");
-    assert_eq!(lt.message().unwrap(), "group1/project1\ngroup1/project1/x");
+    assert_eq!(
+        lt.message().unwrap(),
+        "group1\ngroup1/project1\ngroup1/project1/x"
+    );
 
     // generate another changeset to test a second release
     let _f2 = create_file(&repo_path, "group1/project1/x", "bar.txt", b"x");
@@ -198,6 +204,7 @@ fn test_handle_git_release() {
     assert_eq!(
         o2.targets,
         vec![
+            "group1".to_string(),
             "group1/project1".to_string(),
             "group1/project1/x".to_string()
         ]
@@ -208,7 +215,10 @@ fn test_handle_git_release() {
     // check subsequent tag exists
     let lt2 = libgit2_latest_tag(&repo, oid3).unwrap().unwrap();
     assert_eq!(lt2.name().unwrap(), "v0.1.0");
-    assert_eq!(lt2.message().unwrap(), "group1/project1\ngroup1/project1/x");
+    assert_eq!(
+        lt2.message().unwrap(),
+        "group1\ngroup1/project1\ngroup1/project1/x"
+    );
 }
 
 // TODO: test_handle_git_release_err_latest_bad_semver
@@ -232,7 +242,7 @@ function call_me {
         SCRIPT.as_bytes(),
     );
     let _f2 = create_file(&repo_path, "", "Monorail.toml", CONFIG_BASH.as_bytes());
-    let _output = std::process::Command::new("bash")
+    let output = std::process::Command::new("bash")
         .args(&[
             "ext/bash/monorail-bash.sh",
             "-v",
@@ -250,10 +260,16 @@ function call_me {
         .output()
         .expect("failed to run monorail-bash");
 
-    let mut file = File::open(Path::new(&repo_path).join("group1/project1/output.txt")).unwrap();
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).unwrap();
-    assert_eq!(contents, "called\n");
+    match File::open(Path::new(&repo_path).join("group1/project1/output.txt")) {
+        Ok(mut file) => {
+            let mut contents = String::new();
+            file.read_to_string(&mut contents).unwrap();
+            assert_eq!(contents, "called\n");
+        }
+        Err(e) => {
+            panic!("{:?} {:?}", output, e);
+        }
+    }
 
     purge_repo(&repo_path);
 }
@@ -393,7 +409,7 @@ fn test_handle_inspect_change() {
     );
 
     let c: Config = toml::from_str(CONFIG_BASH).unwrap();
-    let o = handle_inspect_change(
+    let changes = get_raw_changes(
         &c,
         HandleInspectChangeInput {
             start: None,
@@ -404,25 +420,41 @@ fn test_handle_inspect_change() {
         &repo_path,
     )
     .unwrap();
+    let o = process_inspect_change(&c, &changes).unwrap();
 
-    let gc = &o.group.get("group1").unwrap().change;
+    let targets = vec![
+        "group1".to_string(),
+        "group1/project1".to_string(),
+        "group1/project1/x".to_string(),
+    ];
+    assert_eq!(
+        o.changes,
+        vec![ProcessedChange {
+            path: "group1/project1/x/foo.txt",
+            added_targets: targets.clone(),
+            ignored_targets: vec![],
+        }],
+    );
+    assert_eq!(o.targets, targets,);
 
-    let gcf = gc.file.get(0).unwrap();
-    assert_eq!(gcf.name, "group1/project1/x/foo.txt".to_string());
-    assert_eq!(gcf.target, Some("group1/project1".into()));
-    assert_eq!(gcf.action, FileActionKind::Use);
-    assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
+    // let gc = &o.group.get("group1").unwrap().change;
 
-    let gcf = gc.file.get(1).unwrap();
-    assert_eq!(gcf.name, "group1/project1/x/foo.txt".to_string());
-    assert_eq!(gcf.target, Some("group1/project1/x".into()));
-    assert_eq!(gcf.action, FileActionKind::Use);
-    assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
+    // let gcf = gc.file.get(0).unwrap();
+    // assert_eq!(gcf.name, "group1/project1/x/foo.txt".to_string());
+    // assert_eq!(gcf.target, Some("group1/project1".into()));
+    // assert_eq!(gcf.action, FileActionKind::Use);
+    // assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
 
-    assert!(gc.project.contains("group1/project1"));
-    assert!(gc.project.contains("group1/project1/x"));
-    assert!(gc.link.is_empty());
-    assert!(gc.depend.is_empty());
+    // let gcf = gc.file.get(1).unwrap();
+    // assert_eq!(gcf.name, "group1/project1/x/foo.txt".to_string());
+    // assert_eq!(gcf.target, Some("group1/project1/x".into()));
+    // assert_eq!(gcf.action, FileActionKind::Use);
+    // assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
+
+    // assert!(gc.project.contains("group1/project1"));
+    // assert!(gc.project.contains("group1/project1/x"));
+    // assert!(gc.link.is_empty());
+    // assert!(gc.depend.is_empty());
 
     purge_repo(&repo_path);
 }

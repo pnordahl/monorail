@@ -4,15 +4,15 @@ description = "A monorepo overlay for version control systems."
 license = "MIT"
 homepage = "https://github.com/pnordahl/monorail"
 repository = "https://github.com/pnordahl/monorail"
-version = "1.1.0"
+version = "2.0.0"
 authors = ["Patrick Nordahl <plnordahl@gmail.com>"]
 edition = "2021"
 keywords = ["monorail", "monorepo"]
 
 [dependencies]
-clap = "2"
-toml = "0.5"
+clap = "4.5"
+toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-trie-rs = "0.1"
-git2 = { version = "0.13", default-features = false }
+trie-rs = "0.4"
+git2 = { version = "0.19", default-features = false }
