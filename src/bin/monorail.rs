@@ -1,4 +1,4 @@
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 
 fn main() {
     let app = get_app();
@@ -10,7 +10,7 @@ fn get_app() -> clap::Command {
     let arg_use_libgit2_status = Arg::new("use-libgit2-status")
         .long("use-libgit2-status")
         .help("Whether to use the slower libgit2 repo function `statuses` as part of change detection. When unset monorail will use the `git` program in a subprocess, which is presently substantially faster.")
-        .num_args(0);
+        .action(ArgAction::SetTrue);
     let arg_git_path = Arg::new("git-path")
         .long("git-path")
         .help("Absolute path to a `git` binary to use for certain operations. Defaults to `git` on PATH")
@@ -47,16 +47,16 @@ fn get_app() -> clap::Command {
     )
     .subcommand(Command::new("config").about("Show configuration, including runtime default values"))
     .subcommand(
-        Command::new("release")
-            .about("Perform a release of changed targets")
-            .after_help(r#"This command analyzes changed targets since the last release, constructs a release object appropriate for the configured vcs"#)
+        Command::new("checkpoint")
+            .about("Perform a checkpoint of changed targets")
+            .after_help(r#"This command analyzes changed targets since the last checkpoint, constructs a checkpoint object appropriate for the configured vcs"#)
             .arg(arg_git_path.clone())
             .arg(arg_use_libgit2_status.clone())
             .arg(
                 Arg::new("type")
                     .short('t')
                     .long("type")
-                    .help("Semver component to increment for this release")
+                    .help("Semver component to increment for this checkpoint")
                     .value_parser(["patch", "minor", "major"])
                     .ignore_case(true)
                     .required(true)
@@ -67,7 +67,7 @@ fn get_app() -> clap::Command {
                     .short('d')
                     .long("dry-run")
                     .help("Do not apply any changes locally (for a distributed version control system) or remotely")
-                    .num_args(0),
+                    .action(ArgAction::SetTrue),
             )
     )
     .subcommand(
@@ -100,7 +100,7 @@ fn get_app() -> clap::Command {
                             .short('t')
                             .long("targets-only")
                             .help("Only output changed targets")
-                            .num_args(0)
+                            .action(ArgAction::SetTrue)
                     ),
             ),
     )

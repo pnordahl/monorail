@@ -6,15 +6,15 @@
 use = "git"
 
 [vcs.git]
-# The branch used for trunk-based development and tagged releases.
+# The branch used for trunk-based development and checkpoints.
 # * Optional. Default: "master"
 trunk = "master"
 
-# The remote to push release tags to.
+# The remote to push checkpoints to.
 # * Optional. Default: "origin"
 remote = "origin"
 
-# A prefix for the tag refspec to use when pushing release tags.
+# A prefix for the tag refspec to use when pushing checkpoints.
 # * Optional. Default: "refs/tags"
 tags_refspec_prefix = "refs/tags"
 

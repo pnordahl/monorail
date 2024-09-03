@@ -4,18 +4,15 @@
 ![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=main)
 [![Cargo](https://img.shields.io/crates/v/monorail.svg)](https://crates.io/crates/monorail)
 
-`monorail` transforms any git repo into a trunk-based development monorepo. It uses a file describing the various directory paths and relationship between those paths, extracts changes from git since the last tag, and derives what has changed. These changes can then be fed to other programs (e.g. `monorail-bash`) that can act on those changes. While `monorail` currently supports only `git` as the VCS backend, support for others could be added.
+`monorail` is a tool for describing a repository as a trunk-based development monorepo. It uses a file describing the various directory paths and relationship between those paths, integrates with your version control tool, and outputs data about how the changes affect your defined targets. Striving to embrace the UNIX-philosophy, `monorail` is entirely agnostic to language, build tools, compilers, and so on. It emits structured text, making this output easily composed with other programs to act on those changes.
 
-`monorail` boils down to:
-
-1. A `Monorail.toml` file that describes your repository layout
-2. the `monorail inspect change` command, which reads `Monorail.toml`, analyzes `git` state between refs (usually between the most recent git annotated tag and HEAD), and returns what has changed
-3. the `monorail-bash` program, which executes user-defined `bash` scripts either directly, or informed by `monorail inspect change` output
-4. the `monorail release` command, which creates annotated tags (essentially the "checkpoint" for `monorail` change detection)
+The provided `monorail-bash` script uses the output of `monorail` to drive a robust user-defined scripting build tool. To use it, you create ordinary shell script files, define functions, and then execute them either implicitly via `monorail` change detection, or explicitly by selecting targets.
 
 See the [tutorial](#tutorial) below for a practical walkthrough of how `monorail` and `monorail-bash` work.
 
 ## Installation
+
+At present, only source builds are supported. Packages for popular managers will be provided at a later time.
 
 Ensure the following are installed and available on your system path:
 * [Rust](https://www.rust-lang.org/tools/install)
@@ -36,20 +33,21 @@ Use `monorail help`
 
 ## Configuration
 
-Create a `Monorail.toml` configuration file in the root of the repository you want `monorail` and extensions to use, referring to the `Monorail.reference.toml` file for an annotated example.
+Create a `Monorail.toml` configuration file in the root of the repository, referring to the `Monorail.reference.toml` file for an annotated example.
 
 ## Vocabulary
 
 Monorail has a simple lexicon:
 
-* vcs: the repository version control system, and internal functions that `monorail` uses to detect changes
+* vcs: the repository version control system that `monorail` integrates with to detect changes
 * change: a CRUD operation reported by the vcs as a filesystem path
+* checkpoint: a location in vcs history that marks the end of a sequence of changes
 
 `monorail` works by labeling filesystem paths within a repository as meaningful. These labels determine how changes reported by the vcs are interpreted. The label types are:
 
-* target: a unique container that can be referenced by change detection and script execution; targets are _recursive_, which means that targets can lie within other targets
-* links: a set of paths that recursively affect a target and any targets that lie in its path
-* uses: a set of paths that affect a target
+* target: A unique container that can be referenced by change detection and script execution. For example, `ui`, `api`, and `database`, as directories carrying files specific to those projects, would be good candidates for being labeled as targets. So too would a parent directory like `apps`, because targets are _recursive_, which means that targets can lie within the path of other targets.
+* links: A set of paths that recursively affect a target and any targets that lie in its path. For example, a `vendor` directory carrying copies of third-party code may require that all targets within a target's path subdirectories be re-tested.
+* uses: A set of paths that affect a target. For example, a directory called `common`, carrying files used by multiple targets might be referred to by multiple targets in their `uses` arrays.
 * ignores: a set of paths that do not affect a target
 
 For executing code against targets, two more terms:
@@ -63,80 +61,62 @@ _NOTE: this tutorial assumes a UNIX-like environment._
 
 In this tutorial, you'll learn:
 
-  * how to declare a group, project, depend, and link
-  * how to inspect changes
-  * how to define commands
-  * how to execute commands
-  * how to release
+  * mapping repository paths to targets
+  * inspecting changes
+  * defining commands
+  * executing commands
+  * checkpointing
+
+## One-time setup
 
 First, create a fresh `git` repository, and another to act as a remote:
 
-_NOTE_: This assumes a `init.defaultBranch` of `master` or empty string, the default for `git`. If yours is something else, change the `master` in the `git push` command to that.
-
 ```sh
-git init monorail-tutorial
-git init monorail-tutorial-remote
+git init --initial-branch=master monorail-tutorial
+git init --initial-branch=master monorail-tutorial-remote
 REMOTE_TRUNK=$(git -C monorail-tutorial-remote branch --show-current)
 git -C monorail-tutorial-remote checkout -b x
-pushd monorail-tutorial
+cd monorail-tutorial
 git remote add origin ../monorail-tutorial-remote
 git commit --allow-empty -m "HEAD"
 git push --set-upstream origin $REMOTE_TRUNK
-popd
 ```
 
 _NOTE_: the commit is to create a valid HEAD reference, and the branch checkout in the remote is to avoid `receive.denyCurrentBranch` errors from `git` when we push during the tutorial.
 
+## Defining a target
+
 To get started, generate a directory structure with the following shell commands:
 
 ```sh
-cd monorail-tutorial
-mkdir -p group1/project1
+mkdir -p rust
 touch Monorail.toml
 ```
 ... which yields the following directory structure:
 
 ```
 ├── Monorail.toml
-└── group1
-    └── project1
+└── rust
 ```
 
 _NOTE_: the remainder of this tutorial will apply updates to the `Monorail.toml` file with heredoc strings, for convenience.
 
-Execute the following to specify the new group and project in `Monorail.toml`, as well as an `extension` to be used later in the tutorial:
+Execute the following to map the path `rust` to a target in `Monorail.toml`; this will act as a sort of "group" for additional targets we will create later:
 
 ```sh
 cat <<EOF > Monorail.toml
-[vcs]
-use = "git"
-
-[vcs.git]
-trunk = "$(git branch --show-current)"
-
-[extension] 
-use = "bash"
-
-[[group]]
-path = "group1"
-
-  [[group.project]]
-  	path = "project1"
-
+[[targets]]
+path = "rust"
 EOF
 ```
 
-### Recap
-
-Your `monorail` config file (default: `Monorail.toml`) describes your existing repository layout in terms of `monorail` concepts. A `project` is a path to be developed/deployed/tested as a unit, e.g. a backend service, web app, etc. A `group` is a set of _related projects_, and defines what can be shared amongst projects (more on sharing later).
-
-Finally, many of `monorail`s capabilities are path-based. Our definition of `group.path` (relative to the repository root) and `project.path` (relative to the specified `group.path`) declare where these objects live in our repository.
+_NOTE_: All filesystem locations specified in `Monorail.toml` are relative to the root the repository.
 
 ## Inspecting changes
 
-`monorail` will detect changes since the last release; see: [Releasing](##Releasing). For `git`, this means uncommitted, committed, and pushed files since the last annotated tag created by `monorail release`.
+`monorail` will detect changes since the last checkpoint; see: [Checkpointing](##Checkpointing). For `git`, this means uncommitted, committed, and pushed files since the last annotated tag created by `monorail checkpoint`.
 
-### Inspect showing no changes
+### Inspect showing no affected targets
 
 Begin by viewing the output of `inspect change`:
 
@@ -144,238 +124,192 @@ Begin by viewing the output of `inspect change`:
 
 ```json
 {
-  "group": {
-    "group1": {
-      "change": {
-        "file": [],
-        "project": [],
-        "link": [],
-        "depend": []
-      }
+  "changes": [
+    {
+      "path": "Monorail.toml",
+      "added_targets": [],
+      "ignored_targets": []
     }
-  }
+  ],
+  "targets": []
 }
 ```
 
-As expected there are no changes, and `monorail` is able to interrogate `git` and use the `Monorail.toml` config successfully. The meaning of the `file`, `project`, `link`, and `depend` fields will be explained as the tutorial progresses.
+`monorail` is able to interrogate `git` and use the `Monorail.toml` config successfully. Note that the file we added is represented in the `changes` array, but it has no relevance to the `rust` target because it lies outside of its path.
 
-### Inspect showing a change
+### Inspect showing an affected target
 
-To show what an actual change looks like in `monorail` output, create a new file in `project1`:
+Let's start by adding another target, noting that it lies within the path of our existing target `rust`:
 
-	touch group1/project1/foo.txt
+```sh
+cat <<EOF > Monorail.toml
+[[targets]]
+path = "rust"
 
-View changes again:
+[[targets]]
+path = "rust/target1"
+EOF
+```
 
-	monorail inspect change | jq .
+Now, create a new file in `target1` and view changes:
+
+```sh
+	mkdir rust/target1 && \
+  touch rust/target1/foo.txt && \
+  monorail inspect change | jq .
+```
 
 ```json
 {
-  "group": {
-    "group1": {
-      "change": {
-        "file": [
-          {
-            "name": "group1/project1/foo.txt",
-            "project": "group1/project1",
-            "action": "use",
-            "reason": "project_match"
-          }
-        ],
-        "project": [
-          "group1/project1"
-        ],
-        "link": [],
-        "depend": []
-      }
+  "changes": [
+    {
+      "path": "Monorail.toml",
+      "added_targets": [],
+      "ignored_targets": []
+    },
+    {
+      "path": "rust/target1/foo.txt",
+      "added_targets": [
+        "rust",
+        "rust/target1"
+      ],
+      "ignored_targets": []
     }
-  }
+  ],
+  "targets": [
+    "rust",
+    "rust/target1"
+  ]
 }
 ```
 
-`monorail` has identified that the newly added file represents a meaningful change, based on our configuration in `Monorail.toml`.
+`monorail` has identified that the newly added file affects both of our defined targets. The `changes` array contains a list of objects containing metadata about the change detected. It contains the `path` of the file (a path relative to the repository root), and two arrays: `added_targets` and `ignored_targets`. The set difference `added_targets - ignored_targets` is the contribution of this change to the overall set of affected top-level `targets`.
 
-The `change.file` array contains a list of objects containing metadata about the change detected. It contains the `name` of the file (a path relative to the repository root), the `project` the file belongs to, the `action` taken by `monorail` during change detection (e.g. it was `use`d), and the `reason` that `action` was taken (e.g. it matched a declared project).
+_NOTE_: Using `monorail inspect change --targets-only` causes it to succinctly output only the targets array:
 
-The `change.project` array contains a list of paths relative to the repo root for projects detected as changed. This list is de-duped across all `change.file` entries; a project will appear at most once in this list.
+```json
+[
+  "rust",
+  "rust/target1"
+]
+```
 
 ### Inspect showing a change, after commit or push
-This understanding of what has changed persists between commits and pushes. Commit your changes: 
+This understanding of what has changed persists between commits and pushes. Commit your changes, and then note that our change output is unchanged:
 
-	git add * && git commit -am "x"
-
-Then, view changes again:
-
-	monorail inspect change | jq .
-
-```json
-{
-  "group": {
-    "group1": {
-      "change": {
-        "file": [
-          {
-            "name": "group1/project1/foo.txt",
-            "project": "group1/project1",
-            "action": "use",
-            "reason": "project_match"
-          }
-        ],
-        "project": [
-          "group1/project1"
-        ],
-        "link": [],
-        "depend": []
-      }
-    }
-  }
-}
-```
-
-`monorail` still knows about the change to the project `group1/project1`.
+	git add * && git commit -am "x" && monorail inspect change | jq .
 
 Push, and view changes again:
 
 	git push && monorail inspect change | jq .
 
-The output remains the same.
+As with the commit, `monorail` still knows about the changes after a push. The reason for this will be explained in the section on checkpointing below.
 
+## Declaring "uses" and "links"
 
-## Declaring dependencies and links
+`monorail` allows for targets to be affected by paths outside of the `path` each project has declared. This allows for targets to reference paths containing utility code, serialization files (e.g. protobuf definitions), configuration, etc. When these paths have changes, it triggers targets that use them to be changed.
 
-`monorail` allows for projects to depend on paths outside of the `path` each project has declared. This allows for reference paths containing utility code, serialization files (e.g. protobuf definitions), configuration, etc. When these paths have changes, it triggers projects that depend on them to be changed.
+### Uses
 
-
-### Dependencies
-
-Begin by creating a directory to be used as a dependency, and a directory to hold a new project, `project2`:
+Begin by creating a directory to be used by `rust/target1`, and a directory to hold a new target, `rust/target2`:
 
 ```sh
-mkdir -p group1/common/library1
-mkdir group1/project2
+mkdir -p rust/common/library1
+mkdir rust/target2
 ```
 
-Execute the following to adjust the `[[group]]` section of `Monorail.toml` to add `library1` as a depend-able path, specify `project2`, and make `project2` depend on `library1`:
+Execute the following to adjust the `[[targets]]` section of `Monorail.toml` to specify `rust/target2`, and make `rust/target2` use `rust/common/library1`:
 
 ```sh
 cat <<EOF > Monorail.toml
-[vcs]
-use = "git"
+[[targets]]
+path = "rust"
 
-[vcs.git]
-trunk = "$(git branch --show-current)"
+[[targets]]
+path = "rust/target1"
 
-[extension] 
-use = "bash"
-
-[[group]]
-path = "group1"
-depend = [
-	"common/library1"
+[[targets]]
+path = "rust/target2"
+uses = [
+  "rust/common/library1"
 ]
-
-  [[group.project]]
-  	path = "project1"
-
-  [[group.project]]
-  	path = "project2"
-
-  	depend = [
-  		"common/library1"
-  	]
-
 EOF
 ```
 
-The `depend` declaration in the `group` section indicates that this path _can_ be depended on. The `project.depend` is where you specify zero or more of these paths your project _does_ depend on.
+Any changes that lie within the paths defined in the target's `uses` array affect the target.
 
 To trigger change detection, create a file in library1:
 
-	touch group1/common/library1/foo.proto
+	touch rust/common/library1/foo.proto
 
 and then `monorail inspect change | jq .`:
 
 ```json
 {
-  "group": {
-    "group1": {
-      "change": {
-        "file": [
-        	{
-            "name": "group1/common/library1/foo.proto",
-            "project": null,
-            "action": "use",
-            "reason": "project_depend_effect"
-          },
-          {
-            "name": "group1/project1/foo.txt",
-            "project": "group1/project1",
-            "action": "use",
-            "reason": "project_match"
-          }
-        ],
-        "project": [
-          "group1/project2",
-          "group1/project1"
-        ],
-        "link": [],
-        "depend": [
-          "group1/common/library1"
-        ]
-      }
+  "changes": [
+    {
+      "path": "Monorail.toml",
+      "added_targets": [],
+      "ignored_targets": []
+    },
+    {
+      "path": "rust/common/library1/foo.proto",
+      "added_targets": [
+        "rust",
+        "rust/target2"
+      ],
+      "ignored_targets": []
+    },
+    {
+      "path": "rust/target1/foo.txt",
+      "added_targets": [
+        "rust",
+        "rust/target1"
+      ],
+      "ignored_targets": []
     }
-  }
+  ],
+  "targets": [
+    "rust",
+    "rust/target1",
+    "rust/target2"
+  ]
 }
 ```
 
-Our original file entry is still there, but another for the newly-created file has appeared. It has a `project` of `null` because it does not lie in the path of a project, and a `reason` that indicates it is being used due to a project depending on a path containing the file (`project_depend_effect`).
-
-An entry of `group1/project2` has appeared in `group.project`, indicating that this project is now part of the set of projects that have changed. We didn't change any files in `project2` (indeed, none exist!), but did modify a path that `project2` depends on.
-
-Furthermore, an entry has appeared in `group.depend` for our library path.
-
+Since the added `rust/common/library1/foo.proto` file lies within `rust/target2`'s `uses` array, that change has caused `rust/target2` to appear in the final `targets` array.
 
 ### Links
 
-A `link` works similarly to a `depend`, but applies to all projects in a group without them opting-in. To demonstrate, we will create a third project and a contrived `Lockfile` to link all projects to:
+A change falling within a path specified in a `links` array affects all targets _recursively_ without them opting-in. To demonstrate, we will create a third project and a `rust/vendor` directory to link all targets to:
 
-	mkdir group1/project3
-	touch group1/Lockfile
+```sh
+	mkdir rust/project3
+	mkdir rust/vendor
+  touch rust/vendor/bar.txt
+```
 
-Execute the following to adjust the `[[group]]` section of `Monorail.toml` to specify this new project, as well as a group `link`:
+Execute the following to adjust the `[[targets]]` section of `Monorail.toml` to specify this new project, as well as a target `links`:
 
 ```sh
 cat <<EOF > Monorail.toml
-[vcs]
-use = "git"
-
-[vcs.git]
-trunk = "$(git branch --show-current)"
-
-[extension] 
-use = "bash"
-
-[[group]]
-path = "group1"
-depend = [
-	"common/library1"
-]
-link = [
-	"Lockfile"
+[[targets]]
+path = "rust"
+links = [
+  "rust/vendor"
 ]
 
-  [[group.project]]
-  	path = "project1"
+[[targets]]
+path = "rust/target1"
 
-  [[group.project]]
-  	path = "project2"
+[[targets]]
+path = "rust/target2"
+uses = [
+  "rust/common/library1"
+]
 
-  	depend = [
-  		"common/library1"
-  	]
-  [[group.project]]
-  	path = "project3"
-
+[[targets]]
+path = "rust/target3"
 EOF
 ```
 
@@ -383,49 +317,53 @@ Executing `monocle inspect change | jq .` yields:
 
 ```json
 {
-  "group": {
-    "group1": {
-      "change": {
-        "file": [
-        	{
-            "name": "group1/Lockfile",
-            "project": null,
-            "action": "use",
-            "reason": "group_link_effect"
-          },
-        	{
-            "name": "group1/common/library1/foo.proto",
-            "project": null,
-            "action": "use",
-            "reason": "project_depend_effect"
-          },
-          {
-            "name": "group1/project1/foo.txt",
-            "project": "group1/project1",
-            "action": "use",
-            "reason": "project_match"
-          }
-        ],
-        "project": [
-          "group1/project3",
-          "group1/project2",
-          "group1/project1"
-        ],
-        "link": [
-          "group1/Lockfile"
-        ],
-        "depend": [
-          "group1/common/library1"
-        ]
-      }
+  "changes": [
+    {
+      "path": "Monorail.toml",
+      "added_targets": [],
+      "ignored_targets": []
+    },
+    {
+      "path": "rust/common/library1/foo.proto",
+      "added_targets": [
+        "rust",
+        "rust/target2"
+      ],
+      "ignored_targets": []
+    },
+    {
+      "path": "rust/target1/foo.txt",
+      "added_targets": [
+        "rust",
+        "rust/target1"
+      ],
+      "ignored_targets": []
+    },
+    {
+      "path": "rust/vendor/bar.txt",
+      "added_targets": [
+        "rust",
+        "rust/target1",
+        "rust/target2",
+        "rust/target3"
+      ],
+      "ignored_targets": []
     }
-  }
+  ],
+  "targets": [
+    "rust",
+    "rust/target1",
+    "rust/target2",
+    "rust/target3"
+  ]
 }
 ```
 
-Again, our original changes to `project1` and `library1` remain. A new `change.file` for `Lockfile` has appeared, a new `change.project` for the `project3` has been added, and `change.link` now has a path to the `Lockfile` we changed.
+Note that `project3` did not need to opt-in to changes in `rust/vendor`; simply being within the path of `rust` with its `links` definition is enough. While this has many uses, sometimes a target needs to opt-out of certain paths. For that, there is the `ignores` array.
 
-Note that `project3` did not need to explicitly depend on `Lockfile`; simply being a member of `group1` does this.
+## Ignoring paths
+
+
 
 ## Defining commands
 

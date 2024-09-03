@@ -23,13 +23,21 @@ use trie_rs::{Trie, TrieBuilder};
 
 #[derive(Debug, Serialize, Eq, PartialEq)]
 pub enum ErrorClass {
+    #[serde(rename = "generic")]
     Generic,
+    #[serde(rename = "git2")]
     Git2,
+    #[serde(rename = "io")]
     Io,
+    #[serde(rename = "toml_deserialize")]
     TomlDeserialize,
+    #[serde(rename = "command")]
     Command,
+    #[serde(rename = "serde_json")]
     SerdeJSON,
+    #[serde(rename = "utf8")]
     Utf8Error,
+    #[serde(rename = "parse_int")]
     ParseIntError,
 }
 
@@ -152,14 +160,14 @@ pub fn handle(cmd: clap::Command) {
                             std::process::exit(0);
                         }
 
-                        if let Some(release) = matches.subcommand_matches("release") {
-                            match handle_release(
+                        if let Some(checkpoint) = matches.subcommand_matches("checkpoint") {
+                            match handle_checkpoint(
                                 &cfg,
-                                HandleReleaseInput {
-                                    release_type: release.get_one::<String>("type").unwrap(),
-                                    dry_run: release.contains_id("dry-run"),
-                                    git_path: release.get_one::<String>("git-path").unwrap(),
-                                    use_libgit2_status: release.contains_id("use-libgit2-status"),
+                                HandleCheckpointInput {
+                                    checkpoint_type: checkpoint.get_one::<String>("type").unwrap(),
+                                    dry_run: checkpoint.get_flag("dry-run"),
+                                    git_path: checkpoint.get_one::<String>("git-path").unwrap(),
+                                    use_libgit2_status: checkpoint.get_flag("use-libgit2-status"),
                                 },
                                 &wd,
                             ) {
@@ -187,13 +195,13 @@ pub fn handle(cmd: clap::Command) {
                                     start,
                                     end,
                                     git_path,
-                                    use_libgit2_status: change.contains_id("use-libgit2-status"),
+                                    use_libgit2_status: change.get_flag("use-libgit2-status"),
                                 };
                                 match get_raw_changes(&cfg, i, &wd) {
                                     Ok(raw_changes) => {
                                         match process_inspect_change(&cfg, &raw_changes) {
                                             Ok(o) => {
-                                                if change.contains_id("targets-only") {
+                                                if change.get_flag("targets-only") {
                                                     write_output(
                                                         std::io::stdout(),
                                                         &o.targets,
@@ -422,24 +430,24 @@ fn libgit2_find_oid(repo: &git2::Repository, s: &str) -> Result<git2::Oid, Monor
 }
 
 #[derive(Debug, Serialize)]
-pub struct HandleReleaseInput<'a> {
-    pub release_type: &'a str,
+pub struct HandleCheckpointInput<'a> {
+    pub checkpoint_type: &'a str,
     pub dry_run: bool,
     pub git_path: &'a str,
     pub use_libgit2_status: bool,
 }
 #[derive(Debug, Serialize)]
-pub struct ReleaseOutput {
+pub struct CheckpointOutput {
     pub id: String,
     pub targets: Vec<String>,
     pub dry_run: bool,
 }
 
-pub fn handle_release(
+pub fn handle_checkpoint(
     cfg: &Config,
-    input: HandleReleaseInput,
+    input: HandleCheckpointInput,
     wd: &str,
-) -> Result<ReleaseOutput, MonorailError> {
+) -> Result<CheckpointOutput, MonorailError> {
     match cfg.vcs.r#use {
         VcsKind::Git => {
             let repo = git2::Repository::open(wd)?;
@@ -475,7 +483,7 @@ pub fn handle_release(
 
             if end_oid == start_oid {
                 return Err(format!(
-                    "HEAD and the last release are the same commit {}, nothing to do",
+                    "HEAD and the last checkpoint are the same commit {}, nothing to do",
                     start_oid
                 )
                 .into());
@@ -483,7 +491,7 @@ pub fn handle_release(
 
             // TODO: error on [ci skip]
 
-            // TODO: error if release would include unpushed changes
+            // TODO: error if checkpoint would include unpushed changes
 
             // fetch changed targets
             let changes = git_all_changes(
@@ -500,7 +508,7 @@ pub fn handle_release(
 
             // without targets, there's nothing to do
             if o.targets.is_empty() {
-                return Ok(ReleaseOutput {
+                return Ok(CheckpointOutput {
                     id: "".to_string(),
                     targets: o.targets,
                     dry_run: input.dry_run,
@@ -510,10 +518,10 @@ pub fn handle_release(
             // get new tag name
             let tag_name = match latest_tag {
                 Some(latest_tag) => match latest_tag.name() {
-                    Some(name) => increment_semver(name, input.release_type)?,
+                    Some(name) => increment_semver(name, input.checkpoint_type)?,
                     None => return Err("reference semver not provided".into()),
                 },
-                None => increment_semver("v0.0.0", input.release_type)?,
+                None => increment_semver("v0.0.0", input.checkpoint_type)?,
             };
 
             if !input.dry_run {
@@ -546,7 +554,7 @@ pub fn handle_release(
                 }
             }
 
-            Ok(ReleaseOutput {
+            Ok(CheckpointOutput {
                 id: tag_name,
                 targets: o.targets,
                 dry_run: input.dry_run,
@@ -555,7 +563,7 @@ pub fn handle_release(
     }
 }
 
-fn increment_semver(semver: &str, release_type: &str) -> Result<String, MonorailError> {
+fn increment_semver(semver: &str, checkpoint_type: &str) -> Result<String, MonorailError> {
     let v: Vec<&str> = semver.trim_start_matches('v').split('.').collect();
     if v.len() != 3 {
         return Err(format!("semver should have 3 parts, it has {}", v.len()).into());
@@ -563,7 +571,7 @@ fn increment_semver(semver: &str, release_type: &str) -> Result<String, Monorail
     let mut major = v[0].parse::<i32>()?;
     let mut minor = v[1].parse::<i32>()?;
     let mut patch = v[2].parse::<i32>()?;
-    match release_type {
+    match checkpoint_type {
         "major" => {
             major += 1;
             minor = 0;
@@ -576,7 +584,7 @@ fn increment_semver(semver: &str, release_type: &str) -> Result<String, Monorail
         "patch" => {
             patch += 1;
         }
-        _ => return Err(format!("unrecognized release type {}", release_type).into()),
+        _ => return Err(format!("unrecognized checkpoint type {}", checkpoint_type).into()),
     }
     Ok(format!("v{}.{}.{}", major, minor, patch))
 }
@@ -884,17 +892,24 @@ impl FromStr for VcsKind {
         }
     }
 }
+impl Default for VcsKind {
+    fn default() -> Self {
+        VcsKind::Git
+    }
+}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
+    #[serde(default)]
     vcs: Vcs,
+    #[serde(default)]
     extension: Extension,
     // group: Option<Vec<Group>>,
     targets: Option<Vec<Target>>,
 }
-#[derive(Serialize, Deserialize, Debug)]
-struct Backend {}
-#[derive(Serialize, Deserialize, Debug)]
+
+#[derive(Serialize, Deserialize, Debug, Default)]
 struct Vcs {
+    #[serde(default)]
     r#use: VcsKind,
     #[serde(default)]
     git: Git,
@@ -942,8 +957,14 @@ impl FromStr for ExtensionKind {
         }
     }
 }
-#[derive(Serialize, Deserialize, Debug)]
+impl Default for ExtensionKind {
+    fn default() -> Self {
+        ExtensionKind::Bash
+    }
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
 struct Extension {
+    #[serde(default)]
     r#use: ExtensionKind,
     #[serde(default)]
     bash: ExtensionBash,

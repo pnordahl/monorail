@@ -30,7 +30,7 @@ path = "group1/project2"
 "#;
 
 #[test]
-fn test_handle_git_release_no_targets_noop() {
+fn test_handle_git_checkpoint_no_targets_noop() {
     let (repo, repo_path) = get_repo(false);
     let (_origin, origin_repo_path) = get_repo(true);
     repo.remote("origin", &origin_repo_path).unwrap();
@@ -48,12 +48,12 @@ fn test_handle_git_release_no_targets_noop() {
     );
 
     let c: Config = toml::from_str(CONFIG_BASH).unwrap();
-    let result = handle_release(
+    let result = handle_checkpoint(
         &c,
         HandleReleaseInput {
             git_path: "git",
             use_libgit2_status: false,
-            release_type: "patch",
+            checkpoint_type: "patch",
             dry_run: false,
         },
         &repo_path,
@@ -66,7 +66,7 @@ fn test_handle_git_release_no_targets_noop() {
 }
 
 #[test]
-fn test_handle_git_release_err_not_trunk() {
+fn test_handle_git_checkpoint_err_not_trunk() {
     let (repo, repo_path) = get_repo(false);
     let (_origin, origin_repo_path) = get_repo(true);
     repo.remote("origin", &origin_repo_path).unwrap();
@@ -94,12 +94,12 @@ fn test_handle_git_release_err_not_trunk() {
     repo.set_head("refs/heads/baz").unwrap();
 
     let c: Config = toml::from_str(CONFIG_BASH).unwrap();
-    let result = handle_release(
+    let result = handle_checkpoint(
         &c,
         HandleReleaseInput {
             git_path: "git",
             use_libgit2_status: false,
-            release_type: "patch",
+            checkpoint_type: "patch",
             dry_run: true,
         },
         &repo_path,
@@ -108,14 +108,14 @@ fn test_handle_git_release_err_not_trunk() {
 }
 
 #[test]
-fn test_handle_git_release() {
+fn test_handle_git_checkpoint() {
     let (repo, repo_path) = get_repo(false);
     let (_origin, origin_repo_path) = get_repo(true);
     repo.remote("origin", &origin_repo_path).unwrap();
     repo.remote_add_push("origin", "refs/tags:refs/tags")
         .unwrap();
 
-    // generate initial changeset for use in first release
+    // generate initial changeset for use in first checkpoint
     let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
     let _f1 = create_file(&repo_path, "group1/project1/x", "foo.txt", b"x");
     let oid2 = commit_file(
@@ -127,13 +127,13 @@ fn test_handle_git_release() {
 
     let c: Config = toml::from_str(CONFIG_BASH).unwrap();
 
-    // dry run release
-    let o = handle_release(
+    // dry run checkpoint
+    let o = handle_checkpoint(
         &c,
         HandleReleaseInput {
             git_path: "git",
             use_libgit2_status: false,
-            release_type: "patch",
+            checkpoint_type: "patch",
             dry_run: true,
         },
         &repo_path,
@@ -150,13 +150,13 @@ fn test_handle_git_release() {
     assert_eq!(o.id, "v0.0.1".to_string());
     assert_eq!(o.dry_run, true);
 
-    // actual release
-    let o = handle_release(
+    // actual checkpoint
+    let o = handle_checkpoint(
         &c,
         HandleReleaseInput {
             git_path: "git",
             use_libgit2_status: false,
-            release_type: "patch",
+            checkpoint_type: "patch",
             dry_run: false,
         },
         &repo_path,
@@ -181,7 +181,7 @@ fn test_handle_git_release() {
         "group1\ngroup1/project1\ngroup1/project1/x"
     );
 
-    // generate another changeset to test a second release
+    // generate another changeset to test a second checkpoint
     let _f2 = create_file(&repo_path, "group1/project1/x", "bar.txt", b"x");
     let oid3 = commit_file(
         &repo,
@@ -189,12 +189,12 @@ fn test_handle_git_release() {
         Some("HEAD"),
         &[&get_commit(&repo, oid2)],
     );
-    let o2 = handle_release(
+    let o2 = handle_checkpoint(
         &c,
         HandleReleaseInput {
             git_path: "git",
             use_libgit2_status: false,
-            release_type: "minor",
+            checkpoint_type: "minor",
             dry_run: false,
         },
         &repo_path,
@@ -221,8 +221,8 @@ fn test_handle_git_release() {
     );
 }
 
-// TODO: test_handle_git_release_err_latest_bad_semver
-// TODO: test_handle_git_release_head_from_noop
+// TODO: test_handle_git_checkpoint_err_latest_bad_semver
+// TODO: test_handle_git_checkpoint_head_from_noop
 
 #[test]
 fn test_extension_bash_exec_implicit_target() {
@@ -436,25 +436,6 @@ fn test_handle_inspect_change() {
         }],
     );
     assert_eq!(o.targets, targets,);
-
-    // let gc = &o.group.get("group1").unwrap().change;
-
-    // let gcf = gc.file.get(0).unwrap();
-    // assert_eq!(gcf.name, "group1/project1/x/foo.txt".to_string());
-    // assert_eq!(gcf.target, Some("group1/project1".into()));
-    // assert_eq!(gcf.action, FileActionKind::Use);
-    // assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
-
-    // let gcf = gc.file.get(1).unwrap();
-    // assert_eq!(gcf.name, "group1/project1/x/foo.txt".to_string());
-    // assert_eq!(gcf.target, Some("group1/project1/x".into()));
-    // assert_eq!(gcf.action, FileActionKind::Use);
-    // assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
-
-    // assert!(gc.project.contains("group1/project1"));
-    // assert!(gc.project.contains("group1/project1/x"));
-    // assert!(gc.link.is_empty());
-    // assert!(gc.depend.is_empty());
 
     purge_repo(&repo_path);
 }
