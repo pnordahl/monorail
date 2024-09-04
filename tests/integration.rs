@@ -1,10 +1,12 @@
 use monorail::common::testing::*;
-use monorail::*;
+// use monorail::*;
+use monorail::libgit2_latest_tag;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::process;
 
-const CONFIG_BASH: &'static str = r#"
+const CONFIG_BASH: &str = r#"
 [[targets]]
 path = "group1"
 
@@ -20,7 +22,7 @@ path = "group1/project2"
 "#;
 
 #[test]
-fn test_handle_git_checkpoint_no_targets_noop() {
+fn test_handle_git_checkpoint_no_changes_noop() {
     let (repo, repo_path) = get_repo(false);
     let (_origin, origin_repo_path) = get_repo(true);
     repo.remote("origin", &origin_repo_path).unwrap();
@@ -28,31 +30,68 @@ fn test_handle_git_checkpoint_no_targets_noop() {
         .unwrap();
 
     // generate initial changeset
-    let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+    let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
     let oid2 = create_commit(
         &repo,
         &get_tree(&repo),
         "b",
         Some("HEAD"),
-        &vec![&get_commit(&repo, oid1)],
+        &[&get_commit(&repo, oid1)],
     );
 
-    let c: Config = toml::from_str(CONFIG_BASH).unwrap();
-    let result = handle_checkpoint(
-        &c,
-        HandleCheckpointInput {
-            git_path: "git",
-            use_libgit2_status: false,
-            checkpoint_type: "patch",
-            dry_run: false,
-        },
-        &repo_path,
-    );
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().id, "");
+    let monorail_toml = "/tmp/monorail/Monorail.toml";
+    let _f2 = create_file(&repo_path, "", monorail_toml, CONFIG_BASH.as_bytes());
+    let output = process::Command::new("target/debug/monorail")
+        .args([
+            "-d",
+            &repo_path,
+            "-f",
+            monorail_toml,
+            "checkpoint",
+            "create",
+            "-t",
+            "patch",
+        ])
+        .output()
+        .expect("command failed");
+
+    assert_eq!(std::str::from_utf8(output.stderr.as_slice()).unwrap(), "{\"class\":\"generic\",\"message\":\"No changes detected, aborting checkpoint creation\"}\n");
 
     // ensure no tag was created
     assert!(libgit2_latest_tag(&repo, oid2).unwrap().is_none());
+}
+
+#[test]
+fn test_handle_git_checkpoint_no_targets() {
+    let (repo, repo_path) = get_repo(false);
+    let (_origin, origin_repo_path) = get_repo(true);
+    repo.remote("origin", &origin_repo_path).unwrap();
+    repo.remote_add_push("origin", "refs/tags:refs/tags")
+        .unwrap();
+
+    // generate initial changeset
+    let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
+    let oid2 = create_commit(
+        &repo,
+        &get_tree(&repo),
+        "b",
+        Some("HEAD"),
+        &[&get_commit(&repo, oid1)],
+    );
+
+    let _f2 = create_file(&repo_path, "", "Monorail.toml", CONFIG_BASH.as_bytes());
+    let output = process::Command::new("target/debug/monorail")
+        .args(["-d", &repo_path, "checkpoint", "create", "-t", "patch"])
+        .output()
+        .expect("command failed");
+
+    assert_eq!(
+        std::str::from_utf8(output.stdout.as_slice()).unwrap(),
+        "{\"id\":\"v0.0.1\",\"targets\":[],\"dry_run\":false}\n"
+    );
+
+    // ensure tag was created
+    assert!(libgit2_latest_tag(&repo, oid2).unwrap().is_some());
 }
 
 #[test]
@@ -64,13 +103,13 @@ fn test_handle_git_checkpoint_err_not_trunk() {
         .unwrap();
 
     // generate initial changeset
-    let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+    let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
     let oid2 = create_commit(
         &repo,
         &get_tree(&repo),
         "a",
         Some("HEAD"),
-        &vec![&get_commit(&repo, oid1)],
+        &[&get_commit(&repo, oid1)],
     );
 
     let _branch = repo
@@ -83,22 +122,17 @@ fn test_handle_git_checkpoint_err_not_trunk() {
     .unwrap();
     repo.set_head("refs/heads/baz").unwrap();
 
-    let c: Config = toml::from_str(CONFIG_BASH).unwrap();
-    let result = handle_checkpoint(
-        &c,
-        HandleCheckpointInput {
-            git_path: "git",
-            use_libgit2_status: false,
-            checkpoint_type: "patch",
-            dry_run: true,
-        },
-        &repo_path,
-    );
-    assert!(result.is_err());
+    let _f2 = create_file(&repo_path, "", "Monorail.toml", CONFIG_BASH.as_bytes());
+    let output = process::Command::new("target/debug/monorail")
+        .args(["-d", &repo_path, "checkpoint", "create", "-t", "patch"])
+        .output()
+        .expect("command failed");
+
+    assert_eq!(std::str::from_utf8(output.stderr.as_slice()).unwrap(), "{\"class\":\"generic\",\"message\":\"HEAD points to refs/heads/baz expected vcs.git.trunk branch master\"}\n");
 }
 
 #[test]
-fn test_handle_git_checkpoint() {
+fn test_git_checkpoint() {
     let (repo, repo_path) = get_repo(false);
     let (_origin, origin_repo_path) = get_repo(true);
     repo.remote("origin", &origin_repo_path).unwrap();
@@ -106,7 +140,7 @@ fn test_handle_git_checkpoint() {
         .unwrap();
 
     // generate initial changeset for use in first checkpoint
-    let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+    let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
     let _f1 = create_file(&repo_path, "group1/project1/x", "foo.txt", b"x");
     let oid2 = commit_file(
         &repo,
@@ -115,60 +149,38 @@ fn test_handle_git_checkpoint() {
         &[&get_commit(&repo, oid1)],
     );
 
-    let c: Config = toml::from_str(CONFIG_BASH).unwrap();
+    let _f2 = create_file(&repo_path, "", "Monorail.toml", CONFIG_BASH.as_bytes());
 
     // dry run checkpoint
-    let o = handle_checkpoint(
-        &c,
-        HandleCheckpointInput {
-            git_path: "git",
-            use_libgit2_status: false,
-            checkpoint_type: "patch",
-            dry_run: true,
-        },
-        &repo_path,
-    )
-    .unwrap();
-    assert_eq!(
-        o.targets,
-        vec![
-            "group1".to_string(),
-            "group1/project1".to_string(),
-            "group1/project1/x".to_string()
-        ]
-    );
-    assert_eq!(o.id, "v0.0.1".to_string());
-    assert_eq!(o.dry_run, true);
+    let output = process::Command::new("target/debug/monorail")
+        .args([
+            "-d",
+            &repo_path,
+            "checkpoint",
+            "create",
+            "-t",
+            "patch",
+            "--dry-run",
+        ])
+        .output()
+        .expect("command failed");
+
+    assert_eq!(std::str::from_utf8(output.stdout.as_slice()).unwrap(), "{\"id\":\"v0.0.1\",\"targets\":[\"group1\",\"group1/project1\",\"group1/project1/x\"],\"dry_run\":true}\n");
 
     // actual checkpoint
-    let o = handle_checkpoint(
-        &c,
-        HandleCheckpointInput {
-            git_path: "git",
-            use_libgit2_status: false,
-            checkpoint_type: "patch",
-            dry_run: false,
-        },
-        &repo_path,
-    )
-    .unwrap();
-    assert_eq!(
-        o.targets,
-        vec![
-            "group1".to_string(),
-            "group1/project1".to_string(),
-            "group1/project1/x".to_string()
-        ]
-    );
-    assert_eq!(o.id, "v0.0.1".to_string());
-    assert_eq!(o.dry_run, false);
+    let output = process::Command::new("target/debug/monorail")
+        .args(["-d", &repo_path, "checkpoint", "create", "-t", "patch"])
+        .output()
+        .expect("command failed");
+
+    assert_eq!(std::str::from_utf8(output.stdout.as_slice()).unwrap(), "{\"id\":\"v0.0.1\",\"targets\":[\"group1\",\"group1/project1\",\"group1/project1/x\"],\"dry_run\":false}\n");
 
     // first tag in the repo
     let lt = libgit2_latest_tag(&repo, oid2).unwrap().unwrap();
     assert_eq!(lt.name().unwrap(), "v0.0.1");
     assert_eq!(
         lt.message().unwrap(),
-        "group1\ngroup1/project1\ngroup1/project1/x\n\n"
+        "{\n  \"num_changes\": 2,\n  \"targets\": [\n    \"group1\",\n    \"group1/project1\",\n    \"group1/project1/x\"\n  ]\n}\n"
     );
 
     // generate another changeset to test a second checkpoint
@@ -179,35 +191,19 @@ fn test_handle_git_checkpoint() {
         Some("HEAD"),
         &[&get_commit(&repo, oid2)],
     );
-    let o2 = handle_checkpoint(
-        &c,
-        HandleCheckpointInput {
-            git_path: "git",
-            use_libgit2_status: false,
-            checkpoint_type: "minor",
-            dry_run: false,
-        },
-        &repo_path,
-    )
-    .unwrap();
+    let output = process::Command::new("target/debug/monorail")
+        .args(["-d", &repo_path, "checkpoint", "create", "-t", "minor"])
+        .output()
+        .expect("command failed");
 
-    assert_eq!(
-        o2.targets,
-        vec![
-            "group1".to_string(),
-            "group1/project1".to_string(),
-            "group1/project1/x".to_string()
-        ]
-    );
-    assert_eq!(o2.id, "v0.1.0".to_string());
-    assert_eq!(o2.dry_run, false);
+    assert_eq!(std::str::from_utf8(output.stdout.as_slice()).unwrap(), "{\"id\":\"v0.1.0\",\"targets\":[\"group1\",\"group1/project1\",\"group1/project1/x\"],\"dry_run\":false}\n");
 
     // check subsequent tag exists
     let lt2 = libgit2_latest_tag(&repo, oid3).unwrap().unwrap();
     assert_eq!(lt2.name().unwrap(), "v0.1.0");
     assert_eq!(
         lt2.message().unwrap(),
-        "group1\ngroup1/project1\ngroup1/project1/x\n\n"
+        "{\n  \"num_changes\": 3,\n  \"targets\": [\n    \"group1\",\n    \"group1/project1\",\n    \"group1/project1/x\"\n  ]\n}\n"
     );
 }
 
@@ -217,14 +213,14 @@ fn test_handle_git_checkpoint() {
 #[test]
 fn test_extension_bash_exec_implicit_target() {
     let (repo, repo_path) = get_repo(false);
-    const SCRIPT: &'static str = r#"
+    const SCRIPT: &str = r#"
 #!/bin/bash
 function call_me {
     echo 'called' > output.txt
 }
 "#;
     // TODO: shouldn't have to make initial repo commit to make HEAD resolve
-    let _oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+    let _oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
     let _f1 = create_file(
         &repo_path,
         "group1/project1/support/script",
@@ -232,8 +228,8 @@ function call_me {
         SCRIPT.as_bytes(),
     );
     let _f2 = create_file(&repo_path, "", "Monorail.toml", CONFIG_BASH.as_bytes());
-    let output = std::process::Command::new("bash")
-        .args(&[
+    let output = process::Command::new("bash")
+        .args([
             "ext/bash/monorail-bash.sh",
             "-v",
             "-d",
@@ -267,20 +263,20 @@ function call_me {
 #[test]
 fn test_extension_bash_exec_explicit_target() {
     let (repo, repo_path) = get_repo(false);
-    const SCRIPT: &'static str = r#"
+    const SCRIPT: &str = r#"
 #!/bin/bash
 function call_me {
     echo 'called' > output.txt
 }
 "#;
-    const SCRIPT2: &'static str = r#"
+    const SCRIPT2: &str = r#"
 #!/bin/bash
 function call_me {
     touch should_not_exist.txt
 }
 "#;
     // TODO: shouldn't have to make initial repo commit to make HEAD resolve
-    let _oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+    let _oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
     let _f1 = create_file(
         &repo_path,
         "group1/project1/support/script",
@@ -294,8 +290,8 @@ function call_me {
         SCRIPT2.as_bytes(),
     );
     let _f3 = create_file(&repo_path, "", "Monorail.toml", CONFIG_BASH.as_bytes());
-    let _output = std::process::Command::new("bash")
-        .args(&[
+    let _output = process::Command::new("bash")
+        .args([
             "ext/bash/monorail-bash.sh",
             "-v",
             "-d",
@@ -328,14 +324,14 @@ function call_me {
 #[test]
 fn test_extension_bash_exec_command_err() {
     let (repo, repo_path) = get_repo(false);
-    const SCRIPT: &'static str = r#"
+    const SCRIPT: &str = r#"
 #!/bin/bash
 function call_me {
     exit 1
 }
 "#;
     // TODO: shouldn't have to make initial repo commit to make HEAD resolve
-    let _oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+    let _oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
     let _f1 = create_file(
         &repo_path,
         "group1/project1/support/script",
@@ -343,8 +339,8 @@ function call_me {
         SCRIPT.as_bytes(),
     );
     let _f2 = create_file(&repo_path, "", "Monorail.toml", CONFIG_BASH.as_bytes());
-    let output = std::process::Command::new("bash")
-        .args(&[
+    let output = process::Command::new("bash")
+        .args([
             "ext/bash/monorail-bash.sh",
             "-v",
             "-d",
@@ -362,8 +358,8 @@ function call_me {
         .expect("failed to run monorail-bash");
     assert!(!output.status.success());
 
-    let output = std::process::Command::new("bash")
-        .args(&[
+    let output = process::Command::new("bash")
+        .args([
             "ext/bash/monorail-bash.sh",
             "-v",
             "-d",
@@ -389,7 +385,7 @@ fn test_handle_analyze() {
     let (repo, repo_path) = get_repo(false);
 
     // prep repo with some changes
-    let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+    let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
     let _f1 = create_file(&repo_path, "group1/project1/x", "foo.txt", b"x");
     let _oid2 = commit_file(
         &repo,
@@ -398,33 +394,16 @@ fn test_handle_analyze() {
         &[&get_commit(&repo, oid1)],
     );
 
-    let c: Config = toml::from_str(CONFIG_BASH).unwrap();
-    let changes = git_get_raw_changes(
-        &GitChangeOptions {
-            start: None,
-            end: Some("HEAD"),
-            git_path: "git",
-            use_libgit2_status: false,
-        },
-        &repo_path,
-    )
-    .unwrap();
-    let lookups = Lookups::new(&c).unwrap();
-    let o = analyze(lookups, changes, true, false).unwrap();
+    let _f2 = create_file(&repo_path, "", "Monorail.toml", CONFIG_BASH.as_bytes());
+    let output = process::Command::new("target/debug/monorail")
+        .args(["-d", &repo_path, "analyze", "--show-changes"])
+        .output()
+        .expect("command failed");
 
-    let targets = vec![
-        "group1".to_string(),
-        "group1/project1".to_string(),
-        "group1/project1/x".to_string(),
-    ];
     assert_eq!(
-        o.changes.unwrap(),
-        vec![AnalyzedChange {
-            path: "group1/project1/x/foo.txt".to_string(),
-            targets: None,
-        }],
+        std::str::from_utf8(output.stdout.as_slice()).unwrap(),
+        "{\"changes\":[{\"path\":\"Monorail.toml\"},{\"path\":\"group1/project1/x/foo.txt\"}],\"targets\":[\"group1\",\"group1/project1\",\"group1/project1/x\"]}\n"
     );
-    assert_eq!(o.targets, targets);
 
     purge_repo(&repo_path);
 }

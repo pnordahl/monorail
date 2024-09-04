@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use trie_rs::{Trie, TrieBuilder};
 
 #[derive(Debug, Serialize, Eq, PartialEq)]
-pub enum ErrorClass {
+enum ErrorClass {
     #[serde(rename = "generic")]
     Generic,
     #[serde(rename = "git2")]
@@ -32,8 +32,6 @@ pub enum ErrorClass {
     Io,
     #[serde(rename = "toml_deserialize")]
     TomlDeserialize,
-    #[serde(rename = "command")]
-    Command,
     #[serde(rename = "serde_json")]
     SerdeJSON,
     #[serde(rename = "utf8")]
@@ -43,9 +41,9 @@ pub enum ErrorClass {
 }
 
 #[derive(Debug, Serialize, Eq, PartialEq)]
-pub struct MonorailError {
-    pub class: ErrorClass,
-    pub message: String,
+struct MonorailError {
+    class: ErrorClass,
+    message: String,
 }
 impl Error for MonorailError {}
 impl fmt::Display for MonorailError {
@@ -160,27 +158,27 @@ pub fn handle(cmd: clap::Command) {
                             write_output(std::io::stdout(), &cfg, output_format).unwrap();
                             std::process::exit(0);
                         }
-
                         if let Some(checkpoint) = matches.subcommand_matches("checkpoint") {
-                            match handle_checkpoint(
-                                &cfg,
-                                HandleCheckpointInput {
-                                    checkpoint_type: checkpoint.get_one::<String>("type").unwrap(),
-                                    dry_run: checkpoint.get_flag("dry-run"),
-                                    git_path: checkpoint.get_one::<String>("git-path").unwrap(),
-                                    use_libgit2_status: checkpoint.get_flag("use-libgit2-status"),
-                                },
-                                &wd,
-                            ) {
-                                Ok(o) => {
-                                    write_output(std::io::stdout(), &o, output_format).unwrap();
-                                    std::process::exit(0);
-                                }
-                                Err(e) => {
-                                    exit_with_error(e, output_format);
+                            if let Some(create) = checkpoint.subcommand_matches("create") {
+                                match handle_checkpoint_create(
+                                    &cfg,
+                                    HandleCheckpointInput {
+                                        checkpoint_type: create.get_one::<String>("type").unwrap(),
+                                        dry_run: create.get_flag("dry-run"),
+                                        git_path: create.get_one::<String>("git-path").unwrap(),
+                                        use_libgit2_status: create.get_flag("use-libgit2-status"),
+                                    },
+                                    &wd,
+                                ) {
+                                    Ok(o) => {
+                                        write_output(std::io::stdout(), &o, output_format).unwrap();
+                                        std::process::exit(0);
+                                    }
+                                    Err(e) => {
+                                        exit_with_error(e, output_format);
+                                    }
                                 }
                             }
-                            std::process::exit(0);
                         }
 
                         if let Some(analyze) = matches.subcommand_matches("analyze") {
@@ -239,37 +237,37 @@ fn handle_cmd_output(
 }
 
 #[derive(Debug)]
-pub struct GitChangeOptions<'a> {
-    pub start: Option<&'a str>,
-    pub end: Option<&'a str>,
-    pub git_path: &'a str,
-    pub use_libgit2_status: bool,
+struct GitChangeOptions<'a> {
+    start: Option<&'a str>,
+    end: Option<&'a str>,
+    git_path: &'a str,
+    use_libgit2_status: bool,
 }
 
 #[derive(Debug)]
-pub struct AnalyzeInput<'a> {
-    pub git_change_options: GitChangeOptions<'a>,
-    pub show_changes: bool,
-    pub show_change_targets: bool,
+struct AnalyzeInput<'a> {
+    git_change_options: GitChangeOptions<'a>,
+    show_changes: bool,
+    show_change_targets: bool,
 }
 #[derive(Serialize, Debug)]
-pub struct AnalyzeOutput {
+struct AnalyzeOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub changes: Option<Vec<AnalyzedChange>>,
-    pub targets: Vec<String>,
+    changes: Option<Vec<AnalyzedChange>>,
+    targets: Vec<String>,
 }
 
 #[derive(Serialize, Debug, Eq, PartialEq)]
-pub struct AnalyzedChange {
-    pub path: String,
+struct AnalyzedChange {
+    path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub targets: Option<Vec<AnalyzedChangeTarget>>,
+    targets: Option<Vec<AnalyzedChangeTarget>>,
 }
 
 #[derive(Serialize, Debug, Eq, PartialEq)]
-pub struct AnalyzedChangeTarget {
-    pub path: String,
-    pub reason: AnalyzedChangeTargetReason,
+struct AnalyzedChangeTarget {
+    path: String,
+    reason: AnalyzedChangeTargetReason,
 }
 impl Ord for AnalyzedChangeTarget {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -283,7 +281,7 @@ impl PartialOrd for AnalyzedChangeTarget {
 }
 
 #[derive(Serialize, Debug, Eq, PartialEq)]
-pub enum AnalyzedChangeTargetReason {
+enum AnalyzedChangeTargetReason {
     #[serde(rename = "target")]
     Target,
     #[serde(rename = "links")]
@@ -294,7 +292,7 @@ pub enum AnalyzedChangeTargetReason {
     Ignores,
 }
 
-pub fn handle_analyze<'a>(
+fn handle_analyze<'a>(
     config: &'a Config,
     input: &AnalyzeInput<'a>,
     workdir: &'a str,
@@ -323,7 +321,7 @@ pub fn handle_analyze<'a>(
 // set of output targets                = O
 
 // O = T + Ut + Lt - It
-pub fn analyze(
+fn analyze(
     lookups: Lookups,
     changes: Vec<RawChange>,
     show_changes: bool,
@@ -447,7 +445,7 @@ pub fn analyze(
     Ok(output)
 }
 
-pub fn git_get_raw_changes(
+fn git_get_raw_changes(
     input: &GitChangeOptions,
     wd: &str,
 ) -> Result<Vec<RawChange>, MonorailError> {
@@ -477,20 +475,20 @@ pub fn git_get_raw_changes(
 }
 
 #[derive(Debug, Serialize)]
-pub struct HandleCheckpointInput<'a> {
-    pub checkpoint_type: &'a str,
-    pub dry_run: bool,
-    pub git_path: &'a str,
-    pub use_libgit2_status: bool,
+struct HandleCheckpointInput<'a> {
+    checkpoint_type: &'a str,
+    dry_run: bool,
+    git_path: &'a str,
+    use_libgit2_status: bool,
 }
 #[derive(Debug, Serialize)]
-pub struct CheckpointOutput {
-    pub id: String,
-    pub targets: Vec<String>,
-    pub dry_run: bool,
+struct CheckpointOutput {
+    id: String,
+    targets: Vec<String>,
+    dry_run: bool,
 }
 
-pub fn handle_checkpoint(
+fn handle_checkpoint_create(
     cfg: &Config,
     input: HandleCheckpointInput,
     wd: &str,
@@ -549,15 +547,12 @@ pub fn handle_checkpoint(
                 input.git_path,
             )?;
             let lookups = Lookups::new(cfg)?;
-            let o = analyze(lookups, changes, false, false)?;
+            let o = analyze(lookups, changes, true, false)?;
 
-            // without targets, there's nothing to do
-            if o.targets.is_empty() {
-                return Ok(CheckpointOutput {
-                    id: "".to_string(),
-                    targets: o.targets,
-                    dry_run: input.dry_run,
-                });
+            if let Some(ref changes) = o.changes {
+                if changes.is_empty() {
+                    return Err("No changes detected, aborting checkpoint creation".into());
+                }
             }
 
             // get new tag name
@@ -570,12 +565,20 @@ pub fn handle_checkpoint(
             };
 
             if !input.dry_run {
+                // generate the checkpoint message body
+                let checkpoint_msg = CheckpointMessage {
+                    num_changes: o.changes.map_or_else(|| 0, |v| v.len()),
+                    targets: &o.targets,
+                };
+                let mut checkpoint_msg_str = serde_json::to_string_pretty(&checkpoint_msg)?;
+                checkpoint_msg_str.push('\n');
+
                 // create tag and push
                 repo.tag(
                     &tag_name,
                     &repo.find_object(end_oid, None)?,
                     &repo.signature()?,
-                    &format!("{}\n\n", &o.targets.join("\n")),
+                    &checkpoint_msg_str,
                     false,
                 )?;
                 // NOTE: shelling out to `git` to avoid having to do a full remote/auth/ssh integration with libgit, for now
@@ -606,6 +609,12 @@ pub fn handle_checkpoint(
             })
         }
     }
+}
+
+#[derive(Serialize)]
+struct CheckpointMessage<'a> {
+    num_changes: usize,
+    targets: &'a [String],
 }
 
 fn git_cmd_status(
@@ -649,6 +658,9 @@ fn git_cmd_status_changes(s: Vec<u8>) -> Vec<RawChange> {
 }
 
 // given a commit, find the earliest annotated tag behind it
+// NOTE: this is pub for now, since it's used in integration tests;
+// once the `checkpoint list` command is done, make this private
+// and move integration tests to the command
 pub fn libgit2_latest_tag(
     repo: &git2::Repository,
     oid: git2::Oid,
@@ -808,7 +820,7 @@ fn increment_semver(semver: &str, checkpoint_type: &str) -> Result<String, Monor
     Ok(format!("v{}.{}.{}", major, minor, patch))
 }
 
-pub struct Lookups<'a> {
+struct Lookups<'a> {
     targets: Trie<u8>,
     links: Trie<u8>,
     ignores: Trie<u8>,
@@ -817,7 +829,7 @@ pub struct Lookups<'a> {
     ignore2targets: HashMap<&'a String, Vec<&'a String>>,
 }
 impl<'a> Lookups<'a> {
-    pub fn new(cfg: &'a Config) -> Result<Self, MonorailError> {
+    fn new(cfg: &'a Config) -> Result<Self, MonorailError> {
         let mut targets_builder = TrieBuilder::new();
         let mut links_builder = TrieBuilder::new();
         let mut ignores_builder = TrieBuilder::new();
@@ -868,7 +880,7 @@ impl<'a> Lookups<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct RawChange {
+struct RawChange {
     name: String,
 }
 
@@ -904,7 +916,7 @@ impl FromStr for VcsKind {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Config {
+struct Config {
     #[serde(default)]
     vcs: Vcs,
     #[serde(default)]
@@ -998,14 +1010,14 @@ impl Default for ExtensionBashExec {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Target {
+struct Target {
     path: String,
     links: Option<Vec<String>>,
     uses: Option<Vec<String>>,
     ignores: Option<Vec<String>>,
 }
 impl Config {
-    pub fn new(file_path: &str) -> Result<Config, MonorailError> {
+    fn new(file_path: &str) -> Result<Config, MonorailError> {
         let path = Path::new(file_path);
 
         let file = File::open(path)?;
@@ -1016,7 +1028,7 @@ impl Config {
         let config = toml::from_str(contents.as_str())?;
         Ok(config)
     }
-    pub fn validate(&self) -> Result<(), MonorailError> {
+    fn validate(&self) -> Result<(), MonorailError> {
         Ok(())
     }
 }
@@ -1026,7 +1038,7 @@ mod tests {
     use super::*;
     use crate::common::testing::*;
 
-    const RAW_CONFIG: &'static str = r#"
+    const RAW_CONFIG: &str = r#"
 [[targets]]
 path = "rust"
 links = [
@@ -1047,13 +1059,13 @@ uses = [
     fn test_libgit2_find_oid() {
         let (repo, repo_path) = get_repo(false);
 
-        let oid = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
         let oid2 = create_commit(
             &repo,
             &get_tree(&repo),
             "b",
             Some("HEAD"),
-            &vec![&get_commit(&repo, oid)],
+            &[&get_commit(&repo, oid)],
         );
         let head = libgit2_find_oid(&repo, "HEAD").unwrap();
         assert_eq!(oid2, head);
@@ -1064,7 +1076,7 @@ uses = [
     #[test]
     fn test_libgit2_latest_tag() {
         let (repo, repo_path) = get_repo(false);
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
         let lt = libgit2_latest_tag(&repo, oid1).unwrap();
         assert!(lt.is_none());
 
@@ -1082,7 +1094,7 @@ uses = [
             &get_tree(&repo),
             "b",
             Some("HEAD"),
-            &vec![&get_commit(&repo, oid1)],
+            &[&get_commit(&repo, oid1)],
         );
         assert_eq!(
             libgit2_latest_tag(&repo, oid2).unwrap().unwrap().id(),
@@ -1096,13 +1108,13 @@ uses = [
         let (repo, repo_path) = get_repo(false);
 
         assert_eq!(libgit2_first_commit(&repo).unwrap(), None);
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
         let _oid2 = create_commit(
             &repo,
             &get_tree(&repo),
             "b",
             Some("HEAD"),
-            &vec![&get_commit(&repo, oid1)],
+            &[&get_commit(&repo, oid1)],
         );
         assert_eq!(libgit2_first_commit(&repo).unwrap(), Some(oid1));
 
@@ -1113,7 +1125,7 @@ uses = [
     fn test_libgit2_start_end_diff_changes() {
         let (repo, repo_path) = get_repo(false);
 
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
         let _f1 = create_file(&repo_path, "", "foo.txt", b"x");
         let oid2 = commit_file(&repo, "foo.txt", Some("HEAD"), &[&get_commit(&repo, oid1)]);
         let _f2 = create_file(&repo_path, "", "bar.txt", b"y");
@@ -1132,7 +1144,7 @@ uses = [
     fn test_git_all_changes() {
         let (repo, repo_path) = get_repo(false);
 
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
 
         // no changes
         const USE_LIBGIT2: bool = true;
@@ -1188,14 +1200,14 @@ uses = [
     fn test_libgit2_status_changes() {
         let (repo, repo_path) = get_repo(false);
 
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
 
         assert_eq!(libgit2_status_changes(&repo).unwrap().len(), 0);
 
         // check that unstaged changes are detected
         let fname = "foo.txt";
         let fpath = std::path::Path::new(&repo_path).join(fname);
-        let mut file = File::create(&fpath).unwrap();
+        let mut file = File::create(fpath).unwrap();
         file.write_all(b"x").unwrap();
         assert_eq!(libgit2_status_changes(&repo).unwrap().len(), 1);
 
@@ -1208,7 +1220,7 @@ uses = [
             &get_tree(&repo),
             "b",
             Some("HEAD"),
-            &vec![&get_commit(&repo, oid1)],
+            &[&get_commit(&repo, oid1)],
         );
         assert_eq!(libgit2_status_changes(&repo).unwrap().len(), 0);
 
@@ -1247,7 +1259,7 @@ uses = [
 
         let trie = builder.build();
 
-        assert_eq!(trie.exact_match("rust/target/project1/README.md"), true);
+        assert!(trie.exact_match("rust/target/project1/README.md"));
         let matches = trie
             .common_prefix_search("rust/common/log/bar.rs")
             .collect::<Vec<String>>();
@@ -1445,6 +1457,8 @@ uses = [
     }
 
     #[test]
+    // TODO: get rid of this
+    #[allow(clippy::unnecessary_to_owned)]
     fn test_lookups() {
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let l = Lookups::new(&c).unwrap();
@@ -1520,7 +1534,7 @@ uses = [
 
     #[test]
     fn test_err_duplicate_target_path() {
-        let config_str: &'static str = r#"
+        let config_str: &str = r#"
 [[targets]]
 path = "rust"
 

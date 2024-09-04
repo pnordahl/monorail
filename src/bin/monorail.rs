@@ -21,7 +21,7 @@ fn get_app() -> clap::Command {
     Command::new("monorail")
     .version(env!("CARGO_PKG_VERSION"))
     .author("Patrick Nordahl <plnordahl@gmail.com>")
-    .about("A monorepo overlay for version control systems.")
+    .about("A monorepo overlay.")
     .arg(
         Arg::new("config-file")
             .short('f')
@@ -47,29 +47,30 @@ fn get_app() -> clap::Command {
             .num_args(1),
     )
     .subcommand(Command::new("config").about("Show configuration, including runtime default values"))
-    .subcommand(
-        Command::new("checkpoint")
-            .about("Perform a checkpoint of changed targets")
-            .after_help(r#"This command analyzes changed targets since the last checkpoint, constructs a checkpoint object appropriate for the configured vcs"#)
-            .arg(arg_git_path.clone())
-            .arg(arg_use_libgit2_status.clone())
-            .arg(
-                Arg::new("type")
-                    .short('t')
-                    .long("type")
-                    .help("Semver component to increment for this checkpoint")
-                    .value_parser(["patch", "minor", "major"])
-                    .ignore_case(true)
-                    .required(true)
-                    .num_args(1),
-            )
-            .arg(
-                Arg::new("dry-run")
-                    .short('d')
-                    .long("dry-run")
-                    .help("Do not apply any changes locally (for a distributed version control system) or remotely")
-                    .action(ArgAction::SetTrue),
-            )
+    .subcommand(Command::new("checkpoint")
+        .subcommand(
+            Command::new("create")
+                .about("Create a checkpoint of current changes")
+                .after_help(r#"This command analyzes changed targets since the last checkpoint, constructs a checkpoint object appropriate for the configured vcs"#)
+                .arg(arg_git_path.clone())
+                .arg(arg_use_libgit2_status.clone())
+                .arg(
+                    Arg::new("type")
+                        .short('t')
+                        .long("type")
+                        .help("Semver component to increment for this checkpoint")
+                        .value_parser(["patch", "minor", "major"])
+                        .ignore_case(true)
+                        .required(true)
+                        .num_args(1),
+                )
+                .arg(
+                    Arg::new("dry-run")
+                        .short('d')
+                        .long("dry-run")
+                        .help("Do not apply any changes locally (for a distributed version control system) or remotely")
+                        .action(ArgAction::SetTrue),
+                ))
     )
     .subcommand(
         Command::new("analyze")

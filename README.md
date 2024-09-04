@@ -114,7 +114,7 @@ _NOTE_: All filesystem locations specified in `Monorail.toml` are relative to th
 
 ## Analyzing changes
 
-`monorail` will detect changes since the last checkpoint; see: [Checkpointing](##Checkpointing). For `git`, this means uncommitted, committed, and pushed files since the last annotated tag created by `monorail checkpoint`.
+`monorail` will detect changes since the last checkpoint; see: [Checkpointing](##Checkpointing). For `git`, this means uncommitted, committed, and pushed files since the last annotated tag created by `monorail checkpoint create`.
 
 ### Analyze showing no affected targets
 
@@ -642,7 +642,7 @@ git add * && git commit -am "update commands" && git push
 Assuming that we have committed all that we intend to, and target commands have been run to our satisfaction (e.g. CI has passed for the merge of our branch), we can dry-run a patch checkpoint with: 
 
 ```sh
-monorail checkpoint --dry-run -t patch | jq .
+monorail checkpoint create --dry-run -t patch | jq .
 ```
 
 ```json
@@ -664,7 +664,7 @@ monorail checkpoint --dry-run -t patch | jq .
 Now, run a real checkpoint:
 
 ```sh
-monorail checkpoint -t patch | jq .
+monorail checkpoint create -t patch | jq .
 ```
 
 ```json
