@@ -120,7 +120,9 @@ _NOTE_: All filesystem locations specified in `Monorail.toml` are relative to th
 
 Begin by viewing the output of `analyze`:
 
-	monorail analyze | jq .
+```sh
+monorail analyze | jq .
+```
 
 ```json
 {
@@ -130,7 +132,9 @@ Begin by viewing the output of `analyze`:
 
 `monorail` is able to interrogate `git` and use the `Monorail.toml` config successfully. No targets are affect by the current changes; let's get more information about those changes by adding the `--show-changes` flag:
 
-    monorail analyze --show-changes | jq
+```sh
+monorail analyze --show-changes | jq
+```
 
 ```json
 {
@@ -209,11 +213,15 @@ monorail analyze --show-change-targets | jq .
 ### Analyze showing a change, after commit or push
 This understanding of what has changed persists between commits and pushes. Commit your changes, and then note that our change output is unchanged:
 
-	git add * && git commit -am "x" && monorail analyze | jq .
+```sh
+git add * && git commit -am "x" && monorail analyze | jq .
+```
 
 Push, and view changes again:
 
-	git push && monorail analyze | jq .
+```sh
+git push && monorail analyze | jq .
+```
 
 As with the commit, `monorail` still knows about the changes after a push. The reason for this will be explained in the section on checkpointing below.
 
@@ -250,11 +258,13 @@ EOF
 
 Any changes that lie within the paths defined in the target's `uses` array affect the target.
 
-To trigger change detection, create a file in library1:
+To trigger change detection, create a file in library1 and re-analyze:
 
-	touch rust/common/library1/foo.proto
+```sh
+touch rust/common/library1/foo.proto && \
+monorail analyze --show-change-targets | jq .
+```
 
-and then `monorail analyze --show-change-targets | jq .`:
 
 ```json
 {
@@ -328,13 +338,14 @@ path = "rust/target3"
 EOF
 ```
 
+Now, make the directory structure and re-analyze:
+
 ```sh
 mkdir rust/project3
 mkdir rust/vendor
 touch rust/vendor/bar.txt
+monorail analyze --show-change-targets | jq .
 ```
-
-Executing `monorail analyze --show-change-targets | jq .` yields:
 
 ```json
 {
@@ -606,7 +617,9 @@ Manually selecting targets gives one the ability to execute commands independent
 
 Manually selecting targets is simple enough; just pass a series of `-t <target>` options. Execute the following (removing the `-v` to cut down on the visual noise):
 
-	monorail-bash exec -t rust -c hello_world
+```sh
+monorail-bash exec -t rust -c hello_world
+```
 
 ```
 Hello, world.. from rust!

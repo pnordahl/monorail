@@ -209,50 +209,6 @@ pub fn handle(cmd: clap::Command) {
                                 }
                             }
                         }
-
-                        if let Some(inspect) = matches.subcommand_matches("inspect") {
-                            if let Some(change) = inspect.subcommand_matches("change") {
-                                let start = change
-                                    .get_one::<String>("start")
-                                    .map(|x: &String| x.as_str());
-                                let end = change.get_one("end").map(|x: &String| x.as_str());
-                                let git_path = change.get_one::<String>("git-path").unwrap();
-                                let i = HandleInspectChangeInput {
-                                    start,
-                                    end,
-                                    git_path,
-                                    use_libgit2_status: change.get_flag("use-libgit2-status"),
-                                };
-                                match get_raw_changes(&cfg, &i, &wd) {
-                                    Ok(raw_changes) => {
-                                        match process_inspect_change(&cfg, &raw_changes, true) {
-                                            Ok(o) => {
-                                                if change.get_flag("targets-only") {
-                                                    write_output(
-                                                        std::io::stdout(),
-                                                        &o.targets,
-                                                        output_format,
-                                                    )
-                                                    .unwrap();
-                                                    std::process::exit(0);
-                                                }
-                                                write_output(std::io::stdout(), &o, output_format)
-                                                    .unwrap();
-                                                std::process::exit(0);
-                                            }
-                                            Err(e) => {
-                                                exit_with_error(e, output_format);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        exit_with_error(e, output_format);
-                                    }
-                                }
-                            } else {
-                                exit_with_error("no valid subcommand match".into(), output_format);
-                            }
-                        }
                     }
                     Err(e) => exit_with_error(e, output_format),
                 },
@@ -312,8 +268,8 @@ pub struct AnalyzedChange {
 
 #[derive(Serialize, Debug, Eq, PartialEq)]
 pub struct AnalyzedChangeTarget {
-    path: String,
-    reason: AnalyzedChangeTargetReason,
+    pub path: String,
+    pub reason: AnalyzedChangeTargetReason,
 }
 impl Ord for AnalyzedChangeTarget {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -357,14 +313,14 @@ pub fn handle_analyze<'a>(
     }
 }
 
-// let set of common prefix ignores         = I
-// let set of common prefix ignores targets = It
-// let set of common prefix links           = L
-// let set of common prefix links targets   = Lt
-// let set of common prefix uses            = U
-// let set of common prefix uses targets    = Ut
-// let set of common prefix targets         = T
-// let set of output targets                = O
+// set of common prefix ignores         = I
+// set of common prefix ignores targets = It
+// set of common prefix links           = L
+// set of common prefix links targets   = Lt
+// set of common prefix uses            = U
+// set of common prefix uses targets    = Ut
+// set of common prefix targets         = T
+// set of output targets                = O
 
 // O = T + Ut + Lt - It
 pub fn analyze(
@@ -520,40 +476,6 @@ pub fn git_get_raw_changes(
     git_all_changes(&repo, start, end, input.use_libgit2_status, input.git_path)
 }
 
-pub fn get_raw_changes(
-    cfg: &Config,
-    input: &HandleInspectChangeInput,
-    wd: &str,
-) -> Result<Vec<RawChange>, MonorailError> {
-    match cfg.vcs.r#use {
-        VcsKind::Git => {
-            let repo = git2::Repository::open(wd)?;
-            let start =
-                match input.start {
-                    Some(s) => libgit2_find_oid(&repo, s)?,
-                    None => {
-                        match libgit2_latest_tag(&repo, libgit2_find_oid(&repo, "HEAD")?)? {
-                            Some(lr) => lr.target_id(),
-                            None => {
-                                // no tags, use first commit of the repo
-                                match libgit2_first_commit(&repo)? {
-                                    Some(fc) => fc,
-                                    None => return Err(
-                                        "couldn't find a starting point; commit something first"
-                                            .into(),
-                                    ),
-                                }
-                            }
-                        }
-                    }
-                };
-
-            let end = libgit2_find_oid(&repo, input.end.unwrap_or("HEAD"))?;
-            git_all_changes(&repo, start, end, input.use_libgit2_status, input.git_path)
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub struct HandleCheckpointInput<'a> {
     pub checkpoint_type: &'a str,
@@ -626,10 +548,8 @@ pub fn handle_checkpoint(
                 input.use_libgit2_status,
                 input.git_path,
             )?;
-            let o = process_inspect_change(cfg, &changes, false)?;
-
-            // let mut changed_targets = pico.into_iter().collect::<Vec<String>>();
-            // changed_targets.sort();
+            let lookups = Lookups::new(&cfg)?;
+            let o = analyze(lookups, changes, false, false)?;
 
             // without targets, there's nothing to do
             if o.targets.is_empty() {
@@ -897,7 +817,7 @@ pub struct Lookups<'a> {
     ignore2targets: HashMap<&'a String, Vec<&'a String>>,
 }
 impl<'a> Lookups<'a> {
-    fn new(cfg: &'a Config) -> Result<Self, MonorailError> {
+    pub fn new(cfg: &'a Config) -> Result<Self, MonorailError> {
         let mut targets_builder = TrieBuilder::new();
         let mut links_builder = TrieBuilder::new();
         let mut ignores_builder = TrieBuilder::new();
@@ -947,186 +867,6 @@ impl<'a> Lookups<'a> {
             ignore2targets,
         })
     }
-}
-
-pub struct HandleInspectChangeInput<'a> {
-    pub start: Option<&'a str>,
-    pub end: Option<&'a str>,
-    pub git_path: &'a str,
-    pub use_libgit2_status: bool,
-}
-
-// let set of common prefix ignores         = I
-// let set of common prefix ignores targets = It
-// let set of common prefix links           = L
-// let set of common prefix links targets   = Lt
-// let set of common prefix uses            = U
-// let set of common prefix uses targets    = Ut
-// let set of common prefix targets         = T
-// let set of output targets                = O
-
-// O = T + Ut + Lt - It
-pub fn process_inspect_change<'a>(
-    cfg: &'a Config,
-    changes: &'a [RawChange],
-    include_change_targets: bool,
-) -> Result<InspectChangeOutput<'a>, MonorailError> {
-    let lookups = Lookups::new(cfg)?;
-    let mut output = InspectChangeOutput::new();
-    let mut output_targets = HashSet::new();
-
-    changes.iter().for_each(|c| {
-        let mut change_targets = if include_change_targets {
-            Some(vec![])
-        } else {
-            None
-        };
-        let mut add_targets = HashSet::new();
-
-        lookups
-            .targets
-            .common_prefix_search(&c.name)
-            .for_each(|target: String| {
-                if let Some(change_targets) = change_targets.as_mut() {
-                    change_targets.push(ChangeTarget {
-                        path: target.to_owned(),
-                        reason: ChangeTargetReason::Target,
-                    });
-                }
-                add_targets.insert(target);
-            });
-        lookups
-            .links
-            .common_prefix_search(&c.name)
-            .for_each(|link: String| {
-                // find any targets that have this link as a prefix, aka set Lt
-                lookups
-                    .targets
-                    .common_prefix_search(&link)
-                    .for_each(|parent: String| {
-                        if let Some(change_targets) = change_targets.as_mut() {
-                            change_targets.push(ChangeTarget {
-                                path: parent.to_owned(),
-                                reason: ChangeTargetReason::Links,
-                            });
-                        }
-                        // find all children of matched targets
-                        lookups
-                            .targets
-                            .postfix_search(&parent)
-                            .for_each(|child: String| {
-                                if let Some(change_targets) = change_targets.as_mut() {
-                                    change_targets.push(ChangeTarget {
-                                        path: child.strip_prefix("/").unwrap_or(&child).to_owned(),
-                                        reason: ChangeTargetReason::Links,
-                                    });
-                                }
-                                add_targets.insert(format!("{}{}", &parent, child));
-                            });
-                        add_targets.insert(parent);
-                    });
-            });
-        lookups
-            .uses
-            .common_prefix_search(&c.name)
-            .for_each(|m: String| {
-                if let Some(v) = lookups.use2targets.get(&m) {
-                    v.iter().for_each(|target| {
-                        if let Some(change_targets) = change_targets.as_mut() {
-                            change_targets.push(ChangeTarget {
-                                path: target.to_string(),
-                                reason: ChangeTargetReason::Uses,
-                            });
-                        }
-                        add_targets.insert(target.to_string());
-                    });
-                }
-            });
-
-        lookups
-            .ignores
-            .common_prefix_search(&c.name)
-            .for_each(|m: String| {
-                if let Some(v) = lookups.ignore2targets.get(&m) {
-                    v.iter().for_each(|target| {
-                        add_targets.remove(target.as_str());
-                        if let Some(change_targets) = change_targets.as_mut() {
-                            change_targets.push(ChangeTarget {
-                                path: target.to_string(),
-                                reason: ChangeTargetReason::Ignores,
-                            });
-                        }
-                    });
-                }
-            });
-
-        add_targets.iter().for_each(|t| {
-            output_targets.insert(t.to_owned());
-        });
-
-        if let Some(change_targets) = change_targets.as_mut() {
-            change_targets.sort();
-        }
-
-        output.changes.push(ProcessedChange {
-            path: c.name.as_str(),
-            targets: change_targets,
-        });
-    });
-
-    output.targets = output_targets.into_iter().collect::<Vec<String>>();
-    output.targets.sort();
-
-    Ok(output)
-}
-
-#[derive(Serialize, Debug)]
-pub struct InspectChangeOutput<'a> {
-    pub changes: Vec<ProcessedChange<'a>>,
-    pub targets: Vec<String>,
-}
-impl<'a> InspectChangeOutput<'a> {
-    fn new() -> Self {
-        Self {
-            changes: vec![],
-            targets: vec![],
-        }
-    }
-}
-
-#[derive(Serialize, Debug, Eq, PartialEq)]
-pub struct ProcessedChange<'a> {
-    pub path: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub targets: Option<Vec<ChangeTarget>>,
-}
-
-#[derive(Serialize, Debug, Eq, PartialEq)]
-pub struct ChangeTarget {
-    path: String,
-    reason: ChangeTargetReason,
-}
-impl Ord for ChangeTarget {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.path.cmp(&other.path)
-    }
-}
-impl PartialOrd for ChangeTarget {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[derive(Serialize, Debug, Eq, PartialEq)]
-pub enum ChangeTargetReason {
-    #[serde(rename = "target")]
-    Target,
-    #[serde(rename = "links")]
-    Links,
-    #[serde(rename = "uses")]
-    Uses,
-    #[serde(rename = "ignores")]
-    Ignores,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1295,32 +1035,19 @@ mod tests {
     use crate::common::testing::*;
 
     const RAW_CONFIG: &'static str = r#"
-[vcs]
-use = "git"
-
-[vcs.git]
-trunk = "master"
-remote = "origin"
-
-[extension]
-use = "bash"
-
 [[targets]]
 path = "rust"
 links = [
-    "rust/.cargo",
     "rust/vendor",
     "rust/Cargo.toml",
 ]
-
 [[targets]]
-path = "rust/target/project1"
+path = "rust/target"
 ignores = [
-    "rust/target/project1/README.md",
-    "rust/vendor"
+    "rust/Cargo.toml"
 ]
 uses = [
-    "rust/common/log"
+    "rust/common"
 ]
 "#;
 
@@ -1543,144 +1270,187 @@ uses = [
         // TODO
     }
 
-    // #[test]
-    // fn test_process_inspect_change_target_file() {
-    //     let name = "rust/target/project1/lib.rs".to_string();
-    //     let targets = vec!["rust".to_string(), "rust/target/project1".to_string()];
-    //     let targets = vec![ChangeTarget{path: "rust", reason: ChangeTargetReason::Target, ChangeTarget{path: "rust/target/project1", reason: ChangeTargetReason::Target}];
-    //     let changes = vec![RawChange { name: name.clone() }];
-    //     let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-    //     let o = process_inspect_change(&c, &changes).unwrap();
+    #[test]
+    fn test_analyze_empty() {
+        let changes = vec![];
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, false).unwrap();
 
-    //     assert_eq!(
-    //         o.changes,
-    //         vec![ProcessedChange {
-    //             path: &name,
-    //             added_targets: targets.clone(),
-    //             ignored_targets: vec![]
-    //         }]
-    //     );
-    //     assert_eq!(o.targets, targets);
-    // }
+        assert!(o.changes.unwrap().is_empty());
+        assert!(o.targets.is_empty());
+    }
 
-    // #[test]
-    // fn test_process_inspect_change_target() {
-    //     let name = "rust/target/project1/".to_string();
-    //     let targets = vec!["rust".to_string(), "rust/target/project1".to_string()];
-    //     let changes = vec![RawChange { name: name.clone() }];
-    //     let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-    //     let o = process_inspect_change(&c, &changes).unwrap();
+    #[test]
+    fn test_analyze_unknown() {
+        let change1 = "foo.txt";
+        let changes = vec![RawChange {
+            name: change1.to_string(),
+        }];
+        let expected_targets: Vec<String> = vec![];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![]),
+        }];
 
-    //     assert_eq!(
-    //         o.changes,
-    //         vec![ProcessedChange {
-    //             path: &name,
-    //             added_targets: targets.clone(),
-    //             ignored_targets: vec![]
-    //         }]
-    //     );
-    //     assert_eq!(o.targets, targets);
-    // }
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-    // #[test]
-    // fn test_process_inspect_change_group_link() {
-    //     let name = "rust/.cargo/test.txt".to_string();
-    //     let targets = vec!["rust".to_string(), "rust/target/project1".to_string()];
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
+    }
 
-    //     let changes = vec![RawChange { name: name.clone() }];
-    //     let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-    //     let o = process_inspect_change(&c, &changes).unwrap();
+    #[test]
+    fn test_analyze_target_file() {
+        let change1 = "rust/lib.rs";
+        let changes = vec![RawChange {
+            name: change1.to_string(),
+        }];
+        let target1 = "rust";
+        let expected_targets = vec![target1.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![AnalyzedChangeTarget {
+                path: target1.to_string(),
+                reason: AnalyzedChangeTargetReason::Target,
+            }]),
+        }];
 
-    //     assert_eq!(
-    //         o.changes,
-    //         vec![ProcessedChange {
-    //             path: &name,
-    //             added_targets: targets.clone(),
-    //             ignored_targets: vec![]
-    //         }]
-    //     );
-    //     assert_eq!(o.targets, targets);
-    // }
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-    // #[test]
-    // fn test_process_inspect_change_project_depend() {
-    //     let name = "rust/common/log/src/lib.rs".to_string();
-    //     let targets = vec!["rust".to_string(), "rust/target/project1".to_string()];
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
+    }
+    #[test]
+    fn test_analyze_target() {
+        let change1 = "rust";
+        let changes = vec![RawChange {
+            name: change1.to_string(),
+        }];
+        let target1 = "rust";
+        let expected_targets = vec![target1.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![AnalyzedChangeTarget {
+                path: target1.to_string(),
+                reason: AnalyzedChangeTargetReason::Target,
+            }]),
+        }];
 
-    //     let changes = vec![RawChange { name: name.clone() }];
-    //     let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-    //     let o = process_inspect_change(&c, &changes).unwrap();
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-    //     assert_eq!(
-    //         o.changes,
-    //         vec![ProcessedChange {
-    //             path: &name,
-    //             added_targets: targets.clone(),
-    //             ignored_targets: vec![]
-    //         }]
-    //     );
-    //     assert_eq!(o.targets, targets);
-    // }
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
+    }
+    #[test]
+    fn test_analyze_target_links() {
+        let change1 = "rust/vendor";
+        let changes = vec![RawChange {
+            name: change1.to_string(),
+        }];
+        let target1 = "rust";
+        let target2 = "rust/target";
+        let expected_targets = vec![target1.to_string(), target2.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Target,
+                },
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Links,
+                },
+                AnalyzedChangeTarget {
+                    path: target2.to_string(),
+                    reason: AnalyzedChangeTargetReason::Links,
+                },
+            ]),
+        }];
 
-    // #[test]
-    // fn test_process_inspect_change_project_ignore() {
-    //     let name = "rust/vendor/test.txt".to_string();
-    //     let expected_targets = vec!["rust".to_string()];
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-    //     let changes = vec![RawChange { name: name.clone() }];
-    //     let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-    //     let o = process_inspect_change(&c, &changes).unwrap();
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
+    }
 
-    //     assert_eq!(
-    //         o.changes,
-    //         vec![ProcessedChange {
-    //             path: &name,
-    //             added_targets: expected_targets.clone(),
-    //             ignored_targets: vec!["rust/target/project1".to_string()]
-    //         }]
-    //     );
-    //     assert_eq!(o.targets, expected_targets);
-    // }
+    #[test]
+    fn test_analyze_target_uses() {
+        let change1 = "rust/common/foo.txt";
+        let changes = vec![RawChange {
+            name: change1.to_string(),
+        }];
+        let target1 = "rust";
+        let target2 = "rust/target";
+        let expected_targets = vec![target1.to_string(), target2.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Target,
+                },
+                AnalyzedChangeTarget {
+                    path: target2.to_string(),
+                    reason: AnalyzedChangeTargetReason::Uses,
+                },
+            ]),
+        }];
 
-    // #[test]
-    // fn test_process_inspect_change_project_ignore_file() {
-    //     let name = "rust/target/project1/README.md".to_string();
-    //     let expected_targets = vec!["rust".to_string()];
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-    //     let changes = vec![RawChange { name: name.clone() }];
-    //     let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-    //     let o = process_inspect_change(&c, &changes).unwrap();
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
+    }
 
-    //     assert_eq!(
-    //         o.changes,
-    //         vec![ProcessedChange {
-    //             path: &name,
-    //             added_targets: expected_targets.clone(),
-    //             ignored_targets: vec!["rust/target/project1".to_string()]
-    //         }]
-    //     );
-    //     assert_eq!(o.targets, expected_targets);
-    // }
+    #[test]
+    fn test_analyze_target_ignores() {
+        let change1 = "rust/Cargo.toml";
+        let changes = vec![RawChange {
+            name: change1.to_string(),
+        }];
+        let target1 = "rust";
+        let target2 = "rust/target";
+        let expected_targets = vec![target1.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Target,
+                },
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Links,
+                },
+                AnalyzedChangeTarget {
+                    path: target2.to_string(),
+                    reason: AnalyzedChangeTargetReason::Links,
+                },
+                AnalyzedChangeTarget {
+                    path: target2.to_string(),
+                    reason: AnalyzedChangeTargetReason::Ignores,
+                },
+            ]),
+        }];
 
-    // #[test]
-    // fn test_process_inspect_change_inert() {
-    //     let name = "rust/inert.rs".to_string();
-    //     let expected_targets = vec!["rust".to_string()];
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-    //     let changes = vec![RawChange { name: name.clone() }];
-    //     let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-    //     let o = process_inspect_change(&c, &changes).unwrap();
-
-    //     assert_eq!(
-    //         o.changes,
-    //         vec![ProcessedChange {
-    //             path: &name,
-    //             added_targets: expected_targets.clone(),
-    //             ignored_targets: vec![]
-    //         }]
-    //     );
-    //     assert_eq!(o.targets, expected_targets);
-    // }
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
+    }
 
     #[test]
     fn test_lookups() {
@@ -1689,9 +1459,9 @@ uses = [
 
         assert_eq!(
             l.targets
-                .common_prefix_search("rust/target/project1/src/foo.rs")
+                .common_prefix_search("rust/target/src/foo.rs")
                 .collect::<Vec<String>>(),
-            vec!["rust".to_string(), "rust/target/project1".to_string()]
+            vec!["rust".to_string(), "rust/target".to_string()]
         );
         assert_eq!(
             l.links
@@ -1701,25 +1471,25 @@ uses = [
         );
         assert_eq!(
             l.uses
-                .common_prefix_search("rust/common/log/foo.txt")
+                .common_prefix_search("rust/common/foo.txt")
                 .collect::<Vec<String>>(),
-            vec!["rust/common/log".to_string()]
+            vec!["rust/common".to_string()]
         );
         assert_eq!(
             l.ignores
-                .common_prefix_search("rust/target/project1/README.md")
+                .common_prefix_search("rust/Cargo.toml")
                 .collect::<Vec<String>>(),
-            vec!["rust/target/project1/README.md".to_string()]
+            vec!["rust/Cargo.toml".to_string()]
         );
         assert_eq!(
-            *l.use2targets.get(&"rust/common/log".to_string()).unwrap(),
-            vec!["rust/target/project1"]
+            *l.use2targets.get(&"rust/common".to_string()).unwrap(),
+            vec!["rust/target"]
         );
         assert_eq!(
             *l.ignore2targets
-                .get(&"rust/target/project1/README.md".to_string())
+                .get(&"rust/Cargo.toml".to_string())
                 .unwrap(),
-            vec!["rust/target/project1"]
+            vec!["rust/target"]
         );
     }
 
@@ -1759,31 +1529,13 @@ uses = [
     #[test]
     fn test_err_duplicate_target_path() {
         let config_str: &'static str = r#"
-[vcs]
-use = "git"
-
-[vcs.git]
-trunk = "master"
-remote = "origin"
-
-[extension]
-use = "bash"
-
 [[targets]]
 path = "rust"
 
 [[targets]]
 path = "rust"
 "#;
-        let name = "rust/".to_string();
-        let changes = vec![RawChange { name }];
         let c: Config = toml::from_str(config_str).unwrap();
-        assert_eq!(
-            process_inspect_change(&c, &changes, false).err().unwrap(),
-            MonorailError {
-                class: ErrorClass::Generic,
-                message: "Duplicate target path provided: rust".to_string()
-            }
-        );
+        assert!(Lookups::new(&c).is_err());
     }
 }

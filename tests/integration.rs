@@ -5,16 +5,6 @@ use std::io::Read;
 use std::path::Path;
 
 const CONFIG_BASH: &'static str = r#"
-[vcs]
-use = "git"
-
-[vcs.git]
-trunk = "master"
-remote = "origin"
-
-[extension]
-use = "bash"
-
 [[targets]]
 path = "group1"
 
@@ -50,7 +40,7 @@ fn test_handle_git_checkpoint_no_targets_noop() {
     let c: Config = toml::from_str(CONFIG_BASH).unwrap();
     let result = handle_checkpoint(
         &c,
-        HandleReleaseInput {
+        HandleCheckpointInput {
             git_path: "git",
             use_libgit2_status: false,
             checkpoint_type: "patch",
@@ -96,7 +86,7 @@ fn test_handle_git_checkpoint_err_not_trunk() {
     let c: Config = toml::from_str(CONFIG_BASH).unwrap();
     let result = handle_checkpoint(
         &c,
-        HandleReleaseInput {
+        HandleCheckpointInput {
             git_path: "git",
             use_libgit2_status: false,
             checkpoint_type: "patch",
@@ -130,7 +120,7 @@ fn test_handle_git_checkpoint() {
     // dry run checkpoint
     let o = handle_checkpoint(
         &c,
-        HandleReleaseInput {
+        HandleCheckpointInput {
             git_path: "git",
             use_libgit2_status: false,
             checkpoint_type: "patch",
@@ -153,7 +143,7 @@ fn test_handle_git_checkpoint() {
     // actual checkpoint
     let o = handle_checkpoint(
         &c,
-        HandleReleaseInput {
+        HandleCheckpointInput {
             git_path: "git",
             use_libgit2_status: false,
             checkpoint_type: "patch",
@@ -178,7 +168,7 @@ fn test_handle_git_checkpoint() {
     assert_eq!(lt.name().unwrap(), "v0.0.1");
     assert_eq!(
         lt.message().unwrap(),
-        "group1\ngroup1/project1\ngroup1/project1/x"
+        "group1\ngroup1/project1\ngroup1/project1/x\n\n"
     );
 
     // generate another changeset to test a second checkpoint
@@ -191,7 +181,7 @@ fn test_handle_git_checkpoint() {
     );
     let o2 = handle_checkpoint(
         &c,
-        HandleReleaseInput {
+        HandleCheckpointInput {
             git_path: "git",
             use_libgit2_status: false,
             checkpoint_type: "minor",
@@ -217,7 +207,7 @@ fn test_handle_git_checkpoint() {
     assert_eq!(lt2.name().unwrap(), "v0.1.0");
     assert_eq!(
         lt2.message().unwrap(),
-        "group1\ngroup1/project1\ngroup1/project1/x"
+        "group1\ngroup1/project1\ngroup1/project1/x\n\n"
     );
 }
 
@@ -395,7 +385,7 @@ function call_me {
 }
 
 #[test]
-fn test_handle_inspect_change() {
+fn test_handle_analyze() {
     let (repo, repo_path) = get_repo(false);
 
     // prep repo with some changes
@@ -409,9 +399,8 @@ fn test_handle_inspect_change() {
     );
 
     let c: Config = toml::from_str(CONFIG_BASH).unwrap();
-    let changes = get_raw_changes(
-        &c,
-        HandleInspectChangeInput {
+    let changes = git_get_raw_changes(
+        &GitChangeOptions {
             start: None,
             end: Some("HEAD"),
             git_path: "git",
@@ -420,7 +409,8 @@ fn test_handle_inspect_change() {
         &repo_path,
     )
     .unwrap();
-    let o = process_inspect_change(&c, &changes).unwrap();
+    let lookups = Lookups::new(&c).unwrap();
+    let o = analyze(lookups, changes, true, false).unwrap();
 
     let targets = vec![
         "group1".to_string(),
@@ -428,14 +418,13 @@ fn test_handle_inspect_change() {
         "group1/project1/x".to_string(),
     ];
     assert_eq!(
-        o.changes,
-        vec![ProcessedChange {
-            path: "group1/project1/x/foo.txt",
-            added_targets: targets.clone(),
-            ignored_targets: vec![],
+        o.changes.unwrap(),
+        vec![AnalyzedChange {
+            path: "group1/project1/x/foo.txt".to_string(),
+            targets: None,
         }],
     );
-    assert_eq!(o.targets, targets,);
+    assert_eq!(o.targets, targets);
 
     purge_repo(&repo_path);
 }

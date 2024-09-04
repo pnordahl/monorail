@@ -115,38 +115,4 @@ fn get_app() -> clap::Command {
                     .action(ArgAction::SetTrue),
             )
     )
-    .subcommand(
-        Command::new("inspect")
-            .about("Inspect the repository, producing a report")
-            .subcommand(
-                Command::new("change")
-                    .about("Show unstaged and staged repository changes")
-                    .after_help(r#"This command analyzes staged, unpushed, and pushed changes between two locations in version control history, as well as unstaged changes present only in your local filesystem. It applies optional prefix patterns specified in a configuration file, and produces a detailed report of changes in the repository."#)
-                    .arg(arg_git_path.clone())
-                    .arg(arg_use_libgit2_status.clone())
-                    .arg(
-                        Arg::new("start")
-                            .short('s')
-                            .long("start")
-                            .help("Start of the interval to consider for changes; if not provided, the latest tag (or first commit, if no tags have been made) is used")
-                            .num_args(1)
-                            .required(false),
-                    )
-                    .arg(
-                        Arg::new("end")
-                            .short('e')
-                            .long("end")
-                            .help("End of the interval to consider for changes; if not provided HEAD is used")
-                            .num_args(1)
-                            .required(false),
-                    )
-                    .arg(
-                        Arg::new("targets-only")
-                            .short('t')
-                            .long("targets-only")
-                            .help("Only output changed targets")
-                            .action(ArgAction::SetTrue)
-                    ),
-            ),
-    )
 }

@@ -104,7 +104,7 @@ function process_exec {
 		log_verbose "$(printf "source:             %s" "$src")"
 	done
 
-	# set optional 'inspect change' parameters
+	# set optional 'analyze' parameters
 	monorail_analyze_args=("analyze")
 	if [ "$vcs_use" == "git" ]; then
 		monorail_analyze_args+=("--git-path" "$git_path")
