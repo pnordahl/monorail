@@ -548,7 +548,7 @@ pub fn handle_checkpoint(
                 input.use_libgit2_status,
                 input.git_path,
             )?;
-            let lookups = Lookups::new(&cfg)?;
+            let lookups = Lookups::new(cfg)?;
             let o = analyze(lookups, changes, false, false)?;
 
             // without targets, there's nothing to do
@@ -827,7 +827,7 @@ impl<'a> Lookups<'a> {
 
         let mut seen_targets = HashSet::new();
         if let Some(targets) = cfg.targets.as_ref() {
-            if let Err(e) = targets.iter().try_for_each(|target| {
+            targets.iter().try_for_each(|target| {
                 if seen_targets.contains(&target.path) {
                     return Err(MonorailError {
                         class: ErrorClass::Generic,
@@ -854,9 +854,7 @@ impl<'a> Lookups<'a> {
                     });
                 }
                 Ok(())
-            }) {
-                return Err(e);
-            }
+            })?
         }
         Ok(Self {
             targets: targets_builder.build(),
@@ -889,9 +887,10 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 enum VcsKind {
     #[serde(rename = "git")]
+    #[default]
     Git,
 }
 impl FromStr for VcsKind {
@@ -903,11 +902,7 @@ impl FromStr for VcsKind {
         }
     }
 }
-impl Default for VcsKind {
-    fn default() -> Self {
-        VcsKind::Git
-    }
-}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     #[serde(default)]
@@ -954,9 +949,10 @@ impl Default for Git {
         }
     }
 }
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 enum ExtensionKind {
     #[serde(rename = "bash")]
+    #[default]
     Bash,
 }
 impl FromStr for ExtensionKind {
@@ -968,11 +964,7 @@ impl FromStr for ExtensionKind {
         }
     }
 }
-impl Default for ExtensionKind {
-    fn default() -> Self {
-        ExtensionKind::Bash
-    }
-}
+
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct Extension {
     #[serde(default)]
