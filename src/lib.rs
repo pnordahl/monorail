@@ -1,6 +1,7 @@
 pub mod common;
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -22,21 +23,27 @@ use serde::{Deserialize, Serialize};
 use trie_rs::{Trie, TrieBuilder};
 
 #[derive(Debug, Serialize, Eq, PartialEq)]
-pub enum ErrorClass {
+enum ErrorClass {
+    #[serde(rename = "generic")]
     Generic,
+    #[serde(rename = "git2")]
     Git2,
+    #[serde(rename = "io")]
     Io,
+    #[serde(rename = "toml_deserialize")]
     TomlDeserialize,
-    Command,
+    #[serde(rename = "serde_json")]
     SerdeJSON,
+    #[serde(rename = "utf8")]
     Utf8Error,
+    #[serde(rename = "parse_int")]
     ParseIntError,
 }
 
-#[derive(Debug, Serialize)]
-pub struct MonorailError {
-    pub class: ErrorClass,
-    pub message: String,
+#[derive(Debug, Serialize, Eq, PartialEq)]
+struct MonorailError {
+    class: ErrorClass,
+    message: String,
 }
 impl Error for MonorailError {}
 impl fmt::Display for MonorailError {
@@ -119,12 +126,12 @@ fn exit_with_error(err: MonorailError, fmt: &str) {
     std::process::exit(1);
 }
 
-pub fn handle(app: clap::App) {
-    let matches = app.get_matches();
+pub fn handle(cmd: clap::Command) {
+    let matches = cmd.get_matches();
 
-    let output_format = matches.value_of("output-format").unwrap();
+    let output_format = matches.get_one::<String>("output-format").unwrap();
 
-    let wd: String = match matches.value_of("working-directory") {
+    let wd: String = match matches.get_one::<String>("working-directory") {
         Some(wd) => wd.into(),
         None => match env::current_dir() {
             Ok(pb) => {
@@ -142,7 +149,7 @@ pub fn handle(app: clap::App) {
         },
     };
 
-    match matches.value_of("config-file") {
+    match matches.get_one::<String>("config-file") {
         Some(cfg_path) => {
             match Config::new(Path::new(&wd).join(cfg_path).to_str().unwrap_or(cfg_path)) {
                 Ok(cfg) => match cfg.validate() {
@@ -151,49 +158,19 @@ pub fn handle(app: clap::App) {
                             write_output(std::io::stdout(), &cfg, output_format).unwrap();
                             std::process::exit(0);
                         }
-
-                        if let Some(release) = matches.subcommand_matches("release") {
-                            match handle_release(
-                                &cfg,
-                                HandleReleaseInput {
-                                    release_type: release.value_of("type").unwrap(),
-                                    dry_run: release.is_present("dry-run"),
-                                    git_path: release.value_of("git-path").unwrap(),
-                                    use_libgit2_status: release.is_present("use-libgit2-status"),
-                                },
-                                &wd,
-                            ) {
-                                Ok(o) => {
-                                    write_output(std::io::stdout(), &o, output_format).unwrap();
-                                    std::process::exit(0);
-                                }
-                                Err(e) => {
-                                    exit_with_error(e, output_format);
-                                }
-                            }
-                            std::process::exit(0);
-                        }
-
-                        if let Some(inspect) = matches.subcommand_matches("inspect") {
-                            if let Some(change) = inspect.subcommand_matches("change") {
-                                let i = HandleInspectChangeInput {
-                                    start: change.value_of("start"),
-                                    end: change.value_of("end"),
-                                    git_path: change.value_of("git-path").unwrap(),
-                                    use_libgit2_status: change.is_present("use-libgit2-status"),
-                                };
-                                match handle_inspect_change(&cfg, i, &wd) {
+                        if let Some(checkpoint) = matches.subcommand_matches("checkpoint") {
+                            if let Some(create) = checkpoint.subcommand_matches("create") {
+                                match handle_checkpoint_create(
+                                    &cfg,
+                                    HandleCheckpointInput {
+                                        checkpoint_type: create.get_one::<String>("type").unwrap(),
+                                        dry_run: create.get_flag("dry-run"),
+                                        git_path: create.get_one::<String>("git-path").unwrap(),
+                                        use_libgit2_status: create.get_flag("use-libgit2-status"),
+                                    },
+                                    &wd,
+                                ) {
                                     Ok(o) => {
-                                        if change.is_present("targets-only") {
-                                            let targets: Vec<String> = o.into_iter().collect();
-                                            write_output(
-                                                std::io::stdout(),
-                                                &targets,
-                                                output_format,
-                                            )
-                                            .unwrap();
-                                            std::process::exit(0);
-                                        }
                                         write_output(std::io::stdout(), &o, output_format).unwrap();
                                         std::process::exit(0);
                                     }
@@ -201,8 +178,33 @@ pub fn handle(app: clap::App) {
                                         exit_with_error(e, output_format);
                                     }
                                 }
-                            } else {
-                                exit_with_error("no valid subcommand match".into(), output_format);
+                            }
+                        }
+
+                        if let Some(analyze) = matches.subcommand_matches("analyze") {
+                            let i = AnalyzeInput {
+                                git_change_options: GitChangeOptions {
+                                    start: analyze
+                                        .get_one::<String>("start")
+                                        .map(|x: &String| x.as_str()),
+                                    end: analyze
+                                        .get_one::<String>("end")
+                                        .map(|x: &String| x.as_str()),
+                                    git_path: analyze.get_one::<String>("git-path").unwrap(),
+                                    use_libgit2_status: analyze.get_flag("use-libgit2-status"),
+                                },
+                                show_changes: analyze.get_flag("show-changes"),
+                                show_change_targets: analyze.get_flag("show-change-targets"),
+                            };
+                            match handle_analyze(&cfg, &i, &wd) {
+                                Ok(ref output) => {
+                                    write_output(std::io::stdout(), &output, output_format)
+                                        .unwrap();
+                                    std::process::exit(0);
+                                }
+                                Err(e) => {
+                                    exit_with_error(e, output_format);
+                                }
                             }
                         }
                     }
@@ -219,7 +221,446 @@ pub fn handle(app: clap::App) {
     };
 }
 
+fn handle_cmd_output(
+    output: std::io::Result<std::process::Output>,
+) -> Result<Vec<u8>, MonorailError> {
+    match output {
+        Ok(output) => {
+            if output.status.success() {
+                Ok(output.stdout)
+            } else {
+                Err(String::from_utf8_lossy(&output.stderr).to_string().into())
+            }
+        }
+        Err(e) => Err(e.to_string().into()),
+    }
+}
+
+#[derive(Debug)]
+struct GitChangeOptions<'a> {
+    start: Option<&'a str>,
+    end: Option<&'a str>,
+    git_path: &'a str,
+    use_libgit2_status: bool,
+}
+
+#[derive(Debug)]
+struct AnalyzeInput<'a> {
+    git_change_options: GitChangeOptions<'a>,
+    show_changes: bool,
+    show_change_targets: bool,
+}
+#[derive(Serialize, Debug)]
+struct AnalyzeOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changes: Option<Vec<AnalyzedChange>>,
+    targets: Vec<String>,
+}
+
+#[derive(Serialize, Debug, Eq, PartialEq)]
+struct AnalyzedChange {
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    targets: Option<Vec<AnalyzedChangeTarget>>,
+}
+
+#[derive(Serialize, Debug, Eq, PartialEq)]
+struct AnalyzedChangeTarget {
+    path: String,
+    reason: AnalyzedChangeTargetReason,
+}
+impl Ord for AnalyzedChangeTarget {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.path.cmp(&other.path)
+    }
+}
+impl PartialOrd for AnalyzedChangeTarget {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Serialize, Debug, Eq, PartialEq)]
+enum AnalyzedChangeTargetReason {
+    #[serde(rename = "target")]
+    Target,
+    #[serde(rename = "links")]
+    Links,
+    #[serde(rename = "uses")]
+    Uses,
+    #[serde(rename = "ignores")]
+    Ignores,
+}
+
+fn handle_analyze<'a>(
+    config: &'a Config,
+    input: &AnalyzeInput<'a>,
+    workdir: &'a str,
+) -> Result<AnalyzeOutput, MonorailError> {
+    let lookups = Lookups::new(config)?;
+    match config.vcs.r#use {
+        VcsKind::Git => {
+            let changes = git_get_raw_changes(&input.git_change_options, workdir)?;
+            analyze(
+                lookups,
+                changes,
+                input.show_changes,
+                input.show_change_targets,
+            )
+        }
+    }
+}
+
+// set of common prefix ignores         = I
+// set of common prefix ignores targets = It
+// set of common prefix links           = L
+// set of common prefix links targets   = Lt
+// set of common prefix uses            = U
+// set of common prefix uses targets    = Ut
+// set of common prefix targets         = T
+// set of output targets                = O
+
+// O = T + Ut + Lt - It
+fn analyze(
+    lookups: Lookups,
+    changes: Vec<RawChange>,
+    show_changes: bool,
+    show_change_targets: bool,
+) -> Result<AnalyzeOutput, MonorailError> {
+    let mut output = AnalyzeOutput {
+        changes: if show_changes { Some(vec![]) } else { None },
+        targets: vec![],
+    };
+
+    let mut output_targets = HashSet::new();
+
+    changes.iter().for_each(|c| {
+        let mut change_targets = if show_change_targets {
+            Some(vec![])
+        } else {
+            None
+        };
+        let mut add_targets = HashSet::new();
+
+        lookups
+            .targets
+            .common_prefix_search(&c.name)
+            .for_each(|target: String| {
+                if let Some(change_targets) = change_targets.as_mut() {
+                    change_targets.push(AnalyzedChangeTarget {
+                        path: target.to_owned(),
+                        reason: AnalyzedChangeTargetReason::Target,
+                    });
+                }
+                add_targets.insert(target);
+            });
+        lookups
+            .links
+            .common_prefix_search(&c.name)
+            .for_each(|link: String| {
+                // find any targets that have this link as a prefix, aka set Lt
+                lookups
+                    .targets
+                    .common_prefix_search(&link)
+                    .for_each(|parent: String| {
+                        if let Some(change_targets) = change_targets.as_mut() {
+                            change_targets.push(AnalyzedChangeTarget {
+                                path: parent.to_owned(),
+                                reason: AnalyzedChangeTargetReason::Links,
+                            });
+                        }
+                        // find all children of matched targets
+                        lookups
+                            .targets
+                            .postfix_search(&parent)
+                            .for_each(|child: String| {
+                                let child_path = format!("{}{}", &parent, child);
+                                if let Some(change_targets) = change_targets.as_mut() {
+                                    change_targets.push(AnalyzedChangeTarget {
+                                        path: child_path.to_owned(),
+                                        reason: AnalyzedChangeTargetReason::Links,
+                                    });
+                                }
+                                add_targets.insert(child_path);
+                            });
+                        add_targets.insert(parent);
+                    });
+            });
+        lookups
+            .uses
+            .common_prefix_search(&c.name)
+            .for_each(|m: String| {
+                if let Some(v) = lookups.use2targets.get(m.as_str()) {
+                    v.iter().for_each(|target| {
+                        if let Some(change_targets) = change_targets.as_mut() {
+                            change_targets.push(AnalyzedChangeTarget {
+                                path: target.to_string(),
+                                reason: AnalyzedChangeTargetReason::Uses,
+                            });
+                        }
+                        add_targets.insert(target.to_string());
+                    });
+                }
+            });
+
+        lookups
+            .ignores
+            .common_prefix_search(&c.name)
+            .for_each(|m: String| {
+                if let Some(v) = lookups.ignore2targets.get(m.as_str()) {
+                    v.iter().for_each(|target| {
+                        add_targets.remove(*target);
+                        if let Some(change_targets) = change_targets.as_mut() {
+                            change_targets.push(AnalyzedChangeTarget {
+                                path: target.to_string(),
+                                reason: AnalyzedChangeTargetReason::Ignores,
+                            });
+                        }
+                    });
+                }
+            });
+
+        add_targets.iter().for_each(|t| {
+            output_targets.insert(t.to_owned());
+        });
+
+        if let Some(change_targets) = change_targets.as_mut() {
+            change_targets.sort();
+        }
+
+        if let Some(output_changes) = output.changes.as_mut() {
+            output_changes.push(AnalyzedChange {
+                path: c.name.to_owned(),
+                targets: change_targets,
+            });
+        }
+    });
+
+    // copy the hashmap into the output vector
+    for t in output_targets.iter() {
+        output.targets.push(t.to_owned());
+    }
+    output.targets.sort();
+
+    Ok(output)
+}
+
+fn git_get_raw_changes(
+    input: &GitChangeOptions,
+    wd: &str,
+) -> Result<Vec<RawChange>, MonorailError> {
+    let repo = git2::Repository::open(wd)?;
+    let start = match input.start {
+        Some(s) => libgit2_find_oid(&repo, s)?,
+        None => {
+            match libgit2_latest_tag(&repo, libgit2_find_oid(&repo, "HEAD")?)? {
+                Some(lr) => lr.target_id(),
+                None => {
+                    // no tags, use first commit of the repo
+                    match libgit2_first_commit(&repo)? {
+                        Some(fc) => fc,
+                        None => {
+                            return Err(
+                                "couldn't find a starting point; commit something first".into()
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    let end = libgit2_find_oid(&repo, input.end.unwrap_or("HEAD"))?;
+    git_all_changes(&repo, start, end, input.use_libgit2_status, input.git_path)
+}
+
+#[derive(Debug, Serialize)]
+struct HandleCheckpointInput<'a> {
+    checkpoint_type: &'a str,
+    dry_run: bool,
+    git_path: &'a str,
+    use_libgit2_status: bool,
+}
+#[derive(Debug, Serialize)]
+struct CheckpointOutput {
+    id: String,
+    targets: Vec<String>,
+    dry_run: bool,
+}
+
+fn handle_checkpoint_create(
+    cfg: &Config,
+    input: HandleCheckpointInput,
+    wd: &str,
+) -> Result<CheckpointOutput, MonorailError> {
+    match cfg.vcs.r#use {
+        VcsKind::Git => {
+            let repo = git2::Repository::open(wd)?;
+
+            // require that HEAD point to the configured trunk branch
+            let trunk_branch = repo.find_branch(&cfg.vcs.git.trunk, git2::BranchType::Local)?;
+
+            if !trunk_branch.is_head() {
+                return Err(format!(
+                    "HEAD points to {} expected vcs.git.trunk branch {}",
+                    repo.head()?.name().unwrap_or(""),
+                    &cfg.vcs.git.trunk
+                )
+                .into());
+            }
+
+            let end_oid = libgit2_find_oid(&repo, "HEAD")?;
+            let latest_tag = libgit2_latest_tag(&repo, end_oid)?;
+            let start_oid = match &latest_tag {
+                Some(lt) => lt.target_id(),
+                None => {
+                    // no tags, use first commit of the repo
+                    match libgit2_first_commit(&repo)? {
+                        Some(fc) => fc,
+                        None => {
+                            return Err(
+                                "couldn't find a starting point; commit something first".into()
+                            )
+                        }
+                    }
+                }
+            };
+
+            if end_oid == start_oid {
+                return Err(format!(
+                    "HEAD and the last checkpoint are the same commit {}, nothing to do",
+                    start_oid
+                )
+                .into());
+            }
+
+            // TODO: error on [ci skip]
+
+            // TODO: error if checkpoint would include unpushed changes
+
+            // fetch changed targets
+            let changes = git_all_changes(
+                &repo,
+                start_oid,
+                end_oid,
+                input.use_libgit2_status,
+                input.git_path,
+            )?;
+            let lookups = Lookups::new(cfg)?;
+            let o = analyze(lookups, changes, true, false)?;
+
+            if let Some(ref changes) = o.changes {
+                if changes.is_empty() {
+                    return Err("No changes detected, aborting checkpoint creation".into());
+                }
+            }
+
+            // get new tag name
+            let tag_name = match latest_tag {
+                Some(latest_tag) => match latest_tag.name() {
+                    Some(name) => increment_semver(name, input.checkpoint_type)?,
+                    None => return Err("reference semver not provided".into()),
+                },
+                None => increment_semver("v0.0.0", input.checkpoint_type)?,
+            };
+
+            if !input.dry_run {
+                // generate the checkpoint message body
+                let checkpoint_msg = CheckpointMessage {
+                    num_changes: o.changes.map_or_else(|| 0, |v| v.len()),
+                    targets: &o.targets,
+                };
+                let mut checkpoint_msg_str = serde_json::to_string_pretty(&checkpoint_msg)?;
+                checkpoint_msg_str.push('\n');
+
+                // create tag and push
+                repo.tag(
+                    &tag_name,
+                    &repo.find_object(end_oid, None)?,
+                    &repo.signature()?,
+                    &checkpoint_msg_str,
+                    false,
+                )?;
+                // NOTE: shelling out to `git` to avoid having to do a full remote/auth/ssh integration with libgit, for now
+                let output = std::process::Command::new(input.git_path)
+                    .arg("-C")
+                    .arg(wd)
+                    .arg("push")
+                    .arg(&cfg.vcs.git.remote)
+                    .arg(&format!(
+                        "{}/{}",
+                        cfg.vcs.git.tags_refspec_prefix, &tag_name
+                    ))
+                    .output()
+                    .expect("failed to push tags");
+                if !output.status.success() {
+                    return Err(format!(
+                        "failed to push tags: {}",
+                        std::str::from_utf8(&output.stderr)?
+                    )
+                    .into());
+                }
+            }
+
+            Ok(CheckpointOutput {
+                id: tag_name,
+                targets: o.targets,
+                dry_run: input.dry_run,
+            })
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct CheckpointMessage<'a> {
+    num_changes: usize,
+    targets: &'a [String],
+}
+
+fn git_cmd_status(
+    git_path: &str,
+    workdir: Option<&std::path::Path>,
+) -> Result<Vec<u8>, MonorailError> {
+    handle_cmd_output(
+        std::process::Command::new(git_path)
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--renames",
+            ])
+            .current_dir(workdir.unwrap_or(&std::env::current_dir()?))
+            .output(),
+    )
+}
+
+fn git_cmd_status_changes(s: Vec<u8>) -> Vec<RawChange> {
+    let mut v: Vec<RawChange> = Vec::new();
+    if !s.is_empty() {
+        let iter = s.split(|x| char::from(*x) == '\n');
+        for w in iter {
+            let mut parts: Vec<Cow<str>> = w
+                .split(|z| char::from(*z) == ' ')
+                .map(String::from_utf8_lossy)
+                .collect();
+            parts.retain(|z| z != "");
+            // not interested in anything else spurious from
+            // our parsing of line format
+            if parts.len() == 2 {
+                v.push(RawChange {
+                    name: parts[1].to_string(),
+                });
+            }
+        }
+        return v;
+    }
+    v
+}
+
 // given a commit, find the earliest annotated tag behind it
+// NOTE: this is pub for now, since it's used in integration tests;
+// once the `checkpoint list` command is done, make this private
+// and move integration tests to the command
 pub fn libgit2_latest_tag(
     repo: &git2::Repository,
     oid: git2::Oid,
@@ -293,60 +734,6 @@ fn libgit2_start_end_diff_changes(
         Err(e) => Err(e),
     }
 }
-fn handle_cmd_output(
-    output: std::io::Result<std::process::Output>,
-) -> Result<Vec<u8>, MonorailError> {
-    match output {
-        Ok(output) => {
-            if output.status.success() {
-                Ok(output.stdout)
-            } else {
-                Err(String::from_utf8_lossy(&output.stderr).to_string().into())
-            }
-        }
-        Err(e) => Err(e.to_string().into()),
-    }
-}
-
-fn git_cmd_status(
-    git_path: &str,
-    workdir: Option<&std::path::Path>,
-) -> Result<Vec<u8>, MonorailError> {
-    handle_cmd_output(
-        std::process::Command::new(git_path)
-            .args([
-                "status",
-                "--porcelain",
-                "--untracked-files=all",
-                "--renames",
-            ])
-            .current_dir(workdir.unwrap_or(&std::env::current_dir()?))
-            .output(),
-    )
-}
-
-fn git_cmd_status_changes(s: Vec<u8>) -> Vec<RawChange> {
-    let mut v: Vec<RawChange> = Vec::new();
-    if !s.is_empty() {
-        let iter = s.split(|x| char::from(*x) == '\n');
-        for w in iter {
-            let mut parts: Vec<Cow<str>> = w
-                .split(|z| char::from(*z) == ' ')
-                .map(String::from_utf8_lossy)
-                .collect();
-            parts.retain(|z| z != "");
-            // not interested in anything else spurious from
-            // our parsing of line format
-            if parts.len() == 2 {
-                v.push(RawChange {
-                    name: parts[1].to_string(),
-                });
-            }
-        }
-        return v;
-    }
-    v
-}
 
 fn libgit2_status_changes(repo: &git2::Repository) -> Result<Vec<RawChange>, git2::Error> {
     let mut v: Vec<RawChange> = Vec::new();
@@ -407,143 +794,7 @@ fn libgit2_find_oid(repo: &git2::Repository, s: &str) -> Result<git2::Oid, Monor
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct HandleReleaseInput<'a> {
-    pub release_type: &'a str,
-    pub dry_run: bool,
-    pub git_path: &'a str,
-    pub use_libgit2_status: bool,
-}
-#[derive(Debug, Serialize)]
-pub struct ReleaseOutput {
-    pub id: String,
-    pub targets: Vec<String>,
-    pub dry_run: bool,
-}
-
-pub fn handle_release(
-    cfg: &Config,
-    input: HandleReleaseInput,
-    wd: &str,
-) -> Result<ReleaseOutput, MonorailError> {
-    match cfg.vcs.r#use {
-        VcsKind::Git => {
-            let repo = git2::Repository::open(wd)?;
-
-            // require that HEAD point to the configured trunk branch
-            let trunk_branch = repo.find_branch(&cfg.vcs.git.trunk, git2::BranchType::Local)?;
-
-            if !trunk_branch.is_head() {
-                return Err(format!(
-                    "HEAD points to {} expected vcs.git.trunk branch {}",
-                    repo.head()?.name().unwrap_or(""),
-                    &cfg.vcs.git.trunk
-                )
-                .into());
-            }
-
-            let end_oid = libgit2_find_oid(&repo, "HEAD")?;
-            let latest_tag = libgit2_latest_tag(&repo, end_oid)?;
-            let start_oid = match &latest_tag {
-                Some(lt) => lt.target_id(),
-                None => {
-                    // no tags, use first commit of the repo
-                    match libgit2_first_commit(&repo)? {
-                        Some(fc) => fc,
-                        None => {
-                            return Err(
-                                "couldn't find a starting point; commit something first".into()
-                            )
-                        }
-                    }
-                }
-            };
-
-            if end_oid == start_oid {
-                return Err(format!(
-                    "HEAD and the last release are the same commit {}, nothing to do",
-                    start_oid
-                )
-                .into());
-            }
-
-            // TODO: error on [ci skip]
-
-            // TODO: error if release would include unpushed changes
-
-            // fetch changed targets
-            let changes = process_inspect_change(
-                &git_all_changes(
-                    &repo,
-                    start_oid,
-                    end_oid,
-                    input.use_libgit2_status,
-                    input.git_path,
-                )?,
-                cfg,
-            )?;
-
-            let mut changed_targets = changes.into_iter().collect::<Vec<String>>();
-            changed_targets.sort();
-
-            // without targets, there's nothing to do
-            if changed_targets.is_empty() {
-                return Ok(ReleaseOutput {
-                    id: "".to_string(),
-                    targets: changed_targets,
-                    dry_run: input.dry_run,
-                });
-            }
-
-            // get new tag name
-            let tag_name = match latest_tag {
-                Some(latest_tag) => match latest_tag.name() {
-                    Some(name) => increment_semver(name, input.release_type)?,
-                    None => return Err("reference semver not provided".into()),
-                },
-                None => increment_semver("v0.0.0", input.release_type)?,
-            };
-
-            if !input.dry_run {
-                // create tag and push
-                repo.tag(
-                    &tag_name,
-                    &repo.find_object(end_oid, None)?,
-                    &repo.signature()?,
-                    &changed_targets.join("\n"),
-                    false,
-                )?;
-                // NOTE: shelling out to `git` to avoid having to do a full remote/auth/ssh integration with libgit, for now
-                let output = std::process::Command::new(input.git_path)
-                    .arg("-C")
-                    .arg(wd)
-                    .arg("push")
-                    .arg(&cfg.vcs.git.remote)
-                    .arg(&format!(
-                        "{}/{}",
-                        cfg.vcs.git.tags_refspec_prefix, &tag_name
-                    ))
-                    .output()
-                    .expect("failed to push tags");
-                if !output.status.success() {
-                    return Err(format!(
-                        "failed to push tags: {}",
-                        std::str::from_utf8(&output.stderr)?
-                    )
-                    .into());
-                }
-            }
-
-            Ok(ReleaseOutput {
-                id: tag_name,
-                targets: changed_targets,
-                dry_run: input.dry_run,
-            })
-        }
-    }
-}
-
-fn increment_semver(semver: &str, release_type: &str) -> Result<String, MonorailError> {
+fn increment_semver(semver: &str, checkpoint_type: &str) -> Result<String, MonorailError> {
     let v: Vec<&str> = semver.trim_start_matches('v').split('.').collect();
     if v.len() != 3 {
         return Err(format!("semver should have 3 parts, it has {}", v.len()).into());
@@ -551,7 +802,7 @@ fn increment_semver(semver: &str, release_type: &str) -> Result<String, Monorail
     let mut major = v[0].parse::<i32>()?;
     let mut minor = v[1].parse::<i32>()?;
     let mut patch = v[2].parse::<i32>()?;
-    match release_type {
+    match checkpoint_type {
         "major" => {
             major += 1;
             minor = 0;
@@ -564,441 +815,71 @@ fn increment_semver(semver: &str, release_type: &str) -> Result<String, Monorail
         "patch" => {
             patch += 1;
         }
-        _ => return Err(format!("unrecognized release type {}", release_type).into()),
+        _ => return Err(format!("unrecognized checkpoint type {}", checkpoint_type).into()),
     }
     Ok(format!("v{}.{}.{}", major, minor, patch))
 }
 
-pub struct HandleInspectChangeInput<'a> {
-    pub start: Option<&'a str>,
-    pub end: Option<&'a str>,
-    pub git_path: &'a str,
-    pub use_libgit2_status: bool,
+struct Lookups<'a> {
+    targets: Trie<u8>,
+    links: Trie<u8>,
+    ignores: Trie<u8>,
+    uses: Trie<u8>,
+    use2targets: HashMap<&'a str, Vec<&'a str>>,
+    ignore2targets: HashMap<&'a str, Vec<&'a str>>,
 }
-pub fn handle_inspect_change(
-    cfg: &Config,
-    input: HandleInspectChangeInput,
-    wd: &str,
-) -> Result<InspectChangeOutput, MonorailError> {
-    match cfg.vcs.r#use {
-        VcsKind::Git => {
-            let repo = git2::Repository::open(wd)?;
-            let start =
-                match input.start {
-                    Some(s) => libgit2_find_oid(&repo, s)?,
-                    None => {
-                        match libgit2_latest_tag(&repo, libgit2_find_oid(&repo, "HEAD")?)? {
-                            Some(lr) => lr.target_id(),
-                            None => {
-                                // no tags, use first commit of the repo
-                                match libgit2_first_commit(&repo)? {
-                                    Some(fc) => fc,
-                                    None => return Err(
-                                        "couldn't find a starting point; commit something first"
-                                            .into(),
-                                    ),
-                                }
-                            }
-                        }
-                    }
-                };
+impl<'a> Lookups<'a> {
+    fn new(cfg: &'a Config) -> Result<Self, MonorailError> {
+        let mut targets_builder = TrieBuilder::new();
+        let mut links_builder = TrieBuilder::new();
+        let mut ignores_builder = TrieBuilder::new();
+        let mut uses_builder = TrieBuilder::new();
+        let mut use2targets = HashMap::<&str, Vec<&str>>::new();
+        let mut ignore2targets = HashMap::<&str, Vec<&str>>::new();
 
-            let end = libgit2_find_oid(&repo, input.end.unwrap_or("HEAD"))?;
-            process_inspect_change(
-                &git_all_changes(&repo, start, end, input.use_libgit2_status, input.git_path)?,
-                cfg,
-            )
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ProcessedChange {
-    file: GroupChangeFile,
-    group_path: Option<String>,
-    project_paths: Option<Vec<String>>,
-    depend_path: Option<String>,
-    link_path: Option<String>,
-    ignore_path: Option<String>,
-}
-impl ProcessedChange {
-    pub fn new(name: &str, target: Option<String>) -> Self {
-        ProcessedChange {
-            file: GroupChangeFile::new(name, target),
-            group_path: None,
-            project_paths: None,
-            depend_path: None,
-            link_path: None,
-            ignore_path: None,
-        }
-    }
-}
-
-struct TargetLookup {
-    prefixed_ignore: Option<Trie<u8>>,
-}
-impl TargetLookup {
-    pub fn new() -> Self {
-        TargetLookup {
-            prefixed_ignore: None,
-        }
-    }
-}
-
-struct GroupLookup {
-    project_paths: Option<Vec<String>>,
-    depend2projects: HashMap<String, HashSet<String>>,
-    prefixed_link: Option<Trie<u8>>,
-    prefixed_depend: Option<Trie<u8>>,
-    prefixed_projects: Option<Trie<u8>>,
-    target_lookups: HashMap<String, TargetLookup>,
-}
-impl GroupLookup {
-    pub fn new() -> Self {
-        GroupLookup {
-            project_paths: None,
-            depend2projects: HashMap::new(),
-            prefixed_link: None,
-            prefixed_depend: None,
-            prefixed_projects: None,
-            target_lookups: HashMap::new(),
-        }
-    }
-    pub fn populate(&mut self, group: &Group) -> Result<(), MonorailError> {
-        let mut depend_hs: HashSet<String> = HashSet::new();
-        if let Some(depends) = &group.depend {
-            let mut builder = TrieBuilder::new();
-            for d in depends {
-                let prefixed = format!("{}/{}", &group.path, d);
-                depend_hs.insert(prefixed.to_owned());
-                builder.push(prefixed);
-            }
-            self.prefixed_depend = Some(builder.build());
-        }
-        if let Some(links) = &group.link {
-            let mut builder = TrieBuilder::new();
-            for l in links {
-                builder.push(format!("{}/{}", &group.path, l));
-            }
-            self.prefixed_link = Some(builder.build());
-        }
-        if let Some(projects) = &group.project {
-            let mut v: Vec<String> = Vec::new();
-            let mut builder = TrieBuilder::new();
-            for p in projects {
-                let prefixed_target = format!("{}/{}", &group.path, &p.path);
-                v.push(prefixed_target.to_owned());
-                let mut target_lookup = TargetLookup::new();
-                if let Some(depends) = &p.depend {
-                    for d in depends {
-                        let prefixed = format!("{}/{}", &group.path, d);
-                        if depend_hs.contains(prefixed.as_str()) {
-                            if self.depend2projects.contains_key(&prefixed) {
-                                self.depend2projects
-                                    .get_mut(&prefixed)
-                                    .unwrap()
-                                    .insert(prefixed_target.to_owned());
-                            } else {
-                                let mut hs = HashSet::new();
-                                hs.insert(prefixed_target.to_owned());
-                                self.depend2projects.insert(prefixed.to_owned(), hs);
-                            }
-                        } else {
-                            return Err(format!(
-                                "depend {:?} is not allowed, available: {:?}",
-                                prefixed, depend_hs
-                            )
-                            .into());
-                        }
-                    }
+        let mut seen_targets = HashSet::new();
+        if let Some(targets) = cfg.targets.as_ref() {
+            targets.iter().try_for_each(|target| {
+                if seen_targets.contains(&target.path) {
+                    return Err(MonorailError {
+                        class: ErrorClass::Generic,
+                        message: format!("Duplicate target path provided: {}", &target.path),
+                    });
                 }
-                if let Some(ignores) = &p.ignore {
-                    let mut ignore_builder = TrieBuilder::new();
-                    for i in ignores {
-                        ignore_builder.push(format!("{}/{}", &prefixed_target, i));
-                    }
-                    target_lookup.prefixed_ignore = Some(ignore_builder.build());
+                seen_targets.insert(&target.path);
+                targets_builder.push(&target.path);
+                if let Some(links) = target.links.as_ref() {
+                    links.iter().for_each(|s| {
+                        links_builder.push(s);
+                    });
                 }
-
-                builder.push(&prefixed_target);
-                self.target_lookups
-                    .insert(prefixed_target.to_owned(), target_lookup);
-            }
-            self.project_paths = Some(v);
-            self.prefixed_projects = Some(builder.build());
-        }
-        Ok(())
-    }
-}
-
-fn process_inspect_change(
-    changes: &[RawChange],
-    cfg: &Config,
-) -> Result<InspectChangeOutput, MonorailError> {
-    let mut output = InspectChangeOutput::new();
-
-    if let Some(cfg_groups) = &cfg.group {
-        // prepopulate lookups and output with known groups from config
-        let mut builder = TrieBuilder::new();
-        let mut group_lookups: HashMap<String, GroupLookup> = HashMap::new();
-        for group in cfg_groups.iter() {
-            // output keys
-            let gi = GroupInspect {
-                change: GroupChange::new(),
-            };
-            output.group.insert(group.path.to_owned(), gi);
-
-            // group lookups
-            let mut lookup = GroupLookup::new();
-            lookup.populate(group)?;
-            group_lookups.insert(group.path.to_owned(), lookup);
-            builder.push(&group.path);
-        }
-        let groups_trie = builder.build();
-        for c in changes.iter() {
-            let mut pcs = get_processed_changes(c, &group_lookups, &groups_trie)?;
-            for pc in pcs.drain(..) {
-                // deal with processed change, applying logic specific to output
-                if let Some(group_path) = pc.group_path {
-                    if let Some(group_inspect) = output.group.get_mut(&group_path) {
-                        if pc.file.action == FileActionKind::Use {
-                            if let Some(project_paths) = pc.project_paths {
-                                for pn in project_paths {
-                                    group_inspect.change.project.insert(pn.to_string());
-                                }
-                            }
-                            if let Some(link_path) = pc.link_path {
-                                group_inspect.change.link.insert(link_path.to_string());
-                            }
-                            if let Some(depend_path) = pc.depend_path {
-                                group_inspect.change.depend.insert(depend_path.to_string());
-                            }
-                        }
-                        group_inspect.change.file.push(pc.file);
-                    }
+                if let Some(ignores) = target.ignores.as_ref() {
+                    ignores.iter().for_each(|s| {
+                        ignores_builder.push(s);
+                        ignore2targets
+                            .entry(s.as_str())
+                            .or_default()
+                            .push(target.path.as_str());
+                    });
                 }
-            }
-        }
-    }
-
-    Ok(output)
-}
-fn get_processed_changes(
-    change: &RawChange,
-    group_lookups: &HashMap<String, GroupLookup>,
-    groups_trie: &Trie<u8>,
-) -> Result<Vec<ProcessedChange>, MonorailError> {
-    let mut pcs: Vec<ProcessedChange> = vec![];
-    let group_matches = groups_trie.common_prefix_search(&change.name);
-    match group_matches.len() {
-        0 => (),
-        1 => {
-            let group_path_match = String::from_utf8_lossy(&group_matches[0]).to_string();
-            let group_lookup = group_lookups.get(&group_path_match);
-            match group_lookup {
-                Some(group_lookup) => {
-                    if let Some(prefixed_link) = &group_lookup.prefixed_link {
-                        let group_link_matches = prefixed_link.common_prefix_search(&change.name);
-                        if !group_link_matches.is_empty() {
-                            let link_path =
-                                String::from_utf8_lossy(&group_link_matches[0]).to_string();
-                            let mut pc = ProcessedChange::new(&change.name, None);
-                            pc.group_path = Some(group_path_match.to_owned());
-                            pc.link_path = Some(link_path);
-                            pc.project_paths.clone_from(&group_lookup.project_paths);
-                            pc.file.action = FileActionKind::Use;
-                            pc.file.reason = FileReasonKind::GroupLinkEffect;
-                            pcs.push(pc);
-                            return Ok(pcs);
-                        }
-                    }
-                    if let Some(prefixed_depend) = &group_lookup.prefixed_depend {
-                        let group_depend_matches =
-                            prefixed_depend.common_prefix_search(&change.name);
-                        if !group_depend_matches.is_empty() {
-                            let mut pc = ProcessedChange::new(&change.name, None);
-                            pc.group_path = Some(group_path_match.to_owned());
-                            let depend_path =
-                                String::from_utf8_lossy(&group_depend_matches[0]).to_string();
-                            pc.depend_path = Some(depend_path.to_owned());
-                            if let Some(projects) = group_lookup.depend2projects.get(&depend_path) {
-                                pc.project_paths =
-                                    Some(projects.iter().map(|p| p.to_owned()).collect());
-                                pc.file.action = FileActionKind::Use;
-                                pc.file.reason = FileReasonKind::TargetDependEffect;
-                                pcs.push(pc);
-                                return Ok(pcs);
-                            }
-                        }
-                    }
-
-                    if let Some(prefixed_projects) = &group_lookup.prefixed_projects {
-                        let group_project_matches =
-                            prefixed_projects.common_prefix_search(&change.name);
-                        for m in group_project_matches.iter() {
-                            let mut pc = ProcessedChange::new(&change.name, None);
-                            pc.group_path = Some(group_path_match.to_owned());
-                            let project_match = String::from_utf8_lossy(m).to_string();
-                            let target_lookup = group_lookup.target_lookups.get(&project_match);
-                            match target_lookup {
-                                Some(target_lookup) => {
-                                    pc.project_paths = Some(vec![project_match.to_owned()]);
-                                    pc.file.target = Some(project_match);
-                                    if let Some(prefixed_ignore) = &target_lookup.prefixed_ignore {
-                                        let project_ignore_matches =
-                                            prefixed_ignore.common_prefix_search(&change.name);
-                                        if !project_ignore_matches.is_empty() {
-                                            let project_ignore_match =
-                                                String::from_utf8_lossy(&project_ignore_matches[0])
-                                                    .to_string();
-                                            pc.ignore_path = Some(project_ignore_match);
-                                            pc.file.action = FileActionKind::Ignore;
-                                            pc.file.reason = FileReasonKind::TargetIgnoreEffect;
-                                            pcs.push(pc);
-                                            continue;
-                                        }
-                                    }
-                                    pc.file.action = FileActionKind::Use;
-                                    pc.file.reason = FileReasonKind::TargetMatch;
-                                    pcs.push(pc);
-                                }
-                                None => {
-                                    return Err(format!(
-                                        "unexpectedly missing target lookup for {}",
-                                        &change.name
-                                    )
-                                    .into())
-                                }
-                            }
-                        }
-                    }
-
-                    if pcs.is_empty() {
-                        // this is an inert change, so we return a placeholder
-                        let mut pc = ProcessedChange::new(&change.name, None);
-                        pc.group_path = Some(group_path_match.to_owned());
-                        pcs.push(pc);
-                    }
+                if let Some(uses) = target.uses.as_ref() {
+                    uses.iter().for_each(|s| {
+                        uses_builder.push(s.as_str());
+                        use2targets.entry(s).or_default().push(target.path.as_str());
+                    });
                 }
-                None => {
-                    return Err(
-                        format!("unexpectedly missing group lookup for {}", &change.name).into(),
-                    )
-                }
-            }
+                Ok(())
+            })?
         }
-        x => return Err(format!("{} ambiguous group matches for {}", x, change.name).into()),
+        Ok(Self {
+            targets: targets_builder.build(),
+            links: links_builder.build(),
+            ignores: ignores_builder.build(),
+            uses: uses_builder.build(),
+            use2targets,
+            ignore2targets,
+        })
     }
-
-    Ok(pcs)
-}
-
-#[derive(Serialize, Debug)]
-pub struct InspectChangeOutput {
-    pub group: HashMap<String, GroupInspect>,
-}
-impl InspectChangeOutput {
-    fn new() -> Self {
-        InspectChangeOutput {
-            group: HashMap::new(),
-        }
-    }
-}
-impl IntoIterator for InspectChangeOutput {
-    type Item = String;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        let mut vs: Vec<String> = vec![];
-        for (_k, v) in self.group {
-            let targets = v.into_iter().collect::<Vec<String>>();
-            if !targets.is_empty() {
-                vs.extend(targets);
-            }
-        }
-        vs.into_iter()
-    }
-}
-#[derive(Serialize, Debug)]
-pub struct GroupInspect {
-    pub change: GroupChange,
-}
-impl IntoIterator for GroupInspect {
-    type Item = String;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.change.into_iter()
-    }
-}
-#[derive(Serialize, Debug)]
-pub struct GroupChange {
-    pub file: Vec<GroupChangeFile>,
-    pub project: HashSet<String>,
-    pub link: HashSet<String>,
-    pub depend: HashSet<String>,
-}
-impl GroupChange {
-    fn new() -> Self {
-        GroupChange {
-            file: Vec::new(),
-            project: HashSet::new(),
-            link: HashSet::new(),
-            depend: HashSet::new(),
-        }
-    }
-}
-impl IntoIterator for GroupChange {
-    type Item = String;
-    type IntoIter = std::vec::IntoIter<String>;
-
-    // TODO: refactor this
-    #[allow(clippy::needless_collect)]
-    fn into_iter(self) -> Self::IntoIter {
-        let v: Vec<String> = self
-            .link
-            .into_iter()
-            .chain(self.depend.into_iter().chain(self.project))
-            .collect::<Vec<String>>();
-        v.into_iter()
-    }
-}
-#[derive(Serialize, Debug)]
-pub struct GroupChangeFile {
-    pub name: String,
-    pub target: Option<String>,
-    pub action: FileActionKind,
-    pub reason: FileReasonKind,
-}
-impl GroupChangeFile {
-    pub fn new(name: &str, target: Option<String>) -> Self {
-        GroupChangeFile {
-            name: name.to_owned(),
-            target,
-            action: FileActionKind::Ignore,
-            reason: FileReasonKind::Inert,
-        }
-    }
-}
-#[derive(Serialize, Debug, PartialEq, Eq)]
-pub enum FileActionKind {
-    #[serde(rename = "ignore")]
-    Ignore,
-    #[serde(rename = "use")]
-    Use,
-}
-#[derive(Serialize, Debug, PartialEq, Eq)]
-pub enum FileReasonKind {
-    #[serde(rename = "group_link_effect")]
-    GroupLinkEffect,
-    #[serde(rename = "project_match")]
-    TargetMatch,
-    #[serde(rename = "project_ignore_effect")]
-    TargetIgnoreEffect,
-    #[serde(rename = "project_depend_effect")]
-    TargetDependEffect,
-    #[serde(rename = "inert")]
-    Inert,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1021,9 +902,10 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 enum VcsKind {
     #[serde(rename = "git")]
+    #[default]
     Git,
 }
 impl FromStr for VcsKind {
@@ -1035,16 +917,20 @@ impl FromStr for VcsKind {
         }
     }
 }
+
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Config {
+struct Config {
+    #[serde(default)]
     vcs: Vcs,
+    #[serde(default)]
     extension: Extension,
-    group: Option<Vec<Group>>,
+    // group: Option<Vec<Group>>,
+    targets: Option<Vec<Target>>,
 }
-#[derive(Serialize, Deserialize, Debug)]
-struct Backend {}
-#[derive(Serialize, Deserialize, Debug)]
+
+#[derive(Serialize, Deserialize, Debug, Default)]
 struct Vcs {
+    #[serde(default)]
     r#use: VcsKind,
     #[serde(default)]
     git: Git,
@@ -1078,9 +964,10 @@ impl Default for Git {
         }
     }
 }
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 enum ExtensionKind {
     #[serde(rename = "bash")]
+    #[default]
     Bash,
 }
 impl FromStr for ExtensionKind {
@@ -1092,8 +979,10 @@ impl FromStr for ExtensionKind {
         }
     }
 }
-#[derive(Serialize, Deserialize, Debug)]
+
+#[derive(Serialize, Deserialize, Debug, Default)]
 struct Extension {
+    #[serde(default)]
     r#use: ExtensionKind,
     #[serde(default)]
     bash: ExtensionBash,
@@ -1122,21 +1011,16 @@ impl Default for ExtensionBashExec {
         }
     }
 }
+
 #[derive(Serialize, Deserialize, Debug)]
-struct Group {
+struct Target {
     path: String,
-    link: Option<Vec<String>>,
-    depend: Option<Vec<String>>,
-    project: Option<Vec<Project>>,
-}
-#[derive(Serialize, Deserialize, Debug)]
-struct Project {
-    path: String,
-    ignore: Option<Vec<String>>,
-    depend: Option<Vec<String>>,
+    links: Option<Vec<String>>,
+    uses: Option<Vec<String>>,
+    ignores: Option<Vec<String>>,
 }
 impl Config {
-    pub fn new(file_path: &str) -> Result<Config, MonorailError> {
+    fn new(file_path: &str) -> Result<Config, MonorailError> {
         let path = Path::new(file_path);
 
         let file = File::open(path)?;
@@ -1147,7 +1031,7 @@ impl Config {
         let config = toml::from_str(contents.as_str())?;
         Ok(config)
     }
-    pub fn validate(&self) -> Result<(), MonorailError> {
+    fn validate(&self) -> Result<(), MonorailError> {
         Ok(())
     }
 }
@@ -1157,35 +1041,20 @@ mod tests {
     use super::*;
     use crate::common::testing::*;
 
-    const RAW_CONFIG: &'static str = r#"
-[vcs]
-use = "git"
-
-[vcs.git]
-trunk = "master"
-remote = "origin"
-
-[extension]
-use = "bash"
-
-[[group]]
+    const RAW_CONFIG: &str = r#"
+[[targets]]
 path = "rust"
-link = [
-    ".cargo",
-    "vendor",
-    "Cargo.toml"
+links = [
+    "rust/vendor",
+    "rust/Cargo.toml",
 ]
-depend = [
-    "common/log",
-    "common/error"
+[[targets]]
+path = "rust/target"
+ignores = [
+    "rust/Cargo.toml"
 ]
-[[group.project]]
-path = "target/project1"
-ignore = [
-    "README.md"
-]
-depend = [
-    "common/log"
+uses = [
+    "rust/common"
 ]
 "#;
 
@@ -1193,13 +1062,13 @@ depend = [
     fn test_libgit2_find_oid() {
         let (repo, repo_path) = get_repo(false);
 
-        let oid = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
         let oid2 = create_commit(
             &repo,
             &get_tree(&repo),
             "b",
             Some("HEAD"),
-            &vec![&get_commit(&repo, oid)],
+            &[&get_commit(&repo, oid)],
         );
         let head = libgit2_find_oid(&repo, "HEAD").unwrap();
         assert_eq!(oid2, head);
@@ -1210,7 +1079,7 @@ depend = [
     #[test]
     fn test_libgit2_latest_tag() {
         let (repo, repo_path) = get_repo(false);
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
         let lt = libgit2_latest_tag(&repo, oid1).unwrap();
         assert!(lt.is_none());
 
@@ -1228,7 +1097,7 @@ depend = [
             &get_tree(&repo),
             "b",
             Some("HEAD"),
-            &vec![&get_commit(&repo, oid1)],
+            &[&get_commit(&repo, oid1)],
         );
         assert_eq!(
             libgit2_latest_tag(&repo, oid2).unwrap().unwrap().id(),
@@ -1242,13 +1111,13 @@ depend = [
         let (repo, repo_path) = get_repo(false);
 
         assert_eq!(libgit2_first_commit(&repo).unwrap(), None);
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
         let _oid2 = create_commit(
             &repo,
             &get_tree(&repo),
             "b",
             Some("HEAD"),
-            &vec![&get_commit(&repo, oid1)],
+            &[&get_commit(&repo, oid1)],
         );
         assert_eq!(libgit2_first_commit(&repo).unwrap(), Some(oid1));
 
@@ -1259,7 +1128,7 @@ depend = [
     fn test_libgit2_start_end_diff_changes() {
         let (repo, repo_path) = get_repo(false);
 
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
         let _f1 = create_file(&repo_path, "", "foo.txt", b"x");
         let oid2 = commit_file(&repo, "foo.txt", Some("HEAD"), &[&get_commit(&repo, oid1)]);
         let _f2 = create_file(&repo_path, "", "bar.txt", b"y");
@@ -1278,7 +1147,7 @@ depend = [
     fn test_git_all_changes() {
         let (repo, repo_path) = get_repo(false);
 
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
 
         // no changes
         const USE_LIBGIT2: bool = true;
@@ -1334,14 +1203,14 @@ depend = [
     fn test_libgit2_status_changes() {
         let (repo, repo_path) = get_repo(false);
 
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &vec![]);
+        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
 
         assert_eq!(libgit2_status_changes(&repo).unwrap().len(), 0);
 
         // check that unstaged changes are detected
         let fname = "foo.txt";
         let fpath = std::path::Path::new(&repo_path).join(fname);
-        let mut file = File::create(&fpath).unwrap();
+        let mut file = File::create(fpath).unwrap();
         file.write_all(b"x").unwrap();
         assert_eq!(libgit2_status_changes(&repo).unwrap().len(), 1);
 
@@ -1354,7 +1223,7 @@ depend = [
             &get_tree(&repo),
             "b",
             Some("HEAD"),
-            &vec![&get_commit(&repo, oid1)],
+            &[&get_commit(&repo, oid1)],
         );
         assert_eq!(libgit2_status_changes(&repo).unwrap().len(), 0);
 
@@ -1393,9 +1262,14 @@ depend = [
 
         let trie = builder.build();
 
-        assert_eq!(trie.exact_match("rust/target/project1/README.md"), true);
-        let matches = trie.common_prefix_search("rust/common/log/bar.rs");
-        assert_eq!(String::from_utf8_lossy(&matches[0]), "rust/common/log");
+        assert!(trie.exact_match("rust/target/project1/README.md"));
+        let matches = trie
+            .common_prefix_search("rust/common/log/bar.rs")
+            .collect::<Vec<String>>();
+        assert_eq!(
+            String::from_utf8_lossy(matches[0].as_bytes()),
+            "rust/common/log"
+        );
     }
 
     #[test]
@@ -1404,157 +1278,223 @@ depend = [
     }
 
     #[test]
-    fn test_process_inspect_change_project_file() {
-        let changes = vec![RawChange {
-            name: "rust/target/project1/lib.rs".to_string(),
-        }];
+    fn test_analyze_empty() {
+        let changes = vec![];
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-        let o = process_inspect_change(&changes, &c).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, false).unwrap();
 
-        let gc = &o.group.get("rust").unwrap().change;
-        let gcf = gc.file.get(0).unwrap();
-        assert_eq!(gcf.name, "rust/target/project1/lib.rs".to_string());
-        assert_eq!(gcf.action, FileActionKind::Use);
-        assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
-
-        assert!(gc.project.contains("rust/target/project1"));
-        assert!(gc.link.is_empty());
-        assert!(gc.depend.is_empty());
+        assert!(o.changes.unwrap().is_empty());
+        assert!(o.targets.is_empty());
     }
 
     #[test]
-    fn test_process_inspect_change_project() {
+    fn test_analyze_unknown() {
+        let change1 = "foo.txt";
         let changes = vec![RawChange {
-            name: "rust/target/project1/".to_string(),
+            name: change1.to_string(),
         }];
+        let expected_targets: Vec<String> = vec![];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![]),
+        }];
+
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-        let o = process_inspect_change(&changes, &c).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-        let gc = &o.group.get("rust").unwrap().change;
-        let gcf = gc.file.get(0).unwrap();
-        assert_eq!(gcf.name, "rust/target/project1/".to_string());
-        assert_eq!(gcf.action, FileActionKind::Use);
-        assert_eq!(gcf.reason, FileReasonKind::TargetMatch);
-
-        assert!(gc.project.contains("rust/target/project1"));
-        assert!(gc.link.is_empty());
-        assert!(gc.depend.is_empty());
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
     }
 
     #[test]
-    fn test_process_inspect_change_group_link() {
+    fn test_analyze_target_file() {
+        let change1 = "rust/lib.rs";
         let changes = vec![RawChange {
-            name: "rust/vendor/foo/bar.rs".to_string(),
+            name: change1.to_string(),
         }];
+        let target1 = "rust";
+        let expected_targets = vec![target1.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![AnalyzedChangeTarget {
+                path: target1.to_string(),
+                reason: AnalyzedChangeTargetReason::Target,
+            }]),
+        }];
+
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-        let o = process_inspect_change(&changes, &c).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-        let gc = &o.group.get("rust").unwrap().change;
-        let gcf = gc.file.get(0).unwrap();
-        assert_eq!(gcf.name, "rust/vendor/foo/bar.rs".to_string());
-        assert_eq!(gcf.action, FileActionKind::Use);
-        assert_eq!(gcf.reason, FileReasonKind::GroupLinkEffect);
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
+    }
+    #[test]
+    fn test_analyze_target() {
+        let change1 = "rust";
+        let changes = vec![RawChange {
+            name: change1.to_string(),
+        }];
+        let target1 = "rust";
+        let expected_targets = vec![target1.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![AnalyzedChangeTarget {
+                path: target1.to_string(),
+                reason: AnalyzedChangeTargetReason::Target,
+            }]),
+        }];
 
-        assert!(gc.project.contains("rust/target/project1"));
-        assert!(gc.link.contains("rust/vendor"));
-        assert!(gc.depend.is_empty());
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
+
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
+    }
+    #[test]
+    fn test_analyze_target_links() {
+        let change1 = "rust/vendor";
+        let changes = vec![RawChange {
+            name: change1.to_string(),
+        }];
+        let target1 = "rust";
+        let target2 = "rust/target";
+        let expected_targets = vec![target1.to_string(), target2.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Target,
+                },
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Links,
+                },
+                AnalyzedChangeTarget {
+                    path: target2.to_string(),
+                    reason: AnalyzedChangeTargetReason::Links,
+                },
+            ]),
+        }];
+
+        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
+
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
     }
 
     #[test]
-    fn test_process_inspect_change_project_depend() {
+    fn test_analyze_target_uses() {
+        let change1 = "rust/common/foo.txt";
         let changes = vec![RawChange {
-            name: "rust/common/log/src/lib.rs".to_string(),
+            name: change1.to_string(),
         }];
+        let target1 = "rust";
+        let target2 = "rust/target";
+        let expected_targets = vec![target1.to_string(), target2.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Target,
+                },
+                AnalyzedChangeTarget {
+                    path: target2.to_string(),
+                    reason: AnalyzedChangeTargetReason::Uses,
+                },
+            ]),
+        }];
+
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-        let o = process_inspect_change(&changes, &c).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-        let gc = &o.group.get("rust").unwrap().change;
-        let gcf = gc.file.get(0).unwrap();
-        assert_eq!(gcf.name, "rust/common/log/src/lib.rs".to_string());
-        assert_eq!(gcf.action, FileActionKind::Use);
-        assert_eq!(gcf.reason, FileReasonKind::TargetDependEffect);
-
-        assert!(gc.project.contains("rust/target/project1"));
-        assert!(gc.link.is_empty());
-        assert!(gc.depend.contains("rust/common/log"));
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
     }
 
     #[test]
-    fn test_process_inspect_change_project_ignore() {
+    fn test_analyze_target_ignores() {
+        let change1 = "rust/Cargo.toml";
         let changes = vec![RawChange {
-            name: "rust/target/project1/README.md".to_string(),
+            name: change1.to_string(),
         }];
+        let target1 = "rust";
+        let target2 = "rust/target";
+        let expected_targets = vec![target1.to_string()];
+        let expected_changes = vec![AnalyzedChange {
+            path: change1.to_string(),
+            targets: Some(vec![
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Target,
+                },
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Links,
+                },
+                AnalyzedChangeTarget {
+                    path: target2.to_string(),
+                    reason: AnalyzedChangeTargetReason::Links,
+                },
+                AnalyzedChangeTarget {
+                    path: target2.to_string(),
+                    reason: AnalyzedChangeTargetReason::Ignores,
+                },
+            ]),
+        }];
+
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-        let o = process_inspect_change(&changes, &c).unwrap();
+        let lookups = Lookups::new(&c).unwrap();
+        let o = analyze(lookups, changes, true, true).unwrap();
 
-        let gc = &o.group.get("rust").unwrap().change;
-        let gcf = gc.file.get(0).unwrap();
-        assert_eq!(gcf.name, "rust/target/project1/README.md".to_string());
-        assert_eq!(gcf.action, FileActionKind::Ignore);
-        assert_eq!(gcf.reason, FileReasonKind::TargetIgnoreEffect);
-
-        assert!(gc.project.is_empty());
-        assert!(gc.link.is_empty());
-        assert!(gc.depend.is_empty());
+        assert_eq!(o.changes.unwrap(), expected_changes);
+        assert_eq!(o.targets, expected_targets);
     }
 
     #[test]
-    fn test_process_inspect_change_inert() {
-        let changes = vec![RawChange {
-            name: "rust/inert.rs".to_string(),
-        }];
+    fn test_lookups() {
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-        let o = process_inspect_change(&changes, &c).unwrap();
-        let gc = &o.group.get("rust").unwrap().change;
-        let gcf = gc.file.get(0).unwrap();
-        assert_eq!(gcf.name, "rust/inert.rs".to_string());
-        assert_eq!(gcf.action, FileActionKind::Ignore);
-        assert_eq!(gcf.reason, FileReasonKind::Inert);
+        let l = Lookups::new(&c).unwrap();
 
-        assert!(gc.project.is_empty());
-        assert!(gc.link.is_empty());
-        assert!(gc.depend.is_empty());
-    }
-
-    #[test]
-    fn test_group_lookup_populate() {
-        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
-
-        let mut gl = GroupLookup::new();
-        gl.populate(&c.group.unwrap().get(0).unwrap()).unwrap();
-
-        assert!(gl
-            .depend2projects
-            .get("rust/common/log")
-            .unwrap()
-            .contains("rust/target/project1"));
         assert_eq!(
-            gl.prefixed_link
-                .unwrap()
-                .common_prefix_search("rust/Cargo.toml"),
-            vec![Vec::from("rust/Cargo.toml")]
+            l.targets
+                .common_prefix_search("rust/target/src/foo.rs")
+                .collect::<Vec<String>>(),
+            vec!["rust".to_string(), "rust/target".to_string()]
         );
         assert_eq!(
-            gl.prefixed_depend
-                .unwrap()
-                .common_prefix_search("rust/common/log/foo.rs"),
-            vec![Vec::from("rust/common/log")]
+            l.links
+                .common_prefix_search("rust/Cargo.toml")
+                .collect::<Vec<String>>(),
+            vec!["rust/Cargo.toml".to_string()]
         );
         assert_eq!(
-            gl.prefixed_projects
-                .unwrap()
-                .common_prefix_search("rust/target/project1/src/foo.rs"),
-            vec![Vec::from("rust/target/project1")]
+            l.uses
+                .common_prefix_search("rust/common/foo.txt")
+                .collect::<Vec<String>>(),
+            vec!["rust/common".to_string()]
         );
         assert_eq!(
-            gl.target_lookups
-                .get("rust/target/project1")
-                .unwrap()
-                .prefixed_ignore
-                .as_ref()
-                .unwrap()
-                .common_prefix_search("rust/target/project1/README.md"),
-            vec![Vec::from("rust/target/project1/README.md")]
+            l.ignores
+                .common_prefix_search("rust/Cargo.toml")
+                .collect::<Vec<String>>(),
+            vec!["rust/Cargo.toml".to_string()]
+        );
+        assert_eq!(
+            *l.use2targets.get("rust/common").unwrap(),
+            vec!["rust/target"]
+        );
+        assert_eq!(
+            *l.ignore2targets.get("rust/Cargo.toml").unwrap(),
+            vec!["rust/target"]
         );
     }
 
@@ -1589,5 +1529,18 @@ depend = [
         );
 
         assert_eq!(git_cmd_status_changes(Vec::from("")), vec![]);
+    }
+
+    #[test]
+    fn test_err_duplicate_target_path() {
+        let config_str: &str = r#"
+[[targets]]
+path = "rust"
+
+[[targets]]
+path = "rust"
+"#;
+        let c: Config = toml::from_str(config_str).unwrap();
+        assert!(Lookups::new(&c).is_err());
     }
 }

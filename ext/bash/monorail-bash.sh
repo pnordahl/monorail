@@ -104,30 +104,30 @@ function process_exec {
 		log_verbose "$(printf "source:             %s" "$src")"
 	done
 
-	# set optional 'inspect change' parameters
-	monorail_inspect_change_args=("inspect" "change" "--targets-only")
+	# set optional 'analyze' parameters
+	monorail_analyze_args=("analyze")
 	if [ "$vcs_use" == "git" ]; then
-		monorail_inspect_change_args+=("--git-path" "$git_path")
+		monorail_analyze_args+=("--git-path" "$git_path")
 		if [ "$use_libgit2_status" == true ]; then
-			monorail_inspect_change_args+=("--use-libgit2-status")
+			monorail_analyze_args+=("--use-libgit2-status")
 		fi
 	fi
 
 	if [ -n "${start}" ]; then
-		monorail_inspect_change_args+=("-s" "$start")
+		monorail_analyze_args+=("-s" "$start")
 	fi
 	if [ -n "${end}" ]; then
-		monorail_inspect_change_args+=("-e" "$end")
+		monorail_analyze_args+=("-e" "$end")
 	fi
 	if [ ${#targets[@]} -eq 0 ]; then
 	    # extract targets for execution from monorail
-	    targets_str=$($monorail_path "${monorail_args[@]}" "${monorail_inspect_change_args[@]}")
+	    targets_str=$($monorail_path "${monorail_args[@]}" "${monorail_analyze_args[@]}")
 		exit_if_error $? "Error getting monorail targets"
 
-		targets_str=$(jq -r '.[]' <<< "$targets_str")
+		targets_str=$(jq -r '.targets[]' <<< "$targets_str")
 		IFS=$'\n' read -rd '' -a targets <<< "$targets_str"
 		for target in "${targets[@]}"; do
-			log_verbose "$(printf "target (inferred):             %s" "$target")"
+			log_verbose "$(printf "target (inferred):  %s" "$target")"
 		done
 	fi
 
