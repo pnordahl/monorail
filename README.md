@@ -568,7 +568,7 @@ monorail-bash exec -c hello_world
 
 which prints...
 ```
-Hello, world.. from rust!
+Hello, world... from rust!
 ```
 
 Notice that we did not have to specify targets; `monorail-bash` used the output from `monorail analyze` to figure that out and then call the `hello_world` function for those targets that have defined it.
@@ -593,7 +593,7 @@ Sep 03 09:40:17 monorail-bash : target (inferred):  rust
 Sep 03 09:40:17 monorail-bash : target (inferred):  rust/target1
 Sep 03 09:40:17 monorail-bash : target (inferred):  rust/target2
 Sep 03 09:40:17 monorail-bash : Executing command; command: hello_world, target: rust
-Hello, world.. from rust!
+Hello, world... from rust!
 Sep 03 09:40:17 monorail-bash : NOTE: Script not found; command: hello_world, target: rust/target1
 Sep 03 09:40:17 monorail-bash : NOTE: Script not found; command: hello_world, target: rust/target2
 ```
@@ -622,7 +622,7 @@ monorail-bash exec -t rust -c hello_world
 ```
 
 ```
-Hello, world.. from rust!
+Hello, world... from rust!
 ```
 
 For more information, execute `monorail-bash -h`, and `monorail-bash exec -h`.
