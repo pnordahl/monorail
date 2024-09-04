@@ -390,7 +390,7 @@ fn analyze(
             .uses
             .common_prefix_search(&c.name)
             .for_each(|m: String| {
-                if let Some(v) = lookups.use2targets.get(&m) {
+                if let Some(v) = lookups.use2targets.get(m.as_str()) {
                     v.iter().for_each(|target| {
                         if let Some(change_targets) = change_targets.as_mut() {
                             change_targets.push(AnalyzedChangeTarget {
@@ -407,9 +407,9 @@ fn analyze(
             .ignores
             .common_prefix_search(&c.name)
             .for_each(|m: String| {
-                if let Some(v) = lookups.ignore2targets.get(&m) {
+                if let Some(v) = lookups.ignore2targets.get(m.as_str()) {
                     v.iter().for_each(|target| {
-                        add_targets.remove(target.as_str());
+                        add_targets.remove(*target);
                         if let Some(change_targets) = change_targets.as_mut() {
                             change_targets.push(AnalyzedChangeTarget {
                                 path: target.to_string(),
@@ -825,8 +825,8 @@ struct Lookups<'a> {
     links: Trie<u8>,
     ignores: Trie<u8>,
     uses: Trie<u8>,
-    use2targets: HashMap<&'a String, Vec<&'a String>>,
-    ignore2targets: HashMap<&'a String, Vec<&'a String>>,
+    use2targets: HashMap<&'a str, Vec<&'a str>>,
+    ignore2targets: HashMap<&'a str, Vec<&'a str>>,
 }
 impl<'a> Lookups<'a> {
     fn new(cfg: &'a Config) -> Result<Self, MonorailError> {
@@ -834,8 +834,8 @@ impl<'a> Lookups<'a> {
         let mut links_builder = TrieBuilder::new();
         let mut ignores_builder = TrieBuilder::new();
         let mut uses_builder = TrieBuilder::new();
-        let mut use2targets = HashMap::new();
-        let mut ignore2targets = HashMap::new();
+        let mut use2targets = HashMap::<&str, Vec<&str>>::new();
+        let mut ignore2targets = HashMap::<&str, Vec<&str>>::new();
 
         let mut seen_targets = HashSet::new();
         if let Some(targets) = cfg.targets.as_ref() {
@@ -856,13 +856,16 @@ impl<'a> Lookups<'a> {
                 if let Some(ignores) = target.ignores.as_ref() {
                     ignores.iter().for_each(|s| {
                         ignores_builder.push(s);
-                        ignore2targets.entry(s).or_insert(vec![]).push(&target.path);
+                        ignore2targets
+                            .entry(s.as_str())
+                            .or_default()
+                            .push(target.path.as_str());
                     });
                 }
                 if let Some(uses) = target.uses.as_ref() {
                     uses.iter().for_each(|s| {
-                        uses_builder.push(s);
-                        use2targets.entry(s).or_insert(vec![]).push(&target.path);
+                        uses_builder.push(s.as_str());
+                        use2targets.entry(s).or_default().push(target.path.as_str());
                     });
                 }
                 Ok(())
@@ -1457,8 +1460,6 @@ uses = [
     }
 
     #[test]
-    // TODO: get rid of this
-    #[allow(clippy::unnecessary_to_owned)]
     fn test_lookups() {
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let l = Lookups::new(&c).unwrap();
@@ -1488,13 +1489,11 @@ uses = [
             vec!["rust/Cargo.toml".to_string()]
         );
         assert_eq!(
-            *l.use2targets.get(&"rust/common".to_string()).unwrap(),
+            *l.use2targets.get("rust/common").unwrap(),
             vec!["rust/target"]
         );
         assert_eq!(
-            *l.ignore2targets
-                .get(&"rust/Cargo.toml".to_string())
-                .unwrap(),
+            *l.ignore2targets.get("rust/Cargo.toml").unwrap(),
             vec!["rust/target"]
         );
     }
