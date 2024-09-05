@@ -21,7 +21,7 @@ fn get_app() -> clap::Command {
     Command::new("monorail")
     .version(env!("CARGO_PKG_VERSION"))
     .author("Patrick Nordahl <plnordahl@gmail.com>")
-    .about("A monorepo overlay.")
+    .about("An overlay for effective monorepo development.")
     .arg(
         Arg::new("config-file")
             .short('f')
