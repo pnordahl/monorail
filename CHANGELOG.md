@@ -1,4 +1,12 @@
 # Change Log
+
+## [2.1.0] - 2024-09-05
+
+### Changed
+
+- '-d' working directory flag changed to '-w'
+- Delete local git tag when a checkpoint fails to push
+- Changed checkpoint id format from incrementing semver to incrementing `monorail-N`, N > 0
  
 ## [2.0.0] - 2024-09-03
   

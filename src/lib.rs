@@ -163,7 +163,6 @@ pub fn handle(cmd: clap::Command) {
                                 match handle_checkpoint_create(
                                     &cfg,
                                     HandleCheckpointInput {
-                                        checkpoint_type: create.get_one::<String>("type").unwrap(),
                                         dry_run: create.get_flag("dry-run"),
                                         git_path: create.get_one::<String>("git-path").unwrap(),
                                         use_libgit2_status: create.get_flag("use-libgit2-status"),
@@ -453,7 +452,7 @@ fn git_get_raw_changes(
     let start = match input.start {
         Some(s) => libgit2_find_oid(&repo, s)?,
         None => {
-            match libgit2_latest_tag(&repo, libgit2_find_oid(&repo, "HEAD")?)? {
+            match libgit2_latest_monorail_tag(&repo, libgit2_find_oid(&repo, "HEAD")?)? {
                 Some(lr) => lr.target_id(),
                 None => {
                     // no tags, use first commit of the repo
@@ -476,7 +475,6 @@ fn git_get_raw_changes(
 
 #[derive(Debug, Serialize)]
 struct HandleCheckpointInput<'a> {
-    checkpoint_type: &'a str,
     dry_run: bool,
     git_path: &'a str,
     use_libgit2_status: bool,
@@ -510,7 +508,7 @@ fn handle_checkpoint_create(
             }
 
             let end_oid = libgit2_find_oid(&repo, "HEAD")?;
-            let latest_tag = libgit2_latest_tag(&repo, end_oid)?;
+            let latest_tag = libgit2_latest_monorail_tag(&repo, end_oid)?;
             let start_oid = match &latest_tag {
                 Some(lt) => lt.target_id(),
                 None => {
@@ -558,10 +556,10 @@ fn handle_checkpoint_create(
             // get new tag name
             let tag_name = match latest_tag {
                 Some(latest_tag) => match latest_tag.name() {
-                    Some(name) => increment_semver(name, input.checkpoint_type)?,
-                    None => return Err("reference semver not provided".into()),
+                    Some(id) => increment_checkpoint_id(id)?,
+                    None => return Err("checkpoint tag has no name".into()),
                 },
-                None => increment_semver("v0.0.0", input.checkpoint_type)?,
+                None => "monorail-1".to_string(),
             };
 
             if !input.dry_run {
@@ -594,11 +592,24 @@ fn handle_checkpoint_create(
                     .output()
                     .expect("failed to push tags");
                 if !output.status.success() {
-                    return Err(format!(
-                        "failed to push tags: {}",
-                        std::str::from_utf8(&output.stderr)?
-                    )
-                    .into());
+                    // clean up the unpushable local tag
+                    match repo.tag_delete(&tag_name) {
+                        Ok(()) => {
+                            return Err(format!(
+                                "failed to push tags: {}",
+                                std::str::from_utf8(&output.stderr)?
+                            )
+                            .into());
+                        }
+                        Err(e) => {
+                            return Err(format!(
+                                "failed to push tags: {}, and failed to delete local tag: {}",
+                                std::str::from_utf8(&output.stderr)?,
+                                e
+                            )
+                            .into());
+                        }
+                    }
                 }
             }
 
@@ -608,6 +619,28 @@ fn handle_checkpoint_create(
                 dry_run: input.dry_run,
             })
         }
+    }
+}
+
+// Generates a new checkpoint id given an existing one
+fn increment_checkpoint_id(id: &str) -> Result<String, MonorailError> {
+    match id.strip_prefix("monorail-") {
+        Some(s) => Ok(format!(
+            "monorail-{}",
+            s.parse::<usize>()
+                .map_err(|e| {
+                    MonorailError {
+                        class: ErrorClass::ParseIntError,
+                        message: format!("expected integer to increment for checkpoint: {}", e),
+                    }
+                })?
+                .checked_add(1)
+                .ok_or(MonorailError::from(format!(
+                    "checkpoint id increment would overflow: {}",
+                    s
+                )))?
+        )),
+        None => Err(format!("expected checkpoint id with prefix 'monorail-', got {}", id).into()),
     }
 }
 
@@ -657,17 +690,18 @@ fn git_cmd_status_changes(s: Vec<u8>) -> Vec<RawChange> {
     v
 }
 
-// given a commit, find the earliest annotated tag behind it
+// given a commit, find the earliest annotated "monorail-N" tag behind it
 // NOTE: this is pub for now, since it's used in integration tests;
 // once the `checkpoint list` command is done, make this private
 // and move integration tests to the command
-pub fn libgit2_latest_tag(
+pub fn libgit2_latest_monorail_tag(
     repo: &git2::Repository,
     oid: git2::Oid,
 ) -> Result<Option<git2::Tag>, git2::Error> {
     let o = repo.find_object(oid, None)?;
 
-    let dopts = git2::DescribeOptions::new();
+    let mut dopts = git2::DescribeOptions::new();
+    dopts.pattern("monorail-*[0-9]");
     let d = o.describe(&dopts);
     match d {
         Ok(d) => {
@@ -794,32 +828,6 @@ fn libgit2_find_oid(repo: &git2::Repository, s: &str) -> Result<git2::Oid, Monor
     }
 }
 
-fn increment_semver(semver: &str, checkpoint_type: &str) -> Result<String, MonorailError> {
-    let v: Vec<&str> = semver.trim_start_matches('v').split('.').collect();
-    if v.len() != 3 {
-        return Err(format!("semver should have 3 parts, it has {}", v.len()).into());
-    }
-    let mut major = v[0].parse::<i32>()?;
-    let mut minor = v[1].parse::<i32>()?;
-    let mut patch = v[2].parse::<i32>()?;
-    match checkpoint_type {
-        "major" => {
-            major += 1;
-            minor = 0;
-            patch = 0;
-        }
-        "minor" => {
-            minor += 1;
-            patch = 0;
-        }
-        "patch" => {
-            patch += 1;
-        }
-        _ => return Err(format!("unrecognized checkpoint type {}", checkpoint_type).into()),
-    }
-    Ok(format!("v{}.{}.{}", major, minor, patch))
-}
-
 struct Lookups<'a> {
     targets: Trie<u8>,
     links: Trie<u8>,
@@ -924,7 +932,6 @@ struct Config {
     vcs: Vcs,
     #[serde(default)]
     extension: Extension,
-    // group: Option<Vec<Group>>,
     targets: Option<Vec<Target>>,
 }
 
@@ -1077,15 +1084,15 @@ uses = [
     }
 
     #[test]
-    fn test_libgit2_latest_tag() {
+    fn test_libgit2_latest_monorail_tag() {
         let (repo, repo_path) = get_repo(false);
         let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
-        let lt = libgit2_latest_tag(&repo, oid1).unwrap();
+        let lt = libgit2_latest_monorail_tag(&repo, oid1).unwrap();
         assert!(lt.is_none());
 
         let tag_oid = repo
             .tag(
-                "t1",
+                "monorail-1",
                 &repo.find_object(oid1, None).unwrap(),
                 &get_signature(),
                 "",
@@ -1100,7 +1107,10 @@ uses = [
             &[&get_commit(&repo, oid1)],
         );
         assert_eq!(
-            libgit2_latest_tag(&repo, oid2).unwrap().unwrap().id(),
+            libgit2_latest_monorail_tag(&repo, oid2)
+                .unwrap()
+                .unwrap()
+                .id(),
             tag_oid
         );
 
@@ -1235,21 +1245,11 @@ uses = [
     }
 
     #[test]
-    fn test_increment_semver() {
-        // invalid semver
-        assert!(increment_semver("kljfasldkjf", "").is_err());
-
-        // valid bump major
-        assert_eq!(increment_semver("v3.2.1", "major").unwrap(), "v4.0.0");
-
-        // valid bump minor
-        assert_eq!(increment_semver("v3.2.1", "minor").unwrap(), "v3.3.0");
-
-        // valid bump patch
-        assert_eq!(increment_semver("v3.2.1", "patch").unwrap(), "v3.2.2");
-
-        // initial version bump by type
-        assert_eq!(increment_semver("v0.0.0", "major").unwrap(), "v1.0.0");
+    fn test_increment_checkpoint_id() {
+        assert_eq!(
+            increment_checkpoint_id("monorail-1").unwrap(),
+            "monorail-2".to_string()
+        );
     }
 
     #[test]
