@@ -45,7 +45,7 @@ Monorail has a simple lexicon:
 
 `monorail` works by labeling filesystem paths within a repository as meaningful. These labels determine how changes reported by the vcs are interpreted. The label types are:
 
-* target: A unique container that can be referenced by change detection and script execution. For example, `ui`, `api`, and `database`, as directories carrying files specific to those projects, would be good candidates for being labeled as targets. So too would a parent directory like `apps`, because targets are _recursive_, which means that targets can lie within the path of other targets.
+* target: A unique container that can be referenced by change detection and script execution. For example, `ui`, `api`, and `database`, as directories carrying files specific to those projects, would be good candidates for being labeled as targets. You can also label directories containing multiple targets as a target (e.g. `apps` containing your projects).
 * links: A set of paths that recursively affect a target and any targets that lie in its path. For example, a `vendor` directory carrying copies of third-party code may require that all targets within a target's path subdirectories be re-tested.
 * uses: A set of paths that affect a target. For example, a directory called `common`, carrying files used by multiple targets might be referred to by multiple targets in their `uses` arrays.
 * ignores: a set of paths that do not affect a target
@@ -59,7 +59,7 @@ For executing code against targets, two more terms:
 
 _NOTE: this tutorial assumes a UNIX-like environment._
 
-In this tutorial, you'll learn:
+In this tutorial, you'll learn about:
 
   * mapping repository paths to targets
   * analyzing
@@ -114,7 +114,7 @@ _NOTE_: All filesystem locations specified in `Monorail.toml` are relative to th
 
 ## Analyzing changes
 
-`monorail` will detect changes since the last checkpoint; see: [Checkpointing](##Checkpointing). For `git`, this means uncommitted, committed, and pushed files since the last annotated tag created by `monorail checkpoint create`.
+`monorail` will detect changes since the last checkpoint; see: [Checkpointing](#checkpointing). For `git`, this means uncommitted, committed, and pushed files since the last annotated tag created by `monorail checkpoint create`.
 
 ### Analyze showing no affected targets
 
@@ -223,7 +223,7 @@ Push, and view changes again:
 git push && monorail analyze | jq .
 ```
 
-As with the commit, `monorail` still knows about the changes after a push. The reason for this will be explained in the section on checkpointing below.
+As with the commit, `monorail` still knows about the changes after a push. The reason for this will be explained in the section on [Checkpointing](#checkpointing) below.
 
 ## Declaring "uses" and "links"
 

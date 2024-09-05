@@ -18,7 +18,7 @@ function print_help {
 	echo ""
 	echo "    -h               Display this help message."
 	echo "    -f <file>        The monorail configuration file to use. Default: Monorail.toml"
-	echo "    -d <path>        The directory to run commands from. Default: current directory"
+	echo "    -w <path>        The directory to run commands from. Default: current directory"
 	echo "    -v               Print extra information."
 	echo ""
 	echo "Subcommands:"
@@ -69,7 +69,7 @@ function process_exec {
 	fi
 
 	# build array of args to pass to monorail
-	monorail_args=("-f" "$config_file" "-d" "$working_directory")
+	monorail_args=("-f" "$config_file" "-w" "$working_directory")
 
 	if [ ${#commands[@]} -eq 0 ]; then
 	    log_error "error: no commands specified"
@@ -172,7 +172,7 @@ function execute_target_command {
 	local target=$2
 	local script=$3
 	pushd "$working_directory" > /dev/null || return
-	if [ ! -d "$target" ]; then
+	if [ ! -w "$target" ]; then
 		log_verbose  "$(printf "NOTE: Ignoring command for non-directory target; command: %s, target: %s" "$command" "$target")"
 		popd > /dev/null || return
 		return
@@ -199,7 +199,7 @@ function execute_target_command {
 }
 
 # parse options to `monorail-bash`
-while getopts "f:d:hv" opt; do
+while getopts "f:w:hv" opt; do
 	case "$opt" in
 		h )
 			print_help
@@ -208,7 +208,7 @@ while getopts "f:d:hv" opt; do
 		f )
 			config_file=$OPTARG
 			;;
-		d )
+		w )
 			working_directory=$OPTARG
 			;;
 		v )

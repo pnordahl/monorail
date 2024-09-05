@@ -594,11 +594,24 @@ fn handle_checkpoint_create(
                     .output()
                     .expect("failed to push tags");
                 if !output.status.success() {
-                    return Err(format!(
-                        "failed to push tags: {}",
-                        std::str::from_utf8(&output.stderr)?
-                    )
-                    .into());
+                    // clean up the unpushable local tag
+                    match repo.tag_delete(&tag_name) {
+                        Ok(()) => {
+                            return Err(format!(
+                                "failed to push tags: {}",
+                                std::str::from_utf8(&output.stderr)?
+                            )
+                            .into());
+                        }
+                        Err(e) => {
+                            return Err(format!(
+                                "failed to push tags: {}, and failed to delete local tag: {}",
+                                std::str::from_utf8(&output.stderr)?,
+                                e.to_string()
+                            )
+                            .into());
+                        }
+                    }
                 }
             }
 
@@ -924,7 +937,6 @@ struct Config {
     vcs: Vcs,
     #[serde(default)]
     extension: Extension,
-    // group: Option<Vec<Group>>,
     targets: Option<Vec<Target>>,
 }
 
