@@ -1,5 +1,5 @@
 # monorail
-> Transform any git repository into a monorepo.
+> An overlay for effective monorepo development.
 
 ![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=main)
 [![Cargo](https://img.shields.io/crates/v/monorail.svg)](https://crates.io/crates/monorail)
@@ -629,7 +629,7 @@ For more information, execute `monorail-bash -h`, and `monorail-bash exec -h`.
 
 ## Checkpointing
 
-`monorail` uses the backend VCS native mechanisms, e.g. tags in `git` as "checkpoint" markers. This creates a "checkpoint" for change detection. Without checkpoint tags, `monorail` is forced to search `git` history back to the first commit. This would be ineffecient and make change detection useless as all targets would be considered changed over a long enough timeline.
+`monorail` uses the backend VCS native mechanisms, e.g. tags in `git` as "checkpoint" markers. This creates a "checkpoint" for change detection. Without checkpoint tags, `monorail` is forced to search `git` history back to the first commit. This would be inefficient and make change detection useless, as all targets would be considered changed forever.
 
 When a checkpoint is created, it applies to all targets that were changed since the previous checkpoint (or the first commit of the repository, if no checkpoints yet exist).
 

@@ -1,10 +1,10 @@
 [package]
 name = "monorail"
-description = "A monorepo overlay."
+description = "An overlay for effective monorepo development."
 license = "MIT"
 homepage = "https://github.com/pnordahl/monorail"
 repository = "https://github.com/pnordahl/monorail"
-version = "2.1.0"
+version = "2.1.1"
 authors = ["Patrick Nordahl <plnordahl@gmail.com>"]
 edition = "2021"
 keywords = ["monorail", "monorepo"]
