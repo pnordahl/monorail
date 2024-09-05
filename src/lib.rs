@@ -640,11 +640,7 @@ fn increment_checkpoint_id(id: &str) -> Result<String, MonorailError> {
                     s
                 )))?
         )),
-        None => {
-            return Err(
-                format!("expected checkpoint id with prefix 'monorail-', got {}", id).into(),
-            )
-        }
+        None => Err(format!("expected checkpoint id with prefix 'monorail-', got {}", id).into()),
     }
 }
 
