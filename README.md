@@ -647,7 +647,7 @@ monorail checkpoint create --dry-run -t patch | jq .
 
 ```json
 {
-  "id": "v0.0.1",
+  "id": "monorail-1",
   "targets": [
     "group1/Lockfile",
     "group1/common/library1",
@@ -669,7 +669,7 @@ monorail checkpoint create -t patch | jq .
 
 ```json
 {
-  "id": "v0.0.1",
+  "id": "monorail-1",
   "targets": [
     "group1/Lockfile",
     "group1/common/library1",
@@ -696,13 +696,13 @@ monorail analyze | jq .
 Finally, our newly-pushed tag is now in the remote. To see this, execute:
 
 ```sh
-git -C ../monorail-tutorial-remote show -s --format=%B v0.0.1
+git -C ../monorail-tutorial-remote show -s --format=%B monorail-1
 ```
 
 ... which outputs
 
 ```
-tag v0.0.1
+tag monorail-1
 Tagger: John Doe <john.doe@gmail.com>
 
 rust

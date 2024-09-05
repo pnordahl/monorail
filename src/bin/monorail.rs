@@ -55,16 +55,6 @@ fn get_app() -> clap::Command {
             .arg(arg_git_path.clone())
             .arg(arg_use_libgit2_status.clone())
             .arg(
-                Arg::new("type")
-                    .short('t')
-                    .long("type")
-                    .help("Semver component to increment for this checkpoint")
-                    .value_parser(["patch", "minor", "major"])
-                    .ignore_case(true)
-                    .required(true)
-                    .num_args(1),
-            )
-            .arg(
                 Arg::new("dry-run")
                     .short('d')
                     .long("dry-run")
