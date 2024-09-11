@@ -192,8 +192,12 @@ impl PartialOrd for AnalyzedChangeTarget {
 enum AnalyzedChangeTargetReason {
     #[serde(rename = "target")]
     Target,
+    #[serde(rename = "target_parent")]
+    TargetParent,
     #[serde(rename = "uses")]
     Uses,
+    #[serde(rename = "uses_target_parent")]
+    UsesTargetParent,
     #[serde(rename = "ignores")]
     Ignores,
 }
@@ -254,7 +258,7 @@ fn analyze<'a>(
                             if let Some(change_targets) = change_targets.as_mut() {
                                 change_targets.push(AnalyzedChangeTarget {
                                     path: target2.to_owned(),
-                                    reason: AnalyzedChangeTargetReason::Target,
+                                    reason: AnalyzedChangeTargetReason::TargetParent,
                                 });
                             }
                             add_targets.insert(target2);
@@ -281,7 +285,7 @@ fn analyze<'a>(
                                     if let Some(change_targets) = change_targets.as_mut() {
                                         change_targets.push(AnalyzedChangeTarget {
                                             path: target2.to_owned(),
-                                            reason: AnalyzedChangeTargetReason::Target,
+                                            reason: AnalyzedChangeTargetReason::UsesTargetParent,
                                         });
                                     }
                                     add_targets.insert(target2);
@@ -1347,14 +1351,18 @@ uses = [
         }];
         let target1 = "rust";
         let target2 = "rust/target";
-        let expected_targets = vec![target1.to_string()];
-        let expected_target_groups = vec![vec![target1.to_string()], vec![target1.to_string()]];
+        let expected_targets = vec![target1.to_string(), target2.to_string()];
+        let expected_target_groups = vec![vec![target1.to_string()], vec![target2.to_string()]];
         let expected_changes = vec![AnalyzedChange {
             path: change1.to_string(),
             targets: Some(vec![
                 AnalyzedChangeTarget {
                     path: target1.to_string(),
                     reason: AnalyzedChangeTargetReason::Target,
+                },
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::TargetParent,
                 },
                 AnalyzedChangeTarget {
                     path: target2.to_string(),
@@ -1387,7 +1395,7 @@ uses = [
             targets: Some(vec![
                 AnalyzedChangeTarget {
                     path: target1.to_string(),
-                    reason: AnalyzedChangeTargetReason::Target,
+                    reason: AnalyzedChangeTargetReason::UsesTargetParent,
                 },
                 AnalyzedChangeTarget {
                     path: target2.to_string(),
@@ -1419,6 +1427,14 @@ uses = [
             targets: Some(vec![
                 AnalyzedChangeTarget {
                     path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::Target,
+                },
+                AnalyzedChangeTarget {
+                    path: target1.to_string(),
+                    reason: AnalyzedChangeTargetReason::TargetParent,
+                },
+                AnalyzedChangeTarget {
+                    path: target2.to_string(),
                     reason: AnalyzedChangeTargetReason::Target,
                 },
                 AnalyzedChangeTarget {
