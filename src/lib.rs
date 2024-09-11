@@ -192,8 +192,6 @@ impl PartialOrd for AnalyzedChangeTarget {
 enum AnalyzedChangeTargetReason {
     #[serde(rename = "target")]
     Target,
-    #[serde(rename = "links")]
-    Links,
     #[serde(rename = "uses")]
     Uses,
     #[serde(rename = "ignores")]
@@ -269,38 +267,6 @@ fn analyze<'a>(
                     });
                 }
                 add_targets.insert(target);
-            });
-        lookups
-            .links
-            .common_prefix_search(&c.name)
-            .for_each(|link: String| {
-                // find any targets that have this link as a prefix, aka set Lt
-                lookups
-                    .targets
-                    .common_prefix_search(&link)
-                    .for_each(|parent: String| {
-                        if let Some(change_targets) = change_targets.as_mut() {
-                            change_targets.push(AnalyzedChangeTarget {
-                                path: parent.to_owned(),
-                                reason: AnalyzedChangeTargetReason::Links,
-                            });
-                        }
-                        // find all children of matched targets
-                        lookups
-                            .targets
-                            .postfix_search(&parent)
-                            .for_each(|child: String| {
-                                let child_path = format!("{}{}", &parent, child);
-                                if let Some(change_targets) = change_targets.as_mut() {
-                                    change_targets.push(AnalyzedChangeTarget {
-                                        path: child_path.to_owned(),
-                                        reason: AnalyzedChangeTargetReason::Links,
-                                    });
-                                }
-                                add_targets.insert(child_path);
-                            });
-                        add_targets.insert(parent);
-                    });
             });
         lookups
             .uses
@@ -793,7 +759,6 @@ fn libgit2_find_oid(repo: &git2::Repository, s: &str) -> Result<git2::Oid, Monor
 
 struct Lookups<'a> {
     targets: Trie<u8>,
-    links: Trie<u8>,
     ignores: Trie<u8>,
     uses: Trie<u8>,
     use2targets: HashMap<&'a str, Vec<&'a str>>,
@@ -803,7 +768,6 @@ struct Lookups<'a> {
 impl<'a> Lookups<'a> {
     fn new(cfg: &'a Config) -> Result<Self, MonorailError> {
         let mut targets_builder = TrieBuilder::new();
-        let mut links_builder = TrieBuilder::new();
         let mut ignores_builder = TrieBuilder::new();
         let mut uses_builder = TrieBuilder::new();
         let mut use2targets = HashMap::<&str, Vec<&str>>::new();
@@ -825,11 +789,7 @@ impl<'a> Lookups<'a> {
                 }
                 dag.set_label(target.path.to_owned(), i);
                 targets_builder.push(&target.path);
-                if let Some(links) = target.links.as_ref() {
-                    links.iter().for_each(|s| {
-                        links_builder.push(s);
-                    });
-                }
+
                 if let Some(ignores) = target.ignores.as_ref() {
                     ignores.iter().for_each(|s| {
                         ignores_builder.push(s);
@@ -894,7 +854,6 @@ impl<'a> Lookups<'a> {
 
         Ok(Self {
             targets: targets_trie,
-            links: links_builder.build(),
             ignores: ignores_builder.build(),
             uses: uses_builder.build(),
             use2targets,
@@ -1037,9 +996,6 @@ impl Default for ExtensionBashExec {
 struct Target {
     // The filesystem path, relative to the repository root.
     path: String,
-    // Paths that should affect targets that lie in the subdirectory
-    // tree of this target.
-    links: Option<Vec<String>>,
     // Out-of-path directories that should affect this target. If this
     // path lies within a target, then a dependency for this target
     // on the other target.
@@ -1073,16 +1029,14 @@ mod tests {
     const RAW_CONFIG: &str = r#"
 [[targets]]
 path = "rust"
-links = [
-    "rust/vendor",
-    "rust/Cargo.toml",
-]
+
 [[targets]]
 path = "rust/target"
 ignores = [
-    "rust/Cargo.toml"
+    "rust/target/ignoreme.txt"
 ]
 uses = [
+    "rust/vendor",
     "common"
 ]
 "#;
@@ -1384,16 +1338,17 @@ uses = [
         assert_eq!(o.targets, expected_targets);
         assert_eq!(o.target_groups, Some(expected_target_groups));
     }
+
     #[test]
-    fn test_analyze_target_links() {
-        let change1 = "rust/vendor";
+    fn test_analyze_target_ancestors() {
+        let change1 = "rust/target/foo.txt";
         let changes = vec![RawChange {
             name: change1.to_string(),
         }];
         let target1 = "rust";
         let target2 = "rust/target";
-        let expected_targets = vec![target1.to_string(), target2.to_string()];
-        let expected_target_groups = vec![vec![target1.to_string()], vec![target2.to_string()]];
+        let expected_targets = vec![target1.to_string()];
+        let expected_target_groups = vec![vec![target1.to_string()], vec![target1.to_string()]];
         let expected_changes = vec![AnalyzedChange {
             path: change1.to_string(),
             targets: Some(vec![
@@ -1402,12 +1357,8 @@ uses = [
                     reason: AnalyzedChangeTargetReason::Target,
                 },
                 AnalyzedChangeTarget {
-                    path: target1.to_string(),
-                    reason: AnalyzedChangeTargetReason::Links,
-                },
-                AnalyzedChangeTarget {
                     path: target2.to_string(),
-                    reason: AnalyzedChangeTargetReason::Links,
+                    reason: AnalyzedChangeTargetReason::Target,
                 },
             ]),
         }];
@@ -1456,7 +1407,7 @@ uses = [
 
     #[test]
     fn test_analyze_target_ignores() {
-        let change1 = "rust/Cargo.toml";
+        let change1 = "rust/target/ignoreme.txt";
         let changes = vec![RawChange {
             name: change1.to_string(),
         }];
@@ -1469,14 +1420,6 @@ uses = [
                 AnalyzedChangeTarget {
                     path: target1.to_string(),
                     reason: AnalyzedChangeTargetReason::Target,
-                },
-                AnalyzedChangeTarget {
-                    path: target1.to_string(),
-                    reason: AnalyzedChangeTargetReason::Links,
-                },
-                AnalyzedChangeTarget {
-                    path: target2.to_string(),
-                    reason: AnalyzedChangeTargetReason::Links,
                 },
                 AnalyzedChangeTarget {
                     path: target2.to_string(),
@@ -1506,12 +1449,6 @@ uses = [
             vec!["rust".to_string(), "rust/target".to_string()]
         );
         assert_eq!(
-            l.links
-                .common_prefix_search("rust/Cargo.toml")
-                .collect::<Vec<String>>(),
-            vec!["rust/Cargo.toml".to_string()]
-        );
-        assert_eq!(
             l.uses
                 .common_prefix_search("common/foo.txt")
                 .collect::<Vec<String>>(),
@@ -1519,14 +1456,14 @@ uses = [
         );
         assert_eq!(
             l.ignores
-                .common_prefix_search("rust/Cargo.toml")
+                .common_prefix_search("rust/target/ignoreme.txt")
                 .collect::<Vec<String>>(),
-            vec!["rust/Cargo.toml".to_string()]
+            vec!["rust/target/ignoreme.txt".to_string()]
         );
         // lies within `rust` target, so it's in the dag, not the map
         assert_eq!(*l.use2targets.get("common").unwrap(), vec!["rust/target"]);
         assert_eq!(
-            *l.ignore2targets.get("rust/Cargo.toml").unwrap(),
+            *l.ignore2targets.get("rust/target/ignoreme.txt").unwrap(),
             vec!["rust/target"]
         );
     }
