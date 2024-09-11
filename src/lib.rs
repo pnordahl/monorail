@@ -1,10 +1,10 @@
 pub mod common;
+mod depend;
+mod error;
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::env;
-use std::error::Error;
-use std::fmt;
 
 use std::io::Write;
 
@@ -22,104 +22,9 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use trie_rs::{Trie, TrieBuilder};
 
-#[derive(Debug, Serialize, Eq, PartialEq)]
-enum ErrorClass {
-    #[serde(rename = "generic")]
-    Generic,
-    #[serde(rename = "git2")]
-    Git2,
-    #[serde(rename = "io")]
-    Io,
-    #[serde(rename = "toml_deserialize")]
-    TomlDeserialize,
-    #[serde(rename = "serde_json")]
-    SerdeJSON,
-    #[serde(rename = "utf8")]
-    Utf8Error,
-    #[serde(rename = "parse_int")]
-    ParseIntError,
-}
+use crate::error::{ErrorClass, MonorailError};
 
-#[derive(Debug, Serialize, Eq, PartialEq)]
-struct MonorailError {
-    class: ErrorClass,
-    message: String,
-}
-impl Error for MonorailError {}
-impl fmt::Display for MonorailError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "class: {:?}, message: {}", self.class, self.message)
-    }
-}
-impl From<git2::Error> for MonorailError {
-    fn from(error: git2::Error) -> Self {
-        MonorailError {
-            class: ErrorClass::Git2,
-            message: format!(
-                "class: {:?}, code: {:?}, message: {:?}",
-                error.class(),
-                error.code(),
-                error.message()
-            ),
-        }
-    }
-}
-impl From<&str> for MonorailError {
-    fn from(error: &str) -> Self {
-        MonorailError {
-            class: ErrorClass::Generic,
-            message: error.to_string(),
-        }
-    }
-}
-impl From<String> for MonorailError {
-    fn from(error: String) -> Self {
-        MonorailError {
-            class: ErrorClass::Generic,
-            message: error,
-        }
-    }
-}
-impl From<std::io::Error> for MonorailError {
-    fn from(error: std::io::Error) -> Self {
-        MonorailError {
-            class: ErrorClass::Io,
-            message: error.to_string(),
-        }
-    }
-}
-impl From<std::str::Utf8Error> for MonorailError {
-    fn from(error: std::str::Utf8Error) -> Self {
-        MonorailError {
-            class: ErrorClass::Utf8Error,
-            message: error.to_string(),
-        }
-    }
-}
-impl From<toml::de::Error> for MonorailError {
-    fn from(error: toml::de::Error) -> Self {
-        MonorailError {
-            class: ErrorClass::TomlDeserialize,
-            message: error.to_string(),
-        }
-    }
-}
-impl From<serde_json::error::Error> for MonorailError {
-    fn from(error: serde_json::error::Error) -> Self {
-        MonorailError {
-            class: ErrorClass::SerdeJSON,
-            message: error.to_string(),
-        }
-    }
-}
-impl From<std::num::ParseIntError> for MonorailError {
-    fn from(error: std::num::ParseIntError) -> Self {
-        MonorailError {
-            class: ErrorClass::ParseIntError,
-            message: error.to_string(),
-        }
-    }
-}
+const CHECKPOINT_PREFIX: &str = "monorail-";
 
 fn exit_with_error(err: MonorailError, fmt: &str) {
     write_output(std::io::stderr(), &err, fmt).unwrap();
@@ -194,6 +99,7 @@ pub fn handle(cmd: clap::Command) {
                                 },
                                 show_changes: analyze.get_flag("show-changes"),
                                 show_change_targets: analyze.get_flag("show-change-targets"),
+                                show_target_groups: analyze.get_flag("show-target-groups"),
                             };
                             match handle_analyze(&cfg, &i, &wd) {
                                 Ok(ref output) => {
@@ -248,12 +154,15 @@ struct AnalyzeInput<'a> {
     git_change_options: GitChangeOptions<'a>,
     show_changes: bool,
     show_change_targets: bool,
+    show_target_groups: bool,
 }
 #[derive(Serialize, Debug)]
 struct AnalyzeOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     changes: Option<Vec<AnalyzedChange>>,
     targets: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_groups: Option<Vec<Vec<String>>>,
 }
 
 #[derive(Serialize, Debug, Eq, PartialEq)]
@@ -305,30 +214,23 @@ fn handle_analyze<'a>(
                 changes,
                 input.show_changes,
                 input.show_change_targets,
+                input.show_target_groups,
             )
         }
     }
 }
 
-// set of common prefix ignores         = I
-// set of common prefix ignores targets = It
-// set of common prefix links           = L
-// set of common prefix links targets   = Lt
-// set of common prefix uses            = U
-// set of common prefix uses targets    = Ut
-// set of common prefix targets         = T
-// set of output targets                = O
-
-// O = T + Ut + Lt - It
-fn analyze(
-    lookups: Lookups,
+fn analyze<'a>(
+    mut lookups: Lookups<'a>,
     changes: Vec<RawChange>,
     show_changes: bool,
     show_change_targets: bool,
+    show_target_groups: bool,
 ) -> Result<AnalyzeOutput, MonorailError> {
     let mut output = AnalyzeOutput {
         changes: if show_changes { Some(vec![]) } else { None },
         targets: vec![],
+        target_groups: None,
     };
 
     let mut output_targets = HashSet::new();
@@ -345,6 +247,21 @@ fn analyze(
             .targets
             .common_prefix_search(&c.name)
             .for_each(|target: String| {
+                // additionally, add any targets that lie further up from this target
+                lookups
+                    .targets
+                    .common_prefix_search(&target)
+                    .for_each(|target2: String| {
+                        if target2 != target {
+                            if let Some(change_targets) = change_targets.as_mut() {
+                                change_targets.push(AnalyzedChangeTarget {
+                                    path: target2.to_owned(),
+                                    reason: AnalyzedChangeTargetReason::Target,
+                                });
+                            }
+                            add_targets.insert(target2);
+                        }
+                    });
                 if let Some(change_targets) = change_targets.as_mut() {
                     change_targets.push(AnalyzedChangeTarget {
                         path: target.to_owned(),
@@ -391,6 +308,20 @@ fn analyze(
             .for_each(|m: String| {
                 if let Some(v) = lookups.use2targets.get(m.as_str()) {
                     v.iter().for_each(|target| {
+                        // additionally, add any targets that lie further up from this target
+                        lookups.targets.common_prefix_search(&target).for_each(
+                            |target2: String| {
+                                if &target2 != target {
+                                    if let Some(change_targets) = change_targets.as_mut() {
+                                        change_targets.push(AnalyzedChangeTarget {
+                                            path: target2.to_owned(),
+                                            reason: AnalyzedChangeTargetReason::Target,
+                                        });
+                                    }
+                                    add_targets.insert(target2);
+                                }
+                            },
+                        );
                         if let Some(change_targets) = change_targets.as_mut() {
                             change_targets.push(AnalyzedChangeTarget {
                                 path: target.to_string(),
@@ -440,6 +371,33 @@ fn analyze(
         output.targets.push(t.to_owned());
     }
     output.targets.sort();
+
+    if show_target_groups {
+        let groups = lookups.dag.get_groups()?;
+
+        // prune the groups to contain only affected targets
+        let mut pruned_groups: Vec<Vec<String>> = vec![];
+        for group in groups.iter().rev() {
+            let mut pg: Vec<String> = vec![];
+            for id in group {
+                let label = lookups
+                    .dag
+                    .node2label
+                    .get(id)
+                    .ok_or_else(|| MonorailError {
+                        class: ErrorClass::DependencyGraph,
+                        message: format!("Node {} label not found", id),
+                    })?;
+                if output_targets.contains::<String>(&label) {
+                    pg.push(label.to_owned());
+                }
+            }
+            if !pg.is_empty() {
+                pruned_groups.push(pg);
+            }
+        }
+        output.target_groups = Some(pruned_groups);
+    }
 
     Ok(output)
 }
@@ -545,7 +503,7 @@ fn handle_checkpoint_create(
                 input.git_path,
             )?;
             let lookups = Lookups::new(cfg)?;
-            let o = analyze(lookups, changes, true, false)?;
+            let o = analyze(lookups, changes, true, false, false)?;
 
             if let Some(ref changes) = o.changes {
                 if changes.is_empty() {
@@ -559,7 +517,7 @@ fn handle_checkpoint_create(
                     Some(id) => increment_checkpoint_id(id)?,
                     None => return Err("checkpoint tag has no name".into()),
                 },
-                None => "monorail-1".to_string(),
+                None => format!("{}1", CHECKPOINT_PREFIX),
             };
 
             if !input.dry_run {
@@ -624,9 +582,10 @@ fn handle_checkpoint_create(
 
 // Generates a new checkpoint id given an existing one
 fn increment_checkpoint_id(id: &str) -> Result<String, MonorailError> {
-    match id.strip_prefix("monorail-") {
+    match id.strip_prefix(CHECKPOINT_PREFIX) {
         Some(s) => Ok(format!(
-            "monorail-{}",
+            "{}{}",
+            CHECKPOINT_PREFIX,
             s.parse::<usize>()
                 .map_err(|e| {
                     MonorailError {
@@ -640,7 +599,11 @@ fn increment_checkpoint_id(id: &str) -> Result<String, MonorailError> {
                     s
                 )))?
         )),
-        None => Err(format!("expected checkpoint id with prefix 'monorail-', got {}", id).into()),
+        None => Err(format!(
+            "expected checkpoint id with prefix '{}', got {}",
+            CHECKPOINT_PREFIX, id
+        )
+        .into()),
     }
 }
 
@@ -690,7 +653,7 @@ fn git_cmd_status_changes(s: Vec<u8>) -> Vec<RawChange> {
     v
 }
 
-// given a commit, find the earliest annotated "monorail-N" tag behind it
+// given a commit, find the earliest annotated monorail tag behind it
 // NOTE: this is pub for now, since it's used in integration tests;
 // once the `checkpoint list` command is done, make this private
 // and move integration tests to the command
@@ -701,7 +664,7 @@ pub fn libgit2_latest_monorail_tag(
     let o = repo.find_object(oid, None)?;
 
     let mut dopts = git2::DescribeOptions::new();
-    dopts.pattern("monorail-*[0-9]");
+    dopts.pattern(format!("{}*[0-9]", CHECKPOINT_PREFIX).as_str());
     let d = o.describe(&dopts);
     match d {
         Ok(d) => {
@@ -835,6 +798,7 @@ struct Lookups<'a> {
     uses: Trie<u8>,
     use2targets: HashMap<&'a str, Vec<&'a str>>,
     ignore2targets: HashMap<&'a str, Vec<&'a str>>,
+    dag: depend::Dag,
 }
 impl<'a> Lookups<'a> {
     fn new(cfg: &'a Config) -> Result<Self, MonorailError> {
@@ -845,16 +809,21 @@ impl<'a> Lookups<'a> {
         let mut use2targets = HashMap::<&str, Vec<&str>>::new();
         let mut ignore2targets = HashMap::<&str, Vec<&str>>::new();
 
-        let mut seen_targets = HashSet::new();
+        let num_targets = match cfg.targets.as_ref() {
+            Some(ref targets) => targets.len(),
+            None => 0,
+        };
+        let mut dag = depend::Dag::new(num_targets);
+
         if let Some(targets) = cfg.targets.as_ref() {
-            targets.iter().try_for_each(|target| {
-                if seen_targets.contains(&target.path) {
+            targets.iter().enumerate().try_for_each(|(i, target)| {
+                if dag.label2node.contains_key(target.path.as_str()) {
                     return Err(MonorailError {
                         class: ErrorClass::Generic,
                         message: format!("Duplicate target path provided: {}", &target.path),
                     });
                 }
-                seen_targets.insert(&target.path);
+                dag.set_label(target.path.to_owned(), i);
                 targets_builder.push(&target.path);
                 if let Some(links) = target.links.as_ref() {
                     links.iter().for_each(|s| {
@@ -870,22 +839,67 @@ impl<'a> Lookups<'a> {
                             .push(target.path.as_str());
                     });
                 }
-                if let Some(uses) = target.uses.as_ref() {
-                    uses.iter().for_each(|s| {
-                        uses_builder.push(s.as_str());
-                        use2targets.entry(s).or_default().push(target.path.as_str());
-                    });
-                }
                 Ok(())
-            })?
+            })?;
         }
+
+        let targets_trie = targets_builder.build();
+
+        // process target uses and build up both the dependency graph, and the direct mapping of non-target uses to the affected targets
+        if let Some(targets) = cfg.targets.as_ref() {
+            targets.iter().enumerate().try_for_each(|(i, target)| {
+                // if this target is under an existing target, add it as a dep
+                let mut nodes = targets_trie
+                    .common_prefix_search(target.path.as_str())
+                    .filter(|t: &String| t != &target.path)
+                    .map(|t| {
+                        dag.label2node
+                            .get(t.as_str())
+                            .copied()
+                            .ok_or_else(|| MonorailError {
+                                class: ErrorClass::DependencyGraph,
+                                message: format!("Node {} not found", t),
+                            })
+                    })
+                    .collect::<Result<Vec<usize>, MonorailError>>()?;
+
+                if let Some(uses) = &target.uses {
+                    for s in uses {
+                        uses_builder.push(s.as_str());
+                        let matching_targets: Vec<String> =
+                            targets_trie.common_prefix_search(s.as_str()).collect();
+                        use2targets.entry(s).or_default().push(target.path.as_str());
+                        // a dependency has been established between this target and some
+                        // number of targets, so we update the graph
+                        nodes.extend(
+                            matching_targets
+                                .iter()
+                                .filter(|&t| t != &target.path)
+                                .map(|t| {
+                                    dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                                        MonorailError {
+                                            class: ErrorClass::DependencyGraph,
+                                            message: format!("Node {} not found", t),
+                                        }
+                                    })
+                                })
+                                .collect::<Result<Vec<usize>, MonorailError>>()?,
+                        );
+                    }
+                }
+                dag.set(i, nodes);
+                Ok::<(), MonorailError>(())
+            })?;
+        }
+
         Ok(Self {
-            targets: targets_builder.build(),
+            targets: targets_trie,
             links: links_builder.build(),
             ignores: ignores_builder.build(),
             uses: uses_builder.build(),
             use2targets,
             ignore2targets,
+            dag,
         })
     }
 }
@@ -1021,9 +1035,17 @@ impl Default for ExtensionBashExec {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Target {
+    // The filesystem path, relative to the repository root.
     path: String,
+    // Paths that should affect targets that lie in the subdirectory
+    // tree of this target.
     links: Option<Vec<String>>,
+    // Out-of-path directories that should affect this target. If this
+    // path lies within a target, then a dependency for this target
+    // on the other target.
     uses: Option<Vec<String>>,
+    // Paths that should not affect this target; has the highest
+    // precedence when evaluating a change.
     ignores: Option<Vec<String>>,
 }
 impl Config {
@@ -1061,7 +1083,7 @@ ignores = [
     "rust/Cargo.toml"
 ]
 uses = [
-    "rust/common"
+    "common"
 ]
 "#;
 
@@ -1092,7 +1114,7 @@ uses = [
 
         let tag_oid = repo
             .tag(
-                "monorail-1",
+                format!("{}1", CHECKPOINT_PREFIX).as_str(),
                 &repo.find_object(oid1, None).unwrap(),
                 &get_signature(),
                 "",
@@ -1247,29 +1269,32 @@ uses = [
     #[test]
     fn test_increment_checkpoint_id() {
         assert_eq!(
-            increment_checkpoint_id("monorail-1").unwrap(),
-            "monorail-2".to_string()
+            increment_checkpoint_id(format!("{}1", CHECKPOINT_PREFIX).as_str()).unwrap(),
+            format!("{}2", CHECKPOINT_PREFIX)
         );
+        assert!(increment_checkpoint_id("foo").is_err());
+        assert!(increment_checkpoint_id(format!("{}foo", CHECKPOINT_PREFIX).as_str()).is_err());
+        assert!(increment_checkpoint_id(
+            format!("{}{}", CHECKPOINT_PREFIX, std::usize::MAX).as_str()
+        )
+        .is_err());
     }
 
     #[test]
     fn test_trie() {
         let mut builder = TrieBuilder::new();
         builder.push("rust/target/project1/README.md");
-        builder.push("rust/common/log");
-        builder.push("rust/common/error");
+        builder.push("common/log");
+        builder.push("common/error");
         builder.push("rust/foo/log");
 
         let trie = builder.build();
 
         assert!(trie.exact_match("rust/target/project1/README.md"));
         let matches = trie
-            .common_prefix_search("rust/common/log/bar.rs")
+            .common_prefix_search("common/log/bar.rs")
             .collect::<Vec<String>>();
-        assert_eq!(
-            String::from_utf8_lossy(matches[0].as_bytes()),
-            "rust/common/log"
-        );
+        assert_eq!(String::from_utf8_lossy(matches[0].as_bytes()), "common/log");
     }
 
     #[test]
@@ -1282,7 +1307,7 @@ uses = [
         let changes = vec![];
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let lookups = Lookups::new(&c).unwrap();
-        let o = analyze(lookups, changes, true, false).unwrap();
+        let o = analyze(lookups, changes, true, false, false).unwrap();
 
         assert!(o.changes.unwrap().is_empty());
         assert!(o.targets.is_empty());
@@ -1302,10 +1327,11 @@ uses = [
 
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let lookups = Lookups::new(&c).unwrap();
-        let o = analyze(lookups, changes, true, true).unwrap();
+        let o = analyze(lookups, changes, true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
+        assert_eq!(o.target_groups, Some(vec![]));
     }
 
     #[test]
@@ -1316,6 +1342,7 @@ uses = [
         }];
         let target1 = "rust";
         let expected_targets = vec![target1.to_string()];
+        let expected_target_groups = vec![vec![target1.to_string()]];
         let expected_changes = vec![AnalyzedChange {
             path: change1.to_string(),
             targets: Some(vec![AnalyzedChangeTarget {
@@ -1326,10 +1353,11 @@ uses = [
 
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let lookups = Lookups::new(&c).unwrap();
-        let o = analyze(lookups, changes, true, true).unwrap();
+        let o = analyze(lookups, changes, true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
+        assert_eq!(o.target_groups, Some(expected_target_groups));
     }
     #[test]
     fn test_analyze_target() {
@@ -1339,6 +1367,7 @@ uses = [
         }];
         let target1 = "rust";
         let expected_targets = vec![target1.to_string()];
+        let expected_target_groups = vec![vec![target1.to_string()]];
         let expected_changes = vec![AnalyzedChange {
             path: change1.to_string(),
             targets: Some(vec![AnalyzedChangeTarget {
@@ -1349,10 +1378,11 @@ uses = [
 
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let lookups = Lookups::new(&c).unwrap();
-        let o = analyze(lookups, changes, true, true).unwrap();
+        let o = analyze(lookups, changes, true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
+        assert_eq!(o.target_groups, Some(expected_target_groups));
     }
     #[test]
     fn test_analyze_target_links() {
@@ -1363,6 +1393,7 @@ uses = [
         let target1 = "rust";
         let target2 = "rust/target";
         let expected_targets = vec![target1.to_string(), target2.to_string()];
+        let expected_target_groups = vec![vec![target1.to_string()], vec![target2.to_string()]];
         let expected_changes = vec![AnalyzedChange {
             path: change1.to_string(),
             targets: Some(vec![
@@ -1383,21 +1414,23 @@ uses = [
 
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let lookups = Lookups::new(&c).unwrap();
-        let o = analyze(lookups, changes, true, true).unwrap();
+        let o = analyze(lookups, changes, true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
+        assert_eq!(o.target_groups, Some(expected_target_groups));
     }
 
     #[test]
     fn test_analyze_target_uses() {
-        let change1 = "rust/common/foo.txt";
+        let change1 = "common/foo.txt";
         let changes = vec![RawChange {
             name: change1.to_string(),
         }];
         let target1 = "rust";
         let target2 = "rust/target";
         let expected_targets = vec![target1.to_string(), target2.to_string()];
+        let expected_target_groups = vec![vec![target1.to_string()], vec![target2.to_string()]];
         let expected_changes = vec![AnalyzedChange {
             path: change1.to_string(),
             targets: Some(vec![
@@ -1414,10 +1447,11 @@ uses = [
 
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let lookups = Lookups::new(&c).unwrap();
-        let o = analyze(lookups, changes, true, true).unwrap();
+        let o = analyze(lookups, changes, true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
+        assert_eq!(o.target_groups, Some(expected_target_groups));
     }
 
     #[test]
@@ -1453,10 +1487,11 @@ uses = [
 
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
         let lookups = Lookups::new(&c).unwrap();
-        let o = analyze(lookups, changes, true, true).unwrap();
+        let o = analyze(lookups, changes, true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
+        assert_eq!(o.target_groups, Some(vec![vec![target1.to_string()]]));
     }
 
     #[test]
@@ -1478,9 +1513,9 @@ uses = [
         );
         assert_eq!(
             l.uses
-                .common_prefix_search("rust/common/foo.txt")
+                .common_prefix_search("common/foo.txt")
                 .collect::<Vec<String>>(),
-            vec!["rust/common".to_string()]
+            vec!["common".to_string()]
         );
         assert_eq!(
             l.ignores
@@ -1488,10 +1523,8 @@ uses = [
                 .collect::<Vec<String>>(),
             vec!["rust/Cargo.toml".to_string()]
         );
-        assert_eq!(
-            *l.use2targets.get("rust/common").unwrap(),
-            vec!["rust/target"]
-        );
+        // lies within `rust` target, so it's in the dag, not the map
+        assert_eq!(*l.use2targets.get("common").unwrap(), vec!["rust/target"]);
         assert_eq!(
             *l.ignore2targets.get("rust/Cargo.toml").unwrap(),
             vec!["rust/target"]

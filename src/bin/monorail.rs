@@ -100,6 +100,13 @@ fn get_app() -> clap::Command {
                     .default_value_if("show-all", ArgPredicate::IsPresent, Some("true")),
             )
             .arg(
+                Arg::new("show-target-groups")
+                    .long("show-target-groups")
+                    .help("Display targets grouped according to the dependency graph. Each array in the output array contains the targets that are valid to execute in parallel.")
+                    .action(ArgAction::SetTrue)
+                    .default_value_if("show-all", ArgPredicate::IsPresent, Some("true")),
+            )
+            .arg(
                 Arg::new("show-all")
                     .long("show-all")
                     .help("Display changes, change targets, and targets")
