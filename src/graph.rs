@@ -1,6 +1,6 @@
-use crate::error::{ErrorClass, MonorailError};
+use crate::error::{GraphError, MonorailError};
 use std::cmp::{Eq, PartialEq};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Eq, PartialEq)]
 enum CycleState {
@@ -33,10 +33,24 @@ impl Dag {
         }
     }
 
-    // Update the given node in the dag and its label. This is not bounds checked,
-    // as our use of this graph has us always setting on a known graph size.
-    // NOTE: do not call this after another function that calls `set_cycle_state`,
-    // as this could make that value incorrect.
+    // TODO: test
+    pub fn get_labeled_groups(&mut self) -> Result<Vec<Vec<String>>, MonorailError> {
+        let groups = self.get_groups()?;
+        let mut o = Vec::with_capacity(groups.len());
+        for group in groups.iter().rev() {
+            let mut labels = vec![];
+            for node in group {
+                let label = self.node2label.get(node).ok_or_else(|| {
+                    MonorailError::DependencyGraph(GraphError::LabelNotFound(*node))
+                })?;
+                labels.push(label.to_owned());
+            }
+            o.push(labels);
+        }
+        Ok(o)
+    }
+
+    // Update the given node in the dag and its label. This is not bounds checked, as our use of this graph has us always setting on a known graph size. NOTE: do not call this after another function that calls `set_cycle_state`, as this could make that value incorrect.
     pub fn set(&mut self, node: usize, nodes: Vec<usize>) {
         self.adj_list[node] = nodes;
     }
@@ -47,9 +61,7 @@ impl Dag {
         self.node2label.insert(node, label);
     }
 
-    // Uses Kahn's Algorithm to walk the graph and build lists of nodes that
-    // are independent of each other at that level. In addition, this function
-    // will compute a cycle detection if it is not yet known.
+    // Uses Kahn's Algorithm to walk the graph and build lists of nodes that are independent of each other at that level. In addition, this function will compute a cycle detection if it is not yet known.
     pub fn get_groups(&mut self) -> Result<Vec<Vec<usize>>, MonorailError> {
         self.check_acyclic()?;
 
@@ -57,8 +69,7 @@ impl Dag {
         let mut in_degree = vec![0; self.adj_list.len()];
         let mut work = VecDeque::new();
 
-        // calculate in-degree for every node; i.e. the number of nodes that
-        // point to each node
+        // calculate in-degree for every node; i.e. the number of nodes that point to each node
         for nodes in self.adj_list.iter() {
             for &n in nodes {
                 in_degree[n] += 1;
@@ -101,20 +112,13 @@ impl Dag {
 
     fn check_acyclic(&self) -> Result<(), MonorailError> {
         if let CycleState::Yes(cycle_node) = self.cycle_state {
-            let label = self
-                .node2label
-                .get(&cycle_node)
-                .ok_or_else(|| MonorailError {
-                    class: ErrorClass::DependencyGraph,
-                    message: format!("Node {} label not found", &cycle_node),
-                })?;
-            return Err(MonorailError {
-                class: ErrorClass::DependencyGraph,
-                message: format!(
-                    "Cycle detected at node: '{}' ({}), aborting",
-                    label, cycle_node
-                ),
-            });
+            let label = self.node2label.get(&cycle_node).ok_or_else(|| {
+                MonorailError::DependencyGraph(GraphError::LabelNotFound(cycle_node))
+            })?;
+            return Err(MonorailError::DependencyGraph(GraphError::Cycle(
+                cycle_node,
+                label.to_owned(),
+            )));
         }
         Ok(())
     }
@@ -130,9 +134,9 @@ impl Dag {
     }
 }
 
+#[cfg(test)]
 mod tests {
-    use super::*;
-
+    use crate::depend::Dag;
     #[test]
     fn test_dag_set() {
         let mut dag = Dag::new(3);

@@ -33,6 +33,10 @@ entrypoint = "support/script/monorail-exec.sh"
 # * Optional. Default: []
 source = []
 
+# Whether or not to parallelize command execution using GNU parallel, informed and constrainted by the `uses` dependency graph.
+# * Optional. Default: true
+parallelize = true
+
 # An array of targets to configure.
 [[targets]]
 # The path for this target. The value is relative to the repository root. Targets with 
@@ -42,14 +46,6 @@ source = []
 # * Required
 path = "target1"
 
-# Path for which matching changes should affect all targets that are subdirectories of this target. 
-# Change paths that lie in this directory structure will add this target
-# and all targets that lie in subdirectories to the output target list.
-# * Optional. Default: []
-links = [
-    "target1/vendor",
-]
-
 # Path prefixes to ignore when determining if a change should affect this target.
 # These are evaluated last, and will override a matching 'link' or 'uses'.
 # Change paths that lie in subdirectories will remove this target from the output list.
@@ -57,10 +53,9 @@ links = [
 ignores = [
     "target1/ignore1"
 ]
-# References to path prefixes outside of this target's path that should affect 
-# this target.
+# References to path prefixes outside of this target's path that should affect this target. If a provided path lies within another target B's path, then this will establish a dependency between this target A on B.
 # Change paths that lie in this directory structure will add this target
-# to the output target list.
+# to the output target list, and optionally the target grouping.
 # * Optional. Default: []
 uses = [
     "common/library1"

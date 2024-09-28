@@ -1,104 +1,173 @@
+use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
-use std::error::Error;
-use std::fmt;
+use std::{fmt, io, num, str};
 
-#[derive(Debug, Serialize, Eq, PartialEq)]
-pub enum ErrorClass {
-    #[serde(rename = "generic")]
-    Generic,
-    #[serde(rename = "git2")]
-    Git2,
-    #[serde(rename = "io")]
-    Io,
-    #[serde(rename = "toml_deserialize")]
-    TomlDeserialize,
-    #[serde(rename = "serde_json")]
-    SerdeJSON,
-    #[serde(rename = "utf8")]
-    Utf8Error,
-    #[serde(rename = "parse_int")]
-    ParseIntError,
-    #[serde(rename = "dependency_graph")]
-    DependencyGraph,
+#[derive(Debug, Serialize)]
+pub enum GraphError {
+    LabelNotFound(usize),
+    Cycle(usize, String),
+    DuplicateLabel(String),
+    LabelNodeNotFound(String),
 }
-
-#[derive(Debug, Serialize, Eq, PartialEq)]
-pub struct MonorailError {
-    pub class: ErrorClass,
-    pub message: String,
-}
-impl Error for MonorailError {}
-impl fmt::Display for MonorailError {
+impl fmt::Display for GraphError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "class: {:?}, message: {}", self.class, self.message)
+        match self {
+            GraphError::LabelNotFound(node) => {
+                write!(f, "Label not found for node: {}", node)
+            }
+            GraphError::Cycle(node, label) => {
+                write!(f, "Cycle detected at node: {}, label: {}", node, label)
+            }
+            GraphError::DuplicateLabel(label) => {
+                write!(f, "Duplicate label provided: {}", label)
+            }
+            GraphError::LabelNodeNotFound(label) => {
+                write!(f, "Node not found for label: {}", label)
+            }
+        }
     }
 }
-impl From<git2::Error> for MonorailError {
-    fn from(error: git2::Error) -> Self {
-        MonorailError {
-            class: ErrorClass::Git2,
-            message: format!(
-                "class: {:?}, code: {:?}, message: {:?}",
-                error.class(),
-                error.code(),
-                error.message()
-            ),
-        }
+
+#[derive(Debug)]
+pub enum MonorailError {
+    Generic(String),
+    Git2(git2::Error),
+    Io(io::Error),
+    PathDNE(String),
+    TomlDeserialize(toml::de::Error),
+    SerdeJSON(serde_json::error::Error),
+    Utf8(str::Utf8Error),
+    ParseInt(num::ParseIntError),
+    DependencyGraph(GraphError),
+    Join(tokio::task::JoinError),
+    CheckpointNotFound(io::Error),
+}
+impl From<String> for MonorailError {
+    fn from(error: String) -> Self {
+        MonorailError::Generic(error)
     }
 }
 impl From<&str> for MonorailError {
     fn from(error: &str) -> Self {
-        MonorailError {
-            class: ErrorClass::Generic,
-            message: error.to_string(),
-        }
+        MonorailError::Generic(error.to_owned())
     }
 }
-impl From<String> for MonorailError {
-    fn from(error: String) -> Self {
-        MonorailError {
-            class: ErrorClass::Generic,
-            message: error,
-        }
+impl From<git2::Error> for MonorailError {
+    fn from(error: git2::Error) -> Self {
+        MonorailError::Git2(error)
     }
 }
 impl From<std::io::Error> for MonorailError {
     fn from(error: std::io::Error) -> Self {
-        MonorailError {
-            class: ErrorClass::Io,
-            message: error.to_string(),
-        }
+        MonorailError::Io(error)
     }
 }
 impl From<std::str::Utf8Error> for MonorailError {
     fn from(error: std::str::Utf8Error) -> Self {
-        MonorailError {
-            class: ErrorClass::Utf8Error,
-            message: error.to_string(),
-        }
+        MonorailError::Utf8(error)
     }
 }
 impl From<toml::de::Error> for MonorailError {
     fn from(error: toml::de::Error) -> Self {
-        MonorailError {
-            class: ErrorClass::TomlDeserialize,
-            message: error.to_string(),
-        }
+        MonorailError::TomlDeserialize(error)
     }
 }
 impl From<serde_json::error::Error> for MonorailError {
     fn from(error: serde_json::error::Error) -> Self {
-        MonorailError {
-            class: ErrorClass::SerdeJSON,
-            message: error.to_string(),
-        }
+        MonorailError::SerdeJSON(error)
     }
 }
 impl From<std::num::ParseIntError> for MonorailError {
     fn from(error: std::num::ParseIntError) -> Self {
-        MonorailError {
-            class: ErrorClass::ParseIntError,
-            message: error.to_string(),
+        MonorailError::ParseInt(error)
+    }
+}
+impl From<tokio::task::JoinError> for MonorailError {
+    fn from(error: tokio::task::JoinError) -> Self {
+        MonorailError::Join(error)
+    }
+}
+
+impl fmt::Display for MonorailError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MonorailError::Generic(error) => write!(f, "Error: {}", error),
+            MonorailError::Git2(error) => write!(f, "Git2 error: {}", error),
+            MonorailError::Io(error) => write!(f, "IO error: {}", error),
+            MonorailError::PathDNE(error) => write!(f, "Path does not exist: {}", error),
+            MonorailError::TomlDeserialize(error) => {
+                write!(f, "TOML deserialize error: {}", error)
+            }
+            MonorailError::SerdeJSON(error) => write!(f, "JSON error: {}", error),
+            MonorailError::Utf8(error) => write!(f, "UTF8 error: {}", error),
+            MonorailError::ParseInt(error) => write!(f, "Integer parsing error: {}", error),
+            MonorailError::DependencyGraph(error) => {
+                write!(f, "Dependency graph error: {}", error)
+            }
+            MonorailError::Join(error) => write!(f, "Task join error: {}", error),
+            MonorailError::CheckpointNotFound(error) => {
+                write!(f, "Tracking checkpoint open error: {}", error)
+            }
         }
     }
 }
+
+impl Serialize for MonorailError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Serialize the error as an object with "type" and "message" fields
+        let mut state = serializer.serialize_struct("MonorailError", 2)?;
+
+        match self {
+            MonorailError::Generic(_) => {
+                state.serialize_field("type", "generic")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::Git2(_) => {
+                state.serialize_field("type", "git2")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::Io(_) => {
+                state.serialize_field("type", "io")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::TomlDeserialize(_) => {
+                state.serialize_field("type", "toml_deserialize")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::SerdeJSON(_) => {
+                state.serialize_field("type", "json")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::Utf8(_) => {
+                state.serialize_field("type", "utf8")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::ParseInt(_) => {
+                state.serialize_field("type", "parse_int")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::DependencyGraph(_) => {
+                state.serialize_field("type", "dependency_graph")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::PathDNE(_) => {
+                state.serialize_field("type", "path_dne")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::Join(_) => {
+                state.serialize_field("type", "task_join")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::CheckpointNotFound(_) => {
+                state.serialize_field("type", "checkpoint_not_found")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+        }
+        state.end()
+    }
+}
+
+impl std::error::Error for MonorailError {}

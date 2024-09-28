@@ -3,8 +3,19 @@ use clap::{Arg, ArgAction, Command};
 
 fn main() {
     let app = get_app();
+    let matches = app.get_matches();
+    let output_format = matches.get_one::<String>("output-format").unwrap();
 
-    monorail::handle(app)
+    match monorail::handle(&matches, output_format) {
+        Ok(code) => {
+            std::process::exit(code);
+        }
+        Err(e) => {
+            monorail::write_result::<()>(&Err(e), output_format)
+                .expect("Failed to write fatal result");
+            std::process::exit(monorail::HANDLE_FATAL);
+        }
+    }
 }
 
 fn get_app() -> clap::Command {
@@ -17,6 +28,18 @@ fn get_app() -> clap::Command {
         .help("Absolute path to a `git` binary to use for certain operations. Defaults to `git` on PATH")
         .num_args(1)
         .default_value("git");
+    let arg_start = Arg::new("start")
+                .short('s')
+                .long("start")
+                .help("Start of the interval to consider for changes; if not provided, the latest tag (or first commit, if no tags have been made) is used")
+                .num_args(1)
+                .required(false);
+    let arg_end = Arg::new("end")
+        .short('e')
+        .long("end")
+        .help("End of the interval to consider for changes; if not provided HEAD is used")
+        .num_args(1)
+        .required(false);
 
     Command::new("monorail")
     .version(env!("CARGO_PKG_VERSION"))
@@ -24,7 +47,7 @@ fn get_app() -> clap::Command {
     .about("An overlay for effective monorepo development.")
     .arg(
         Arg::new("config-file")
-            .short('f')
+            .short('c')
             .long("config-file")
             .help("Sets a file to use for configuration")
             .num_args(1)
@@ -60,30 +83,70 @@ fn get_app() -> clap::Command {
                     .long("dry-run")
                     .help("Do not apply any changes locally (for a distributed version control system) or remotely")
                     .action(ArgAction::SetTrue),
+            ))
+        .subcommand(
+        Command::new("update")
+            .about("Update the tracking checkpoint")
+            .after_help(r#"This command updates the tracking checkpoint file with data appropriate for the configured vcs."#)
+            .arg(arg_git_path.clone())
+            .arg(arg_use_libgit2_status.clone())
+            .arg(
+                Arg::new("pending")
+                    .short('p')
+                    .long("pending")
+                    .help("Add pending changes to the checkpoint. E.g. for git, this means the paths and content checksums of uncommitted and unstaged changes since the last commit.")
+                    .action(ArgAction::SetTrue),
+            )
+        )
+        // TODO: monorail checkpoint list
+    )
+    .subcommand(Command::new("target")
+        .subcommand(
+        Command::new("list")
+            .about("List targets and their properties.")
+            .after_help(r#"This command reads targets from configuration data, and displays their properties."#)
+            .arg(
+                Arg::new("show-target-groups")
+                    .short('g')
+                    .long("show-target-groups")
+                    .help("Display a representation of the 'depends on' relationship of targets. The array represents a topological ordering of the graph, with each element of the array being a set of targets that do not depend on each other at that position of the ordering.")
+                    .action(ArgAction::SetTrue),
             )
     ))
+
+    .subcommand(Command::new("run")
+        .about("Run target-defined functions.")
+        .after_help(r#"This command analyzes the target graph and performs parallel or serial execution of the provided function names."#)
+        // .arg(
+        //     Arg::new("")
+        //         .short('')
+        //         .long("")
+        //         .help("")
+        //         .action(ArgAction::SetTrue),
+        // )
+        .arg(arg_git_path.clone())
+        .arg(arg_use_libgit2_status.clone())
+        .arg(arg_start.clone())
+        .arg(arg_end.clone())
+        .arg(
+            Arg::new("function")
+                .short('f')
+                .long("function")
+                .required(true)
+                .action(ArgAction::Append)
+                .help("The names of functions that will be executed, in the order specified.")
+        )
+    )
+
+    // TODO: monorail change analyze?
     .subcommand(
         Command::new("analyze")
             .about("Analyze repository changes and targets")
             .after_help(r#"This command analyzes staged, unpushed, and pushed changes between two checkpoints in version control history, as well as unstaged changes present only in your local filesystem. By default, only outputs a list of affected targets."#)
             .arg(arg_git_path.clone())
             .arg(arg_use_libgit2_status.clone())
-            .arg(
-                Arg::new("start")
-                    .short('s')
-                    .long("start")
-                    .help("Start of the interval to consider for changes; if not provided, the latest tag (or first commit, if no tags have been made) is used")
-                    .num_args(1)
-                    .required(false),
-            )
-            .arg(
-                Arg::new("end")
-                    .short('e')
-                    .long("end")
-                    .help("End of the interval to consider for changes; if not provided HEAD is used")
-                    .num_args(1)
-                    .required(false),
-            )
+            .arg(arg_start.clone())
+            .arg(arg_end.clone())
             .arg(
                 Arg::new("show-changes")
                     .long("show-changes")

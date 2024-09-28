@@ -714,8 +714,9 @@ Tagger: John Doe <john.doe@gmail.com>
 
 rust
 rust/target1
-rust/target2update commands
+rust/target2
 
+update commands
 ```
 
 This concludes the tutorial. Now that you have seen how the core concepts of `monorail` and extensions work, you're ready to use it in real projects. Experiment with repository layouts, commands, CI, and working on a trunk-based development workflow that works for your teams.
