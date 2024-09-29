@@ -136,7 +136,7 @@ impl Dag {
 
 #[cfg(test)]
 mod tests {
-    use crate::depend::Dag;
+    use super::Dag;
     #[test]
     fn test_dag_set() {
         let mut dag = Dag::new(3);

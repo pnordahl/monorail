@@ -1,12 +1,13 @@
 use clap::builder::ArgPredicate;
 use clap::{Arg, ArgAction, Command};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let app = get_app();
     let matches = app.get_matches();
     let output_format = matches.get_one::<String>("output-format").unwrap();
 
-    match monorail::handle(&matches, output_format) {
+    match monorail::handle(&matches, output_format).await {
         Ok(code) => {
             std::process::exit(code);
         }
@@ -72,19 +73,6 @@ fn get_app() -> clap::Command {
     .subcommand(Command::new("config").about("Show configuration, including runtime default values"))
     .subcommand(Command::new("checkpoint")
         .subcommand(
-        Command::new("create")
-            .about("Create a checkpoint of current changes")
-            .after_help(r#"This command analyzes changed targets since the last checkpoint, constructs a checkpoint object appropriate for the configured vcs"#)
-            .arg(arg_git_path.clone())
-            .arg(arg_use_libgit2_status.clone())
-            .arg(
-                Arg::new("dry-run")
-                    .short('d')
-                    .long("dry-run")
-                    .help("Do not apply any changes locally (for a distributed version control system) or remotely")
-                    .action(ArgAction::SetTrue),
-            ))
-        .subcommand(
         Command::new("update")
             .about("Update the tracking checkpoint")
             .after_help(r#"This command updates the tracking checkpoint file with data appropriate for the configured vcs."#)
@@ -98,7 +86,8 @@ fn get_app() -> clap::Command {
                     .action(ArgAction::SetTrue),
             )
         )
-        // TODO: monorail checkpoint list
+        // TODO: monorail checkpoint show
+        // TODO: monorail checkpoint clear
     )
     .subcommand(Command::new("target")
         .subcommand(
@@ -117,13 +106,7 @@ fn get_app() -> clap::Command {
     .subcommand(Command::new("run")
         .about("Run target-defined functions.")
         .after_help(r#"This command analyzes the target graph and performs parallel or serial execution of the provided function names."#)
-        // .arg(
-        //     Arg::new("")
-        //         .short('')
-        //         .long("")
-        //         .help("")
-        //         .action(ArgAction::SetTrue),
-        // )
+        // TODO: targets arg
         .arg(arg_git_path.clone())
         .arg(arg_use_libgit2_status.clone())
         .arg(arg_start.clone())
@@ -137,7 +120,6 @@ fn get_app() -> clap::Command {
                 .help("The names of functions that will be executed, in the order specified.")
         )
     )
-
     // TODO: monorail change analyze?
     .subcommand(
         Command::new("analyze")
