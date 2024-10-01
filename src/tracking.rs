@@ -27,7 +27,7 @@ impl Checkpoint {
             .read(true)
             .open(file_path)
             .await
-            .map_err(|e| MonorailError::CheckpointNotFound(e))?;
+            .map_err(MonorailError::CheckpointNotFound)?;
         let mut data = vec![];
         file.read_to_end(&mut data).await?;
         let mut cp: Self = serde_json::from_slice(&data)?;
@@ -67,7 +67,7 @@ impl<'a> Table {
             .open(&lock_path)
             .await?;
         Ok(Self {
-            checkpoint_path: dir_path.join("CHECKPOINT"),
+            checkpoint_path: dir_path.join("checkpoint.json"),
             lock_path,
             _lock_file: lock_file,
         })
@@ -81,9 +81,7 @@ impl<'a> Table {
 }
 impl Drop for Table {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.lock_path).expect(&format!(
-            "Error removing lockfile {}",
-            self.lock_path.display()
-        ));
+        std::fs::remove_file(&self.lock_path)
+            .unwrap_or_else(|_| panic!("Error removing lockfile {}", self.lock_path.display()));
     }
 }

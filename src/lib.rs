@@ -158,6 +158,31 @@ struct GitChangeOptions<'a> {
 struct RunInput<'a> {
     git_change_options: GitChangeOptions<'a>,
     functions: Vec<&'a String>,
+    targets: HashSet<&'a String>,
+}
+impl<'a> TryFrom<&'a clap::ArgMatches> for RunInput<'a> {
+    type Error = MonorailError;
+    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
+        Ok(Self {
+            git_change_options: GitChangeOptions {
+                start: cmd.get_one::<String>("start").map(|x: &String| x.as_str()),
+                end: cmd.get_one::<String>("end").map(|x: &String| x.as_str()),
+                git_path: cmd.get_one::<String>("git-path").unwrap(),
+                use_libgit2_status: cmd.get_flag("use-libgit2-status"),
+            },
+            functions: cmd
+                .get_many::<String>("function")
+                .ok_or_else(|| MonorailError::from("No functions provided"))
+                .into_iter()
+                .flatten()
+                .collect(),
+            targets: cmd
+                .get_many::<String>("target")
+                .into_iter()
+                .flatten()
+                .collect(),
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -219,26 +244,6 @@ impl TargetRunFailure {
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for RunInput<'a> {
-    type Error = MonorailError;
-    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
-        Ok(Self {
-            git_change_options: GitChangeOptions {
-                start: cmd.get_one::<String>("start").map(|x: &String| x.as_str()),
-                end: cmd.get_one::<String>("end").map(|x: &String| x.as_str()),
-                git_path: cmd.get_one::<String>("git-path").unwrap(),
-                use_libgit2_status: cmd.get_flag("use-libgit2-status"),
-            },
-            functions: cmd
-                .get_many::<String>("function")
-                .ok_or_else(|| MonorailError::from("No functions provided"))
-                .into_iter()
-                .flatten()
-                .collect(),
-        })
-    }
-}
-
 // <workdir>/<monorail-out>/tracking
 fn get_tracking_path(workdir: &str) -> path::PathBuf {
     Path::new(workdir).join("monorail-out").join("tracking")
@@ -261,10 +266,10 @@ async fn get_file_checksum(path: &path::Path) -> Result<String, MonorailError> {
         hasher.update(&buffer[..num]);
     }
 
-    Ok(format!("{}", hex::encode(hasher.finalize())))
+    Ok(hex::encode(hasher.finalize()).to_string())
 }
 
-async fn compare_checksum(pending: &HashMap<String, String>, workdir: &str, name: &str) -> bool {
+async fn checksum_is_equal(pending: &HashMap<String, String>, workdir: &str, name: &str) -> bool {
     match pending.get(name) {
         Some(checksum) => {
             // compute checksum of x.name and check not equal
@@ -280,13 +285,13 @@ async fn compare_checksum(pending: &HashMap<String, String>, workdir: &str, name
 }
 
 async fn get_filtered_changes(
-    changes: Vec<RawChange>,
+    changes: Vec<Change>,
     pending: &HashMap<String, String>,
     workdir: &str,
-) -> Vec<RawChange> {
+) -> Vec<Change> {
     tokio_stream::iter(changes)
         .then(|x| async {
-            if compare_checksum(&pending, workdir, &x.name).await {
+            if checksum_is_equal(pending, workdir, &x.name).await {
                 None
             } else {
                 Some(x)
@@ -303,7 +308,7 @@ async fn get_git_status_changes(
     git_opts: &GitChangeOptions<'_>,
     checkpoint: &Option<tracking::Checkpoint>,
     workdir: &str,
-) -> Result<Vec<RawChange>, MonorailError> {
+) -> Result<Vec<Change>, MonorailError> {
     let status_changes = match git_opts.use_libgit2_status {
         true => libgit2_status_changes(repo)?,
         false => git_cmd_status_changes(git_cmd_status(git_opts.git_path, repo.workdir())?),
@@ -313,7 +318,7 @@ async fn get_git_status_changes(
     if let Some(checkpoint) = checkpoint {
         if let Some(pending) = &checkpoint.pending {
             if !pending.is_empty() {
-                return Ok(get_filtered_changes(status_changes, &pending, workdir).await);
+                return Ok(get_filtered_changes(status_changes, pending, workdir).await);
             }
         }
     }
@@ -326,7 +331,7 @@ async fn get_git_diff_changes<'a>(
     git_opts: &'a GitChangeOptions<'a>,
     checkpoint: &'a Option<tracking::Checkpoint>,
     workdir: &str,
-) -> Result<Option<Vec<RawChange>>, MonorailError> {
+) -> Result<Option<Vec<Change>>, MonorailError> {
     // first check git_opts.start; if provided, use that
     let start_oid_opt = match git_opts.start {
         Some(start) => Some(repo.revparse_single(start)?.id()),
@@ -334,10 +339,10 @@ async fn get_git_diff_changes<'a>(
             // otherwise, check checkpoint.commit; if provided, use that
             match checkpoint {
                 Some(checkpoint) => {
-                    if checkpoint.commit != "" {
-                        Some(repo.revparse_single(&checkpoint.commit)?.id())
-                    } else {
+                    if checkpoint.commit.is_empty() {
                         None
+                    } else {
+                        Some(repo.revparse_single(&checkpoint.commit)?.id())
                     }
                 }
                 // if not then there's nowhere to start from, and we're done
@@ -356,7 +361,7 @@ async fn get_git_diff_changes<'a>(
                 if let Some(pending) = &checkpoint.pending {
                     if !pending.is_empty() {
                         return Ok(Some(
-                            get_filtered_changes(diff_changes, &pending, workdir).await,
+                            get_filtered_changes(diff_changes, pending, workdir).await,
                         ));
                     }
                 }
@@ -372,7 +377,7 @@ async fn get_git_all_changes<'a>(
     git_change_opts: &'a GitChangeOptions<'a>,
     checkpoint: &'a Option<tracking::Checkpoint>,
     workdir: &str,
-) -> Result<Option<Vec<RawChange>>, MonorailError> {
+) -> Result<Option<Vec<Change>>, MonorailError> {
     match get_git_diff_changes(repo, git_change_opts, checkpoint, workdir).await? {
         Some(mut diff_changes) => {
             // append status changes
@@ -399,41 +404,66 @@ async fn handle_run<'a>(
         .targets
         .as_ref()
         .ok_or(MonorailError::from("No configured targets"))?;
-    let mut lookups = Lookups::new(config)?;
-    // TODO: not needed if targeting directly with --targets
-    let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
-    let checkpoint = Some(match tracking.open_checkpoint().await {
-        Ok(checkpoint) => checkpoint,
-        Err(MonorailError::CheckpointNotFound(_)) => tracking.new_checkpoint(),
-        Err(e) => {
-            return Err(e);
-        }
-    });
+    match input.targets.len() {
+        0 => {
+            let mut hs = HashSet::new();
+            for t in targets {
+                hs.insert(&t.path);
+            }
+            let mut lookups = Lookups3::new(config, hs)?;
+            let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
+            let checkpoint = Some(match tracking.open_checkpoint().await {
+                Ok(checkpoint) => checkpoint,
+                Err(MonorailError::CheckpointNotFound(_)) => tracking.new_checkpoint(),
+                Err(e) => {
+                    return Err(e);
+                }
+            });
 
-    let changes = match config.vcs.r#use {
-        VcsKind::Git => {
-            let repo = git2::Repository::open(workdir)?;
-            get_git_all_changes(&repo, &input.git_change_options, &checkpoint, workdir).await?
+            let changes = match config.vcs.r#use {
+                VcsKind::Git => {
+                    let repo = git2::Repository::open(workdir)?;
+                    get_git_all_changes(&repo, &input.git_change_options, &checkpoint, workdir)
+                        .await?
+                }
+            };
+            let ao = analyze(&mut lookups, changes, false, false, true)?;
+            let target_groups = ao
+                .target_groups
+                .ok_or(MonorailError::from("No target groups found"))?;
+            dbg!(&target_groups);
+            run(
+                &lookups,
+                workdir,
+                "todochangeme",
+                &input.functions,
+                targets.clone(),
+                &target_groups,
+            )
+            .await
         }
-    };
-    // END TODO
-    let ao = analyze(&mut lookups, changes, false, false, true)?;
-    let target_groups = ao
-        .target_groups
-        .ok_or(MonorailError::from("No target groups found"))?;
-    run(
-        &lookups,
-        workdir,
-        "todochangeme",
-        &input.functions,
-        targets.clone(),
-        &target_groups,
-    )
-    .await
+        _ => {
+            let mut lookups = Lookups3::new(config, input.targets.clone())?;
+            let ao = analyze(&mut lookups, None, false, false, true)?;
+            let target_groups = ao
+                .target_groups
+                .ok_or(MonorailError::from("No target groups found"))?;
+            dbg!(&target_groups);
+            run(
+                &lookups,
+                workdir,
+                "todochangeme",
+                &input.functions,
+                targets.clone(),
+                &target_groups,
+            )
+            .await
+        }
+    }
 }
 
 async fn run<'a>(
-    lookups: &Lookups<'_>,
+    lookups: &Lookups3<'_>,
     workdir: &str,
     log_id: &str,
     functions: &'a [&'a String],
@@ -587,9 +617,7 @@ async fn run_bash_command(
     function: String,
     lp: LogPaths,
 ) -> Result<(std::process::ExitStatus, String, LogPaths), (String, MonorailError)> {
-    let (stdout_log_file, stderr_log_file) = lp
-        .open()
-        .map_err(|e| (target_path.clone(), MonorailError::from(e)))?;
+    let (stdout_log_file, stderr_log_file) = lp.open().map_err(|e| (target_path.clone(), e))?;
     let mut cmd = tokio::process::Command::new("bash")
         .arg("-c")
         .arg(format!("source $(pwd)/{} && {}", script, function))
@@ -615,6 +643,7 @@ struct AnalyzeInput<'a> {
     show_changes: bool,
     show_change_targets: bool,
     show_target_groups: bool,
+    targets: HashSet<&'a String>,
 }
 
 impl<'a> From<&'a clap::ArgMatches> for AnalyzeInput<'a> {
@@ -629,6 +658,11 @@ impl<'a> From<&'a clap::ArgMatches> for AnalyzeInput<'a> {
             show_changes: cmd.get_flag("show-changes"),
             show_change_targets: cmd.get_flag("show-change-targets"),
             show_target_groups: cmd.get_flag("show-target-groups"),
+            targets: cmd
+                .get_many::<String>("target")
+                .into_iter()
+                .flatten()
+                .collect(),
         }
     }
 }
@@ -683,7 +717,7 @@ async fn handle_analyze<'a>(
     input: &AnalyzeInput<'a>,
     workdir: &'a str,
 ) -> Result<AnalyzeOutput, MonorailError> {
-    let mut lookups = Lookups::new(config)?;
+    let mut lookups = Lookups3::new(config, input.targets.clone())?;
     match config.vcs.r#use {
         VcsKind::Git => {
             let changes = match config.vcs.r#use {
@@ -713,8 +747,8 @@ async fn handle_analyze<'a>(
 }
 
 fn analyze<'a>(
-    lookups: &mut Lookups<'_>,
-    changes: Option<Vec<RawChange>>,
+    lookups: &mut Lookups3<'a>,
+    changes: Option<Vec<Change>>,
     show_changes: bool,
     show_change_targets: bool,
     show_target_groups: bool,
@@ -834,7 +868,7 @@ fn analyze<'a>(
     if let Some(output_targets) = output_targets {
         // copy the hashmap into the output vector
         for t in output_targets.iter() {
-            output.targets.push(t.to_owned());
+            output.targets.push(t.clone());
         }
         if show_target_groups {
             let groups = lookups.dag.get_groups()?;
@@ -859,7 +893,11 @@ fn analyze<'a>(
         }
     } else {
         // use config targets and all target groups
-        output.targets = lookups.targets.clone();
+        // output.targets.clone_from(&lookups.targets);
+        for t in &lookups.targets {
+            output.targets.push(t.to_string());
+        }
+        // output.targets = lookups.targets.iter().map(|s| s.to_owned()).collect();
         if show_target_groups {
             output.target_groups = Some(lookups.dag.get_labeled_groups()?);
         }
@@ -995,8 +1033,8 @@ fn git_cmd_status(
     )
 }
 
-fn git_cmd_status_changes(s: Vec<u8>) -> Vec<RawChange> {
-    let mut v: Vec<RawChange> = Vec::new();
+fn git_cmd_status_changes(s: Vec<u8>) -> Vec<Change> {
+    let mut v: Vec<Change> = Vec::new();
     if !s.is_empty() {
         let iter = s.split(|x| char::from(*x) == '\n');
         for w in iter {
@@ -1008,7 +1046,7 @@ fn git_cmd_status_changes(s: Vec<u8>) -> Vec<RawChange> {
             // not interested in anything else spurious from
             // our parsing of line format
             if parts.len() == 2 {
-                v.push(RawChange {
+                v.push(Change {
                     name: parts[1].to_string(),
                 });
             }
@@ -1022,26 +1060,26 @@ fn libgit2_start_end_diff_changes(
     repo: &git2::Repository,
     start_oid: git2::Oid,
     end_oid: git2::Oid,
-) -> Result<Vec<RawChange>, git2::Error> {
+) -> Result<Vec<Change>, git2::Error> {
     let start_tree = repo.find_object(start_oid, None)?.peel_to_tree()?;
     let end_tree = repo.find_object(end_oid, None)?.peel_to_tree()?;
 
     let mut opts = git2::DiffOptions::new();
     let diff = repo.diff_tree_to_tree(Some(&start_tree), Some(&end_tree), Some(&mut opts))?;
-    let mut v: Vec<RawChange> = Vec::new();
+    let mut v: Vec<Change> = Vec::new();
     let diffres = diff.foreach(
         &mut |dd: git2::DiffDelta, _num: f32| -> bool {
             // TODO: prevent double pushing for new files
             if let Some(path) = dd.old_file().path() {
                 if let Some(s) = path.to_str() {
-                    v.push(RawChange {
+                    v.push(Change {
                         name: s.to_string(),
                     });
                 }
             }
             if let Some(path) = dd.new_file().path() {
                 if let Some(s) = path.to_str() {
-                    v.push(RawChange {
+                    v.push(Change {
                         name: s.to_string(),
                     });
                 }
@@ -1058,8 +1096,8 @@ fn libgit2_start_end_diff_changes(
     }
 }
 
-fn libgit2_status_changes(repo: &git2::Repository) -> Result<Vec<RawChange>, git2::Error> {
-    let mut v: Vec<RawChange> = Vec::new();
+fn libgit2_status_changes(repo: &git2::Repository) -> Result<Vec<Change>, git2::Error> {
+    let mut v: Vec<Change> = Vec::new();
     let mut opts = git2::StatusOptions::new();
     opts.include_untracked(true);
     opts.renames_from_rewrites(true);
@@ -1067,7 +1105,7 @@ fn libgit2_status_changes(repo: &git2::Repository) -> Result<Vec<RawChange>, git
     let statuses = repo.statuses(Some(&mut opts))?;
     for s in statuses.iter() {
         if let Some(path) = s.path() {
-            v.push(RawChange {
+            v.push(Change {
                 name: path.to_string(),
             });
         }
@@ -1096,6 +1134,321 @@ fn require_existence(workdir: &str, path: &str) -> Result<(), MonorailError> {
     }
 
     Err(MonorailError::PathDNE(path.to_owned()))
+}
+
+struct Lookups3<'a> {
+    targets: Vec<String>,
+    targets_trie: Trie<u8>,
+    ignores: Trie<u8>,
+    uses: Trie<u8>,
+    use2targets: HashMap<&'a str, Vec<&'a str>>,
+    ignore2targets: HashMap<&'a str, Vec<&'a str>>,
+    dag: graph::Dag,
+}
+impl<'a> Lookups3<'a> {
+    fn new(cfg: &'a Config, visible_targets: HashSet<&String>) -> Result<Self, MonorailError> {
+        let mut targets = vec![];
+        let mut targets_builder = TrieBuilder::new();
+        let mut ignores_builder = TrieBuilder::new();
+        let mut uses_builder = TrieBuilder::new();
+        let mut use2targets = HashMap::<&str, Vec<&str>>::new();
+        let mut ignore2targets = HashMap::<&str, Vec<&str>>::new();
+
+        let num_targets = match cfg.targets.as_ref() {
+            Some(targets) => targets.len(),
+            None => 0,
+        };
+        let mut dag = graph::Dag::new(num_targets);
+
+        if let Some(cfg_targets) = cfg.targets.as_ref() {
+            cfg_targets.iter().enumerate().try_for_each(|(i, target)| {
+                targets.push(target.path.to_owned());
+                let target_path_str = target.path.as_str();
+                require_existence(cfg.workdir.as_str(), target_path_str)?;
+                if dag.label2node.contains_key(target_path_str) {
+                    return Err(MonorailError::DependencyGraph(GraphError::DuplicateLabel(
+                        target.path.to_owned(),
+                    )));
+                }
+                dag.set_label(&target.path, i);
+                targets_builder.push(&target.path);
+
+                if let Some(ignores) = target.ignores.as_ref() {
+                    ignores.iter().for_each(|s| {
+                        ignores_builder.push(s);
+                        ignore2targets
+                            .entry(s.as_str())
+                            .or_default()
+                            .push(target_path_str);
+                    });
+                }
+                Ok(())
+            })?;
+        }
+
+        let targets_trie = targets_builder.build();
+
+        // process target uses and build up both the dependency graph, and the direct mapping of non-target uses to the affected targets
+        if let Some(cfg_targets) = cfg.targets.as_ref() {
+            cfg_targets.iter().enumerate().try_for_each(|(i, target)| {
+                let target_path_str = target.path.as_str();
+                // if this target is under an existing target, add it as a dep
+                let mut nodes = targets_trie
+                    .common_prefix_search(target_path_str)
+                    .filter(|t: &String| t != &target.path)
+                    .map(|t| {
+                        dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                            MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t))
+                        })
+                    })
+                    .collect::<Result<Vec<usize>, MonorailError>>()?;
+
+                if let Some(uses) = &target.uses {
+                    for s in uses {
+                        let uses_path_str = s.as_str();
+                        uses_builder.push(uses_path_str);
+                        let matching_targets: Vec<String> =
+                            targets_trie.common_prefix_search(uses_path_str).collect();
+                        use2targets.entry(s).or_default().push(target_path_str);
+                        // a dependency has been established between this target and some
+                        // number of targets, so we update the graph
+                        nodes.extend(
+                            matching_targets
+                                .iter()
+                                .filter(|&t| t != &target.path)
+                                .map(|t| {
+                                    dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                                        MonorailError::DependencyGraph(
+                                            GraphError::LabelNodeNotFound(t.to_owned()),
+                                        )
+                                    })
+                                })
+                                .collect::<Result<Vec<usize>, MonorailError>>()?,
+                        );
+                    }
+                }
+                nodes.sort();
+                nodes.dedup();
+                dag.set(i, nodes);
+                Ok::<(), MonorailError>(())
+            })?;
+
+            // now that the graph is fully constructed, set subtree visibility
+            for t in visible_targets {
+                let node = dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                    MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t.to_owned()))
+                })?;
+                dag.set_subtree_visibility(node, true);
+            }
+        }
+
+        dbg!(&dag);
+        targets.sort();
+        Ok(Self {
+            targets,
+            targets_trie,
+            ignores: ignores_builder.build(),
+            uses: uses_builder.build(),
+            use2targets,
+            ignore2targets,
+            dag,
+        })
+    }
+}
+
+struct Lookups2<'a> {
+    targets: Vec<&'a String>,
+    targets_trie: Trie<u8>,
+    ignores: Trie<u8>,
+    uses: Trie<u8>,
+    use2targets: HashMap<&'a str, Vec<&'a str>>,
+    ignore2targets: HashMap<&'a str, Vec<&'a str>>,
+    dag: graph::Dag,
+}
+impl<'a> Lookups2<'a> {
+    fn new(cfg: &'a Config, targets: Option<Vec<&'a String>>) -> Result<Self, MonorailError> {
+        let mut targets_builder = TrieBuilder::new();
+        let mut ignores_builder = TrieBuilder::new();
+        let mut uses_builder = TrieBuilder::new();
+        let mut use2targets = HashMap::<&str, Vec<&str>>::new();
+        let mut ignore2targets = HashMap::<&str, Vec<&str>>::new();
+
+        let cfg_targets = cfg
+            .targets
+            .as_ref()
+            .ok_or(MonorailError::from("No configured targets"))?;
+        let mut dag = graph::Dag::new(cfg_targets.len());
+        // process config targets and label all potential nodes in the dag
+        cfg_targets.iter().enumerate().try_for_each(|(i, target)| {
+            let target_path_str = target.path.as_str();
+            require_existence(cfg.workdir.as_str(), target_path_str)?;
+            if dag.label2node.contains_key(target_path_str) {
+                return Err(MonorailError::DependencyGraph(GraphError::DuplicateLabel(
+                    target.path.to_owned(),
+                )));
+            }
+            dag.set_label(&target.path, i);
+            targets_builder.push(&target.path);
+
+            Ok(())
+        })?;
+
+        let targets_trie = targets_builder.build();
+        dbg!(&targets);
+        match targets {
+            Some(targets) => {
+                // Using the provided label list as a filter, and build up both the dependency graph, and the direct mapping of non-target uses to the affected targets, as well as ignores
+                targets.iter().try_for_each(|label| {
+                    let i = dag.label2node.get(label.as_str()).copied().ok_or_else(|| {
+                        MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(
+                            label.to_string(),
+                        ))
+                    })?;
+                    let target = cfg_targets.get(i).ok_or(MonorailError::Generic(format!(
+                        "Configuration target not found at index {}",
+                        i
+                    )))?;
+                    dbg!("using target {:?}", &target);
+                    let target_path_str = target.path.as_str();
+                    // if this target is under an existing target, add it as a dep
+                    let mut nodes = targets_trie
+                        .common_prefix_search(target_path_str)
+                        .filter(|t: &String| t != &target.path)
+                        .map(|t| {
+                            dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                                MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t))
+                            })
+                        })
+                        .collect::<Result<Vec<usize>, MonorailError>>()?;
+                    if let Some(ignores) = target.ignores.as_ref() {
+                        ignores.iter().for_each(|s| {
+                            ignores_builder.push(s);
+                            ignore2targets
+                                .entry(s.as_str())
+                                .or_default()
+                                .push(target_path_str);
+                        });
+                    }
+                    if let Some(uses) = &target.uses {
+                        for s in uses {
+                            let uses_path_str = s.as_str();
+                            uses_builder.push(uses_path_str);
+                            let matching_targets: Vec<String> =
+                                targets_trie.common_prefix_search(uses_path_str).collect();
+                            use2targets.entry(s).or_default().push(target_path_str);
+                            // a dependency has been established between this target and some
+                            // number of targets, so we update the graph
+                            nodes.extend(
+                                matching_targets
+                                    .iter()
+                                    .filter(|&t| t != &target.path)
+                                    .map(|t| {
+                                        dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                                            MonorailError::DependencyGraph(
+                                                GraphError::LabelNodeNotFound(t.to_owned()),
+                                            )
+                                        })
+                                    })
+                                    .collect::<Result<Vec<usize>, MonorailError>>()?,
+                            );
+                        }
+                    }
+                    nodes.sort();
+                    nodes.dedup();
+                    for node in &nodes {
+                        dag.set_visibility(*node, true);
+                    }
+                    dag.set_visibility(i, true);
+                    dag.set(i, nodes);
+
+                    Ok::<(), MonorailError>(())
+                })?;
+
+                dbg!(&dag);
+
+                // targets.sort();
+                Ok(Self {
+                    targets,
+                    targets_trie,
+                    ignores: ignores_builder.build(),
+                    uses: uses_builder.build(),
+                    use2targets,
+                    ignore2targets,
+                    dag,
+                })
+            }
+            None => {
+                let mut targets = vec![];
+                cfg_targets.iter().enumerate().try_for_each(|(i, target)| {
+                    targets.push(&target.path);
+                    let target_path_str = target.path.as_str();
+                    // if this target is under an existing target, add it as a dep
+                    let mut nodes = targets_trie
+                        .common_prefix_search(target_path_str)
+                        .filter(|t: &String| t != &target.path)
+                        .map(|t| {
+                            dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                                MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t))
+                            })
+                        })
+                        .collect::<Result<Vec<usize>, MonorailError>>()?;
+                    if let Some(ignores) = target.ignores.as_ref() {
+                        ignores.iter().for_each(|s| {
+                            ignores_builder.push(s);
+                            ignore2targets
+                                .entry(s.as_str())
+                                .or_default()
+                                .push(target_path_str);
+                        });
+                    }
+                    if let Some(uses) = &target.uses {
+                        for s in uses {
+                            let uses_path_str = s.as_str();
+                            uses_builder.push(uses_path_str);
+                            let matching_targets: Vec<String> =
+                                targets_trie.common_prefix_search(uses_path_str).collect();
+                            use2targets.entry(s).or_default().push(target_path_str);
+                            // a dependency has been established between this target and some
+                            // number of targets, so we update the graph
+                            nodes.extend(
+                                matching_targets
+                                    .iter()
+                                    .filter(|&t| t != &target.path)
+                                    .map(|t| {
+                                        dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                                            MonorailError::DependencyGraph(
+                                                GraphError::LabelNodeNotFound(t.to_owned()),
+                                            )
+                                        })
+                                    })
+                                    .collect::<Result<Vec<usize>, MonorailError>>()?,
+                            );
+                        }
+                    }
+                    nodes.sort();
+                    nodes.dedup();
+                    for node in &nodes {
+                        dag.set_visibility(*node, true);
+                    }
+                    dag.set_visibility(i, true);
+                    dag.set(i, nodes);
+                    Ok::<(), MonorailError>(())
+                })?;
+
+                targets.sort();
+                dbg!("none targest", &targets);
+                Ok(Self {
+                    targets,
+                    targets_trie,
+                    ignores: ignores_builder.build(),
+                    uses: uses_builder.build(),
+                    use2targets,
+                    ignore2targets,
+                    dag,
+                })
+            }
+        }
+    }
 }
 
 struct Lookups<'a> {
@@ -1132,7 +1485,7 @@ impl<'a> Lookups<'a> {
                         target.path.to_owned(),
                     )));
                 }
-                dag.set_label(target.path.to_owned(), i);
+                dag.set_label(&target.path, i);
                 targets_builder.push(&target.path);
 
                 if let Some(ignores) = target.ignores.as_ref() {
@@ -1209,7 +1562,7 @@ impl<'a> Lookups<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct RawChange {
+struct Change {
     name: String,
 }
 
@@ -1337,9 +1690,166 @@ uses = [
 "#;
 
     // #[tokio::test]
-    // async fn test_() {
+    // async fn test_get_git_status_changes() {
 
     // }
+
+    /*
+        // Fetch status changes, filter them using the tracking checkpoint if present.
+        async fn get_git_status_changes(
+            repo: &git2::Repository,
+            git_opts: &GitChangeOptions<'_>,
+            checkpoint: &Option<tracking::Checkpoint>,
+            workdir: &str,
+        ) -> Result<Vec<Change>, MonorailError> {
+            let status_changes = match git_opts.use_libgit2_status {
+                true => libgit2_status_changes(repo)?,
+                false => git_cmd_status_changes(git_cmd_status(git_opts.git_path, repo.workdir())?),
+            };
+
+            // use checkpoint pending to filter status changes, if present
+            if let Some(checkpoint) = checkpoint {
+                if let Some(pending) = &checkpoint.pending {
+                    if !pending.is_empty() {
+                        return Ok(get_filtered_changes(status_changes, pending, workdir).await);
+                    }
+                }
+            }
+            Ok(status_changes)
+        }
+    */
+
+    #[tokio::test]
+    async fn test_get_filtered_changes() {
+        let (_repo, repo_path) = get_repo(false);
+        let root_path = Path::new(&repo_path);
+        let fname1 = "test1.txt";
+        let fname2 = "test2.txt";
+        let change1 = Change {
+            name: fname1.into(),
+        };
+        let change2 = Change {
+            name: fname2.into(),
+        };
+
+        // changes, pending with change checksum match
+        assert_eq!(
+            get_filtered_changes(
+                vec![change1.clone()],
+                &get_pending(&vec![(
+                    fname1,
+                    write_with_checksum(&root_path.join(fname1), &vec![1, 2, 3])
+                        .await
+                        .unwrap(),
+                )]),
+                &repo_path
+            )
+            .await,
+            vec![]
+        );
+
+        // changes, pending with change checksum mismatch
+        tokio::fs::write(Path::new(&repo_path).join(fname1), &vec![1, 2, 3])
+            .await
+            .unwrap();
+        assert_eq!(
+            get_filtered_changes(
+                vec![change1.clone()],
+                &get_pending(&vec![(fname1, "foo".into(),)]),
+                &repo_path
+            )
+            .await,
+            vec![change1.clone()]
+        );
+
+        // empty changes, empty pending
+        assert_eq!(
+            get_filtered_changes(vec![], &HashMap::new(), &repo_path).await,
+            vec![]
+        );
+
+        // changes, empty pending
+        assert_eq!(
+            get_filtered_changes(
+                vec![change1.clone(), change2.clone()],
+                &HashMap::new(),
+                &repo_path
+            )
+            .await,
+            vec![change1.clone(), change2.clone()]
+        );
+        // empty changes, pending
+        assert_eq!(
+            get_filtered_changes(
+                vec![],
+                &get_pending(&vec![(
+                    fname1,
+                    write_with_checksum(&root_path.join(fname1), &vec![1, 2, 3])
+                        .await
+                        .unwrap(),
+                )]),
+                &repo_path
+            )
+            .await,
+            vec![]
+        );
+    }
+
+    fn get_pending(pairs: &[(&str, String)]) -> HashMap<String, String> {
+        let mut pending = HashMap::new();
+        for (fname, checksum) in pairs {
+            pending.insert(fname.to_string(), checksum.clone());
+        }
+        pending
+    }
+
+    #[tokio::test]
+    async fn test_checksum_is_equal() {
+        let (_repo, repo_path) = get_repo(false);
+        let fname1 = "test1.txt";
+
+        let root_path = Path::new(&repo_path);
+        let pending = get_pending(&vec![(
+            fname1,
+            write_with_checksum(&root_path.join(fname1), &vec![1, 2, 3])
+                .await
+                .unwrap(),
+        )]);
+
+        // checksums must match
+        assert!(checksum_is_equal(&pending, &repo_path, &fname1).await);
+        // file error (such as dne) interpreted as checksum mismatch
+        assert!(!checksum_is_equal(&pending, &repo_path, "dne.txt").await);
+
+        // write a file and use a pending entry with a mismatched checksum
+        let fname2 = "test2.txt";
+        tokio::fs::write(root_path.join(fname2), &vec![1])
+            .await
+            .unwrap();
+        let pending2 = get_pending(&vec![(fname2, "foobar".into())]);
+        // checksums don't match
+        assert!(!checksum_is_equal(&pending2, &repo_path, &fname2).await);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_checksum() {
+        let (_repo, repo_path) = get_repo(false);
+
+        // files that don't exist can't be checksummed
+        let p = Path::new(&repo_path).join("test.txt");
+        assert!(get_file_checksum(&p).await.is_err());
+
+        // write file and compare checksums
+        let checksum = write_with_checksum(&p, &vec![1, 2, 3]).await.unwrap();
+        assert_eq!(get_file_checksum(&p).await.unwrap(), checksum);
+    }
+
+    async fn write_with_checksum(path: &path::Path, data: &[u8]) -> Result<String, MonorailError> {
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(data);
+        tokio::fs::write(path, &data).await?;
+        Ok(format!("{}", hex::encode(hasher.finalize())))
+    }
 
     #[test]
     fn test_libgit2_start_end_diff_changes() {
@@ -1530,7 +2040,7 @@ uses = [
     #[test]
     fn test_analyze_unknown() {
         let change1 = "foo.txt";
-        let changes = vec![RawChange {
+        let changes = vec![Change {
             name: change1.to_string(),
         }];
         let expected_targets: Vec<String> = vec![];
@@ -1551,7 +2061,7 @@ uses = [
     #[test]
     fn test_analyze_target_file() {
         let change1 = "rust/lib.rs";
-        let changes = vec![RawChange {
+        let changes = vec![Change {
             name: change1.to_string(),
         }];
         let target1 = "rust";
@@ -1576,7 +2086,7 @@ uses = [
     #[test]
     fn test_analyze_target() {
         let change1 = "rust";
-        let changes = vec![RawChange {
+        let changes = vec![Change {
             name: change1.to_string(),
         }];
         let target1 = "rust";
@@ -1602,7 +2112,7 @@ uses = [
     #[test]
     fn test_analyze_target_ancestors() {
         let change1 = "rust/target/foo.txt";
-        let changes = vec![RawChange {
+        let changes = vec![Change {
             name: change1.to_string(),
         }];
         let target1 = "rust";
@@ -1639,7 +2149,7 @@ uses = [
     #[test]
     fn test_analyze_target_uses() {
         let change1 = "common/foo.txt";
-        let changes = vec![RawChange {
+        let changes = vec![Change {
             name: change1.to_string(),
         }];
         let target1 = "rust";
@@ -1672,7 +2182,7 @@ uses = [
     #[test]
     fn test_analyze_target_ignores() {
         let change1 = "rust/target/ignoreme.txt";
-        let changes = vec![RawChange {
+        let changes = vec![Change {
             name: change1.to_string(),
         }];
         let target1 = "rust";
@@ -1752,19 +2262,19 @@ uses = [
         assert_eq!(
             changes,
             vec![
-                RawChange {
+                Change {
                     name: ".circleci/config.yml".to_string()
                 },
-                RawChange {
+                Change {
                     name: "Monorail.toml".to_string()
                 },
-                RawChange {
+                Change {
                     name: "rust/support/script/command.sh".to_string()
                 },
-                RawChange {
+                Change {
                     name: "go/project/tator/".to_string()
                 },
-                RawChange {
+                Change {
                     name: "out.json".to_string()
                 },
             ]

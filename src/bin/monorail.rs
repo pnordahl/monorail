@@ -106,7 +106,6 @@ fn get_app() -> clap::Command {
     .subcommand(Command::new("run")
         .about("Run target-defined functions.")
         .after_help(r#"This command analyzes the target graph and performs parallel or serial execution of the provided function names."#)
-        // TODO: targets arg
         .arg(arg_git_path.clone())
         .arg(arg_use_libgit2_status.clone())
         .arg(arg_start.clone())
@@ -117,7 +116,15 @@ fn get_app() -> clap::Command {
                 .long("function")
                 .required(true)
                 .action(ArgAction::Append)
-                .help("The names of functions that will be executed, in the order specified.")
+                .help("A list functions that will be executed, in the order specified.")
+        )
+        .arg(
+            Arg::new("target")
+                .short('t')
+                .long("target")
+                .required(false)
+                .action(ArgAction::Append)
+                .help("A list of targets for which functions will be executed.")
         )
     )
     // TODO: monorail change analyze?
