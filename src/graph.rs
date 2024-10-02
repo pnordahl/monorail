@@ -1,6 +1,6 @@
 use crate::error::{GraphError, MonorailError};
 use std::cmp::{Eq, PartialEq};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Eq, PartialEq)]
 enum CycleState {
@@ -35,33 +35,6 @@ impl Dag {
         }
     }
 
-    // Produces a set of labels and the labels of all descendent nodes.
-    pub fn get_labeled_set(&self, targets: &Vec<String>) -> Result<HashSet<String>, MonorailError> {
-        let mut nodes: VecDeque<usize> = VecDeque::new();
-        let mut out = HashSet::new();
-        for t in targets.iter() {
-            // add this node
-            let tnode = self.label2node.get(t).ok_or_else(|| {
-                MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t.clone()))
-            })?;
-            nodes.push_back(*tnode);
-
-            // process queue until empty
-            while let Some(n) = nodes.pop_front() {
-                let label = self
-                    .node2label
-                    .get(&n)
-                    .ok_or_else(|| MonorailError::DependencyGraph(GraphError::LabelNotFound(n)))?;
-                out.insert(label.to_owned());
-                // queue child nodes
-                for &n2 in self.adj_list[n].iter() {
-                    nodes.push_back(n2);
-                }
-            }
-        }
-        Ok(out)
-    }
-
     // TODO: test
     pub fn get_labeled_groups(&mut self) -> Result<Vec<Vec<String>>, MonorailError> {
         let groups = self.get_groups()?;
@@ -91,18 +64,13 @@ impl Dag {
         self.node2label.insert(node, l);
     }
 
-    // Label the provided node visibility; by default, all nodes are false, and calling this
-    // is required to make it visible during graph traversals.
-    pub fn set_visibility(&mut self, node: usize, visible: bool) {
-        self.visibility[node] = visible;
-    }
-
     // Walk the graph from node and mark all descendents with the provided visibility.
+    // By default, all nodes are false, and calling this is required to make a
+    // subtree visible during graph traversals.
     pub fn set_subtree_visibility(&mut self, node: usize, visible: bool) {
         let mut work: VecDeque<usize> = VecDeque::new();
         work.push_front(node);
         while let Some(n) = work.pop_front() {
-            dbg!("VISIBLE", &n, visible, &self.adj_list[n]);
             self.visibility[n] = visible;
             for depn in &self.adj_list[n] {
                 work.push_back(*depn);
@@ -175,9 +143,8 @@ impl Dag {
     }
 
     fn set_cycle_state(&mut self, in_degree: &[usize]) {
-        dbg!(in_degree);
         for (i, &node) in in_degree.iter().enumerate() {
-            if self.visibility[i] == true && node != 0 {
+            if self.visibility[i] && node != 0 {
                 self.cycle_state = CycleState::Yes(i);
                 return;
             }
@@ -190,6 +157,16 @@ impl Dag {
 mod tests {
     use super::*;
 
+    fn fill_dag(data: Vec<(&str, usize, Vec<usize>, bool)>) -> Dag {
+        let mut dag = Dag::new(data.len());
+        for d in data.iter() {
+            dag.set_label(d.0, d.1);
+            dag.set(d.1, d.2.clone());
+            dag.visibility[d.1] = d.3;
+        }
+        dag
+    }
+
     #[test]
     fn test_dag_set() {
         let mut dag = Dag::new(3);
@@ -201,12 +178,12 @@ mod tests {
 
     #[test]
     fn test_dag_get_groups() {
-        let mut dag = Dag::new(4);
-
-        dag.set(0, vec![1, 2]);
-        dag.set(1, vec![2]);
-        dag.set(2, vec![]);
-        dag.set(3, vec![1]);
+        let mut dag = fill_dag(vec![
+            ("0", 0, vec![1, 2], true),
+            ("1", 1, vec![2], true),
+            ("2", 2, vec![], true),
+            ("3", 3, vec![1], true),
+        ]);
 
         let g = dag.get_groups().unwrap();
         assert_eq!(g[0], &[0, 3]);
@@ -216,41 +193,50 @@ mod tests {
 
     #[test]
     fn test_dag_get_groups_err_cyclic() {
-        let mut dag = Dag::new(4);
-        dag.set(0, vec![1]);
-        dag.set(1, vec![0]);
+        let mut dag = fill_dag(vec![("0", 0, vec![1], true), ("1", 1, vec![0], true)]);
 
         assert!(dag.get_groups().is_err());
     }
 
     #[test]
-    fn test_get_labeled_set() {
-        let mut dag = Dag::new(4);
+    fn test_dag_set_subtree_visibility() {
+        let mut dag = fill_dag(vec![
+            ("0", 0, vec![1, 2], true),
+            ("1", 1, vec![2], true),
+            ("2", 2, vec![], true),
+            ("3", 3, vec![1], true),
+        ]);
 
-        dag.set(0, vec![1, 2]);
-        dag.set(1, vec![2]);
-        dag.set(2, vec![]);
-        dag.set(3, vec![1]);
-
-        dag.set_label("0", 0);
-        dag.set_label("1", 1);
-        dag.set_label("2", 2);
-        dag.set_label("3", 3);
-
-        let targets = vec![];
-        let lts = dag.get_labeled_set(&targets).unwrap();
-        assert_eq!(lts.len(), 0);
-
-        let targets = vec!["2".to_string()];
-        let lts = dag.get_labeled_set(&targets).unwrap();
-        assert_eq!(lts.len(), 1);
-        assert!(lts.contains("2"));
-
-        let targets = vec!["0".to_string()];
-        let lts = dag.get_labeled_set(&targets).unwrap();
-        assert_eq!(lts.len(), 3);
-        assert!(lts.contains("0"));
-        assert!(lts.contains("1"));
-        assert!(lts.contains("2"));
+        dag.set_subtree_visibility(1, false);
+        assert_eq!(dag.visibility[0], true);
+        assert_eq!(dag.visibility[1], false);
+        assert_eq!(dag.visibility[2], false);
+        assert_eq!(dag.visibility[3], true);
     }
+
+    // #[test]
+    // fn test_get_labeled_set() {
+    //     let mut dag = fill_dag(vec![
+    //         ("0", 0, vec![1, 2], true),
+    //         ("1", 1, vec![2], true),
+    //         ("2", 2, vec![], true),
+    //         ("3", 3, vec![1], true),
+    //     ]);
+
+    //     let targets = vec![];
+    //     let lts = dag.get_labeled_set(&targets).unwrap();
+    //     assert_eq!(lts.len(), 0);
+
+    //     let targets = vec!["2".to_string()];
+    //     let lts = dag.get_labeled_set(&targets).unwrap();
+    //     assert_eq!(lts.len(), 1);
+    //     assert!(lts.contains("2"));
+
+    //     let targets = vec!["0".to_string()];
+    //     let lts = dag.get_labeled_set(&targets).unwrap();
+    //     assert_eq!(lts.len(), 3);
+    //     assert!(lts.contains("0"));
+    //     assert!(lts.contains("1"));
+    //     assert!(lts.contains("2"));
+    // }
 }
