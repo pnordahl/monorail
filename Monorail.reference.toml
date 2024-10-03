@@ -5,38 +5,6 @@
 # Required. One of: ["git"]
 use = "git"
 
-[vcs.git]
-# The branch used for trunk-based development and checkpoints.
-# * Optional. Default: "master"
-trunk = "master"
-
-# The remote to push checkpoints to.
-# * Optional. Default: "origin"
-remote = "origin"
-
-# A prefix for the tag refspec to use when pushing checkpoints.
-# * Optional. Default: "refs/tags"
-tags_refspec_prefix = "refs/tags"
-
-[extension]
-# The extension to use for running commands.
-# * Required. One of: ["bash"]
-use = "bash"
-
-# Configuration for the bash extension 'exec' subcommand. 
-[extension.bash.exec]
-# The path to the entrypoint script for any group or target. The value is relative to each group and target.
-# * Optional. Default: "support/script/monorail-exec.sh"
-entrypoint = "support/script/monorail-exec.sh"
-
-# A list of scripts to source (in order) prior to execution of an entrypoint script. The values are relative to the repository root.
-# * Optional. Default: []
-source = []
-
-# Whether or not to parallelize command execution using GNU parallel, informed and constrainted by the `uses` dependency graph.
-# * Optional. Default: true
-parallelize = true
-
 # An array of targets to configure.
 [[targets]]
 # The path for this target. The value is relative to the repository root. Targets with 
@@ -53,10 +21,19 @@ path = "target1"
 ignores = [
     "target1/ignore1"
 ]
-# References to path prefixes outside of this target's path that should affect this target. If a provided path lies within another target B's path, then this will establish a dependency between this target A on B.
-# Change paths that lie in this directory structure will add this target
-# to the output target list, and optionally the target grouping.
+# References to path prefixes outside of this target's path that 
+# should affect this target. If a provided path A lies within 
+# another target B's path, then this will establish a dependency
+# between this target A on B. Change paths that lie in this 
+# directory structure will add this target to the output target 
+# list, and optionally the target grouping.
 # * Optional. Default: []
 uses = [
     "common/library1"
 ]
+
+# Path relative to target.path of a file to use when executing
+# functions with `monorail run`. This can be a file of any 
+# supported file type.
+# * Optional. Default: "monorail.sh"
+run = "monorail.sh"

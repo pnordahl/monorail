@@ -41,6 +41,7 @@ pub enum MonorailError {
     DependencyGraph(GraphError),
     Join(tokio::task::JoinError),
     CheckpointNotFound(io::Error),
+    MissingArg(String),
 }
 impl From<String> for MonorailError {
     fn from(error: String) -> Self {
@@ -105,6 +106,7 @@ impl fmt::Display for MonorailError {
                 write!(f, "Dependency graph error: {}", error)
             }
             MonorailError::Join(error) => write!(f, "Task join error: {}", error),
+            MonorailError::MissingArg(s) => write!(f, "Missing argument error: {}", s),
             MonorailError::CheckpointNotFound(error) => {
                 write!(f, "Tracking checkpoint open error: {}", error)
             }
@@ -163,6 +165,10 @@ impl Serialize for MonorailError {
             }
             MonorailError::CheckpointNotFound(_) => {
                 state.serialize_field("type", "checkpoint_not_found")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::MissingArg(_) => {
+                state.serialize_field("type", "missing_arg")?;
                 state.serialize_field("message", &self.to_string())?;
             }
         }

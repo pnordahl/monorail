@@ -25,46 +25,22 @@ use crate::error::{GraphError, MonorailError};
 
 #[derive(Debug)]
 pub struct GitChangeOptions<'a> {
-    start: Option<&'a str>,
-    end: Option<&'a str>,
-    git_path: &'a str,
-    use_libgit2_status: bool,
+    pub(crate) start: Option<&'a str>,
+    pub(crate) end: Option<&'a str>,
+    pub(crate) git_path: &'a str,
+    pub(crate) use_libgit2_status: bool,
 }
 
 #[derive(Debug)]
 pub struct RunInput<'a> {
-    git_change_options: GitChangeOptions<'a>,
-    functions: Vec<&'a String>,
-    targets: HashSet<&'a String>,
-}
-impl<'a> TryFrom<&'a clap::ArgMatches> for RunInput<'a> {
-    type Error = MonorailError;
-    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
-        Ok(Self {
-            git_change_options: GitChangeOptions {
-                start: cmd.get_one::<String>("start").map(|x: &String| x.as_str()),
-                end: cmd.get_one::<String>("end").map(|x: &String| x.as_str()),
-                git_path: cmd.get_one::<String>("git-path").unwrap(),
-                use_libgit2_status: cmd.get_flag("use-libgit2-status"),
-            },
-            functions: cmd
-                .get_many::<String>("function")
-                .ok_or_else(|| MonorailError::from("No functions provided"))
-                .into_iter()
-                .flatten()
-                .collect(),
-            targets: cmd
-                .get_many::<String>("target")
-                .into_iter()
-                .flatten()
-                .collect(),
-        })
-    }
+    pub(crate) git_change_options: GitChangeOptions<'a>,
+    pub(crate) functions: Vec<&'a String>,
+    pub(crate) targets: HashSet<&'a String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RunOutput<'a> {
-    pub failed: bool,
+    pub(crate) failed: bool,
     results: Vec<FunctionRunResult<'a>>,
 }
 #[derive(Debug, Serialize)]
@@ -121,7 +97,6 @@ impl TargetRunFailure {
     }
 }
 
-// <workdir>/<monorail-out>/tracking
 fn get_tracking_path(workdir: &str) -> path::PathBuf {
     Path::new(workdir).join("monorail-out").join("tracking")
 }
@@ -305,7 +280,6 @@ pub async fn handle_run<'a>(
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
-            dbg!(&target_groups);
             run(
                 &lookups,
                 workdir,
@@ -322,7 +296,6 @@ pub async fn handle_run<'a>(
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
-            dbg!(&target_groups);
             run(
                 &lookups,
                 workdir,
@@ -513,33 +486,13 @@ async fn run_bash_command(
 
 #[derive(Debug)]
 pub struct AnalyzeInput<'a> {
-    git_change_options: GitChangeOptions<'a>,
-    show_changes: bool,
-    show_change_targets: bool,
-    show_target_groups: bool,
-    targets: HashSet<&'a String>,
+    pub(crate) git_change_options: GitChangeOptions<'a>,
+    pub(crate) show_changes: bool,
+    pub(crate) show_change_targets: bool,
+    pub(crate) show_target_groups: bool,
+    pub(crate) targets: HashSet<&'a String>,
 }
 
-impl<'a> From<&'a clap::ArgMatches> for AnalyzeInput<'a> {
-    fn from(cmd: &'a clap::ArgMatches) -> Self {
-        Self {
-            git_change_options: GitChangeOptions {
-                start: cmd.get_one::<String>("start").map(|x: &String| x.as_str()),
-                end: cmd.get_one::<String>("end").map(|x: &String| x.as_str()),
-                git_path: cmd.get_one::<String>("git-path").unwrap(),
-                use_libgit2_status: cmd.get_flag("use-libgit2-status"),
-            },
-            show_changes: cmd.get_flag("show-changes"),
-            show_change_targets: cmd.get_flag("show-change-targets"),
-            show_target_groups: cmd.get_flag("show-target-groups"),
-            targets: cmd
-                .get_many::<String>("target")
-                .into_iter()
-                .flatten()
-                .collect(),
-        }
-    }
-}
 #[derive(Serialize, Debug)]
 pub struct AnalyzeOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -591,33 +544,40 @@ pub async fn handle_analyze<'a>(
     input: &AnalyzeInput<'a>,
     workdir: &'a str,
 ) -> Result<AnalyzeOutput, MonorailError> {
-    let mut lookups = Lookups::new(config, &input.targets)?;
-    match config.vcs.r#use {
-        VcsKind::Git => {
+    let (mut lookups, changes) = match input.targets.len() {
+        0 => {
             let changes = match config.vcs.r#use {
-                VcsKind::Git => {
-                    let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
-                    let checkpoint = Some(match tracking.open_checkpoint().await {
-                        Ok(checkpoint) => checkpoint,
-                        Err(MonorailError::CheckpointNotFound(_)) => tracking.new_checkpoint(),
-                        Err(e) => {
-                            return Err(e);
-                        }
-                    });
-                    let repo = git2::Repository::open(workdir)?;
-                    get_git_all_changes(&repo, &input.git_change_options, &checkpoint, workdir)
-                        .await?
-                }
+                VcsKind::Git => match config.vcs.r#use {
+                    VcsKind::Git => {
+                        let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
+                        let checkpoint = Some(match tracking.open_checkpoint().await {
+                            Ok(checkpoint) => checkpoint,
+                            Err(MonorailError::CheckpointNotFound(_)) => tracking.new_checkpoint(),
+                            Err(e) => {
+                                return Err(e);
+                            }
+                        });
+                        let repo = git2::Repository::open(workdir)?;
+                        get_git_all_changes(&repo, &input.git_change_options, &checkpoint, workdir)
+                            .await?
+                    }
+                },
             };
-            analyze(
-                &mut lookups,
+            (
+                Lookups::new(config, &config.get_target_path_set())?,
                 changes,
-                input.show_changes,
-                input.show_change_targets,
-                input.show_target_groups,
             )
         }
-    }
+        _ => (Lookups::new(config, &input.targets)?, None),
+    };
+
+    analyze(
+        &mut lookups,
+        changes,
+        input.show_changes,
+        input.show_change_targets,
+        input.show_target_groups,
+    )
 }
 
 fn analyze(
@@ -767,11 +727,9 @@ fn analyze(
         }
     } else {
         // use config targets and all target groups
-        // output.targets.clone_from(&lookups.targets);
         for t in &lookups.targets {
             output.targets.push(t.to_string());
         }
-        // output.targets = lookups.targets.iter().map(|s| s.to_owned()).collect();
         if show_target_groups {
             output.target_groups = Some(lookups.dag.get_labeled_groups()?);
         }
@@ -808,25 +766,10 @@ pub fn handle_target_list(
 
 #[derive(Debug)]
 pub struct HandleCheckpointUpdateInput<'a> {
-    pending: bool,
-    git_change_options: GitChangeOptions<'a>,
+    pub(crate) pending: bool,
+    pub(crate) git_change_options: GitChangeOptions<'a>,
 }
-impl<'a> TryFrom<&'a clap::ArgMatches> for HandleCheckpointUpdateInput<'a> {
-    type Error = MonorailError;
-    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
-        Ok(Self {
-            git_change_options: GitChangeOptions {
-                start: None,
-                end: None,
-                git_path: cmd
-                    .get_one::<String>("git-path")
-                    .ok_or(MonorailError::from("Missing 'git-path'"))?,
-                use_libgit2_status: cmd.get_flag("use-libgit2-status"),
-            },
-            pending: cmd.get_flag("pending"),
-        })
-    }
-}
+
 #[derive(Debug, Serialize)]
 pub struct CheckpointUpdateOutput {
     commit: String,
@@ -853,7 +796,6 @@ pub async fn handle_checkpoint_update(
             };
             checkpoint.commit = repo.revparse_single("HEAD")?.id().to_string();
             if input.pending {
-                // TODO: add uncommitted/unstaged files and checksums to the checkpoint
                 let status_changes =
                     get_git_status_changes(&repo, &input.git_change_options, &None, workdir)
                         .await?;
@@ -1118,7 +1060,6 @@ impl<'a> Lookups<'a> {
             }
         }
 
-        dbg!(&dag);
         targets.sort();
         Ok(Self {
             targets,
@@ -1193,37 +1134,6 @@ impl Config {
 pub struct Vcs {
     #[serde(default)]
     r#use: VcsKind,
-    #[serde(default)]
-    git: Git,
-}
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Git {
-    #[serde(default = "Git::default_trunk")]
-    trunk: String,
-    #[serde(default = "Git::default_remote")]
-    remote: String,
-    #[serde(default = "Git::default_tags_refspec_prefix")]
-    tags_refspec_prefix: String,
-}
-impl Git {
-    fn default_trunk() -> String {
-        "master".into()
-    }
-    fn default_remote() -> String {
-        "origin".into()
-    }
-    fn default_tags_refspec_prefix() -> String {
-        "refs/tags".into()
-    }
-}
-impl Default for Git {
-    fn default() -> Self {
-        Git {
-            trunk: Git::default_trunk(),
-            remote: Git::default_remote(),
-            tags_refspec_prefix: Git::default_tags_refspec_prefix(),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1270,35 +1180,205 @@ uses = [
 ]
 "#;
 
-    // #[tokio::test]
-    // async fn test_get_git_status_changes() {
+    #[tokio::test]
+    async fn test_get_git_diff_changes() {
+        let (repo, repo_path) = get_repo(false);
+        let mut git_opts = GitChangeOptions {
+            start: None,
+            end: None,
+            git_path: "git",
+            use_libgit2_status: false,
+        };
 
-    // }
+        // no start/end yields no changes
+        assert_eq!(
+            get_git_diff_changes(&repo, &git_opts, &None, &repo_path)
+                .await
+                .unwrap(),
+            None
+        );
+        // no start/end yields no changes, with checkpoint (empty commit) is ok
+        assert_eq!(
+            get_git_diff_changes(
+                &repo,
+                &git_opts,
+                &Some(tracking::Checkpoint {
+                    path: Path::new("x").to_path_buf(),
+                    commit: "".to_string(),
+                    pending: Some(HashMap::from([(
+                        "foo.txt".to_string(),
+                        "blarp".to_string()
+                    )])),
+                }),
+                &repo_path
+            )
+            .await
+            .unwrap(),
+            None
+        );
 
-    /*
-        // Fetch status changes, filter them using the tracking checkpoint if present.
-        async fn get_git_status_changes(
-            repo: &git2::Repository,
-            git_opts: &GitChangeOptions<'_>,
-            checkpoint: &Option<tracking::Checkpoint>,
-            workdir: &str,
-        ) -> Result<Vec<Change>, MonorailError> {
-            let status_changes = match git_opts.use_libgit2_status {
-                true => libgit2_status_changes(repo)?,
-                false => git_cmd_status_changes(git_cmd_status(git_opts.git_path, repo.workdir())?),
-            };
+        // no start/end, with invalid checkpoint commit is err
+        assert!(get_git_diff_changes(
+            &repo,
+            &git_opts,
+            &Some(tracking::Checkpoint {
+                path: Path::new("x").to_path_buf(),
+                commit: "test".to_string(),
+                pending: Some(HashMap::from([(
+                    "foo.txt".to_string(),
+                    "blarp".to_string()
+                )])),
+            }),
+            &repo_path
+        )
+        .await
+        .is_err());
 
-            // use checkpoint pending to filter status changes, if present
-            if let Some(checkpoint) = checkpoint {
-                if let Some(pending) = &checkpoint.pending {
-                    if !pending.is_empty() {
-                        return Ok(get_filtered_changes(status_changes, pending, workdir).await);
-                    }
-                }
-            }
-            Ok(status_changes)
-        }
-    */
+        // bad start is err
+        git_opts.start = Some("foo");
+        assert!(get_git_diff_changes(&repo, &git_opts, &None, &repo_path)
+            .await
+            .is_err());
+
+        // bad end is err
+        git_opts.start = Some("HEAD");
+        git_opts.end = Some("foo");
+        assert!(get_git_diff_changes(&repo, &git_opts, &None, &repo_path)
+            .await
+            .is_err());
+        git_opts.start = None;
+        git_opts.end = None;
+
+        // start == end is ok
+        // start < end with changes is ok
+        // start > end with changes is ok
+        // start != end with checkpoint file checksum match
+        // start != end with checkpoint file checksum not match
+
+        // let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
+        // let foo_path = Path::new(&repo_path).join("foo.txt");
+        // let foo_checksum = write_with_checksum(&foo_path, &vec![1]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_git_status_changes() {
+        let (repo, repo_path) = get_repo(false);
+        let git_opts = GitChangeOptions {
+            start: None,
+            end: None,
+            git_path: "git",
+            use_libgit2_status: false,
+        };
+
+        // no changes, no checkpoint is ok
+        assert_eq!(
+            get_git_status_changes(&repo, &git_opts, &None, &repo_path)
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
+
+        // no changes, with checkpoint is ok
+        assert_eq!(
+            get_git_status_changes(
+                &repo,
+                &git_opts,
+                &Some(tracking::Checkpoint {
+                    path: Path::new("x").to_path_buf(),
+                    commit: "foo".to_string(),
+                    pending: Some(HashMap::from([(
+                        "foo.txt".to_string(),
+                        "blarp".to_string()
+                    )])),
+                }),
+                &repo_path
+            )
+            .await
+            .unwrap()
+            .len(),
+            0
+        );
+
+        let foo_path = Path::new(&repo_path).join("foo.txt");
+        let foo_checksum = write_with_checksum(&foo_path, &vec![1]).await.unwrap();
+
+        // create a new file and check that it is seen
+        assert_eq!(
+            get_git_status_changes(&repo, &git_opts, &None, &repo_path)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // update checkpoint to include file and check that it is no longer seen
+        assert_eq!(
+            get_git_status_changes(
+                &repo,
+                &git_opts,
+                &Some(tracking::Checkpoint {
+                    path: Path::new("x").to_path_buf(),
+                    commit: "foo".to_string(),
+                    pending: Some(HashMap::from([(
+                        "foo.txt".to_string(),
+                        foo_checksum.clone()
+                    )])),
+                }),
+                &repo_path
+            )
+            .await
+            .unwrap()
+            .len(),
+            0
+        );
+
+        // create another file and check that it is seen
+        let bar_path = Path::new(&repo_path).join("bar.txt");
+        let bar_checksum = write_with_checksum(&bar_path, &vec![2]).await.unwrap();
+        assert_eq!(
+            get_git_status_changes(
+                &repo,
+                &git_opts,
+                &Some(tracking::Checkpoint {
+                    path: Path::new("x").to_path_buf(),
+                    commit: "foo".to_string(),
+                    pending: Some(HashMap::from([(
+                        "foo.txt".to_string(),
+                        foo_checksum.clone()
+                    )])),
+                }),
+                &repo_path
+            )
+            .await
+            .unwrap()
+            .len(),
+            1
+        );
+
+        // update checkpoint and verify second file is not seen
+        assert_eq!(
+            get_git_status_changes(
+                &repo,
+                &git_opts,
+                &Some(tracking::Checkpoint {
+                    path: Path::new("x").to_path_buf(),
+                    commit: "foo".to_string(),
+                    pending: Some(HashMap::from([
+                        ("foo.txt".to_string(), foo_checksum),
+                        ("bar.txt".to_string(), bar_checksum)
+                    ])),
+                }),
+                &repo_path
+            )
+            .await
+            .unwrap()
+            .len(),
+            0
+        );
+
+        purge_repo(&repo_path);
+    }
 
     #[tokio::test]
     async fn test_get_filtered_changes() {

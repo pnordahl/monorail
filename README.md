@@ -15,20 +15,10 @@ See the [tutorial](#tutorial) below for a practical walkthrough of how `monorail
 ### UNIX/Linux variants
 At present, only source builds are supported. Packages for popular managers will be provided at a later time.
 
-Ensure the following are installed and available on your system path:
+Ensure that Rust is installed and available on your system path:
 * [Rust](https://www.rust-lang.org/tools/install)
-* bash
-* [`jq`](https://stedolan.github.io/jq/download/), used by the `monorail-bash` extension for the default `--output-format` of `json`
 
-`monorail` and all extensions can be installed from source by cloning the repository and executing the following, from the root of the repo:
-
-```sh
-	./install.sh 
-```
-
-By default, it will place these in `/usr/local/bin`, if another location is preferred, use `./install.sh <destination>`.
-
-Note that while `monorail` can be installed from crates.io via `cargo install`, `cargo` does not support installing additional resources such as the script entrypoint for `monorail-bash`. The `install.sh` script handles both the binary and extension installation.
+Run `cargo install --path .`
 
 ### Windows
 

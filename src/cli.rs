@@ -180,6 +180,14 @@ pub fn get_app() -> clap::Command {
                     .help("Display changes, change targets, and targets")
                     .action(ArgAction::SetTrue),
             )
+            .arg(
+            Arg::new(ARG_TARGET)
+                .short('t')
+                .long(ARG_TARGET)
+                .required(false)
+                .action(ArgAction::Append)
+                .help("Scope analysis to only the provided targets.")
+        )
     )
 }
 
@@ -196,7 +204,7 @@ fn get_code(is_err: bool) -> i32 {
 }
 
 pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i32, MonorailError> {
-    let wd: String = match matches.get_one::<String>("working-directory") {
+    let wd: String = match matches.get_one::<String>(ARG_WORKING_DIRECTORY) {
         Some(wd) => wd.into(),
         None => {
             let pb = env::current_dir()?;
@@ -210,19 +218,19 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
         }
     };
 
-    match matches.get_one::<String>("config-file") {
+    match matches.get_one::<String>(ARG_CONFIG_FILE) {
         Some(cfg_path) => {
             let mut cfg =
                 core::Config::new(Path::new(&wd).join(cfg_path).to_str().unwrap_or(cfg_path))?;
             cfg.workdir.clone_from(&wd);
             cfg.validate()?;
 
-            if let Some(_config) = matches.subcommand_matches("config") {
+            if let Some(_config) = matches.subcommand_matches(CMD_CONFIG) {
                 write_result(&Ok(cfg), output_format)?;
                 return Ok(HANDLE_OK);
             }
-            if let Some(checkpoint) = matches.subcommand_matches("checkpoint") {
-                if let Some(update) = checkpoint.subcommand_matches("update") {
+            if let Some(checkpoint) = matches.subcommand_matches(CMD_CHECKPOINT) {
+                if let Some(update) = checkpoint.subcommand_matches(CMD_UPDATE) {
                     let i = core::HandleCheckpointUpdateInput::try_from(update)?;
                     let res = core::handle_checkpoint_update(&cfg, &i, &wd).await;
                     write_result(&res, output_format)?;
@@ -230,12 +238,12 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                 }
             }
 
-            if let Some(target) = matches.subcommand_matches("target") {
-                if let Some(list) = target.subcommand_matches("list") {
+            if let Some(target) = matches.subcommand_matches(CMD_TARGET) {
+                if let Some(list) = target.subcommand_matches(CMD_LIST) {
                     let res = core::handle_target_list(
                         &cfg,
                         core::HandleTargetListInput {
-                            show_target_groups: list.get_flag("show-target-groups"),
+                            show_target_groups: list.get_flag(ARG_SHOW_TARGET_GROUPS),
                         },
                     );
                     write_result(&res, output_format)?;
@@ -243,14 +251,14 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                 }
             }
 
-            if let Some(analyze) = matches.subcommand_matches("analyze") {
+            if let Some(analyze) = matches.subcommand_matches(CMD_ANALYZE) {
                 let i = core::AnalyzeInput::from(analyze);
                 let res = core::handle_analyze(&cfg, &i, &wd).await;
                 write_result(&res, output_format)?;
                 return Ok(get_code(res.is_err()));
             }
 
-            if let Some(run) = matches.subcommand_matches("run") {
+            if let Some(run) = matches.subcommand_matches(CMD_RUN) {
                 let i = core::RunInput::try_from(run).unwrap();
                 match core::handle_run(&cfg, &i, &wd).await {
                     Ok(o) => {
@@ -299,5 +307,73 @@ where
             "Unrecognized output format {}",
             output_format
         ))),
+    }
+}
+
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::HandleCheckpointUpdateInput<'a> {
+    type Error = MonorailError;
+    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
+        Ok(Self {
+            git_change_options: core::GitChangeOptions {
+                start: None,
+                end: None,
+                git_path: cmd
+                    .get_one::<String>(ARG_GIT_PATH)
+                    .ok_or(MonorailError::MissingArg(ARG_GIT_PATH.into()))?,
+                use_libgit2_status: cmd.get_flag(ARG_USE_LIBGIT2_STATUS),
+            },
+            pending: cmd.get_flag(ARG_PENDING),
+        })
+    }
+}
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::RunInput<'a> {
+    type Error = MonorailError;
+    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
+        Ok(Self {
+            git_change_options: core::GitChangeOptions {
+                start: cmd
+                    .get_one::<String>(ARG_START)
+                    .map(|x: &String| x.as_str()),
+                end: cmd.get_one::<String>(ARG_END).map(|x: &String| x.as_str()),
+                git_path: cmd
+                    .get_one::<String>(ARG_GIT_PATH)
+                    .ok_or(MonorailError::MissingArg(ARG_GIT_PATH.into()))?,
+                use_libgit2_status: cmd.get_flag(ARG_USE_LIBGIT2_STATUS),
+            },
+            functions: cmd
+                .get_many::<String>(ARG_FUNCTION)
+                .ok_or(MonorailError::MissingArg(ARG_FUNCTION.into()))
+                .into_iter()
+                .flatten()
+                .collect(),
+            targets: cmd
+                .get_many::<String>(ARG_TARGET)
+                .into_iter()
+                .flatten()
+                .collect(),
+        })
+    }
+}
+
+impl<'a> From<&'a clap::ArgMatches> for core::AnalyzeInput<'a> {
+    fn from(cmd: &'a clap::ArgMatches) -> Self {
+        Self {
+            git_change_options: core::GitChangeOptions {
+                start: cmd
+                    .get_one::<String>(ARG_START)
+                    .map(|x: &String| x.as_str()),
+                end: cmd.get_one::<String>(ARG_END).map(|x: &String| x.as_str()),
+                git_path: cmd.get_one::<String>(ARG_GIT_PATH).unwrap(),
+                use_libgit2_status: cmd.get_flag(ARG_USE_LIBGIT2_STATUS),
+            },
+            show_changes: cmd.get_flag(ARG_SHOW_CHANGES),
+            show_change_targets: cmd.get_flag(ARG_SHOW_CHANGE_TARGETS),
+            show_target_groups: cmd.get_flag(ARG_SHOW_TARGET_GROUPS),
+            targets: cmd
+                .get_many::<String>(ARG_TARGET)
+                .into_iter()
+                .flatten()
+                .collect(),
+        }
     }
 }
