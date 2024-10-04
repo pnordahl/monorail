@@ -1476,6 +1476,17 @@ uses = [
             1
         );
 
+        let end = String::from_utf8(
+            tokio::process::Command::new("git")
+                .arg("rev-parse")
+                .arg("HEAD")
+                .output()
+                .await
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+
         // update checkpoint to include file and check that it is no longer seen
         assert_eq!(
             get_git_all_changes(
@@ -1483,7 +1494,7 @@ uses = [
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: Path::new("x").to_path_buf(),
-                    commit: start.clone(),
+                    commit: end.clone(),
                     pending: Some(HashMap::from([(
                         "foo.txt".to_string(),
                         foo_checksum.clone()
