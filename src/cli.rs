@@ -18,7 +18,6 @@ pub const CMD_LIST: &str = "list";
 pub const CMD_RUN: &str = "run";
 pub const CMD_ANALYZE: &str = "analyze";
 
-pub const ARG_USE_LIBGIT2_STATUS: &str = "use-libgit2-status";
 pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_START: &str = "start";
 pub const ARG_END: &str = "end";
@@ -36,10 +35,6 @@ pub const ARG_SHOW_ALL: &str = "show-all";
 pub const VAL_JSON: &str = "json";
 
 pub fn get_app() -> clap::Command {
-    let arg_use_libgit2_status = Arg::new(ARG_USE_LIBGIT2_STATUS)
-        .long(ARG_USE_LIBGIT2_STATUS)
-        .help("Whether to use the slower libgit2 repo function `statuses` as part of change detection. When unset monorail will use the `git` program in a subprocess, which is presently substantially faster.")
-        .action(ArgAction::SetTrue);
     let arg_git_path = Arg::new(ARG_GIT_PATH)
         .long(ARG_GIT_PATH)
         .help("Absolute path to a `git` binary to use for certain operations. Defaults to `git` on PATH")
@@ -93,7 +88,6 @@ pub fn get_app() -> clap::Command {
             .about("Update the tracking checkpoint")
             .after_help(r#"This command updates the tracking checkpoint file with data appropriate for the configured vcs."#)
             .arg(arg_git_path.clone())
-            .arg(arg_use_libgit2_status.clone())
             .arg(
                 Arg::new(ARG_PENDING)
                     .short('p')
@@ -123,7 +117,6 @@ pub fn get_app() -> clap::Command {
         .about("Run target-defined functions.")
         .after_help(r#"This command analyzes the target graph and performs parallel or serial execution of the provided function names."#)
         .arg(arg_git_path.clone())
-        .arg(arg_use_libgit2_status.clone())
         .arg(arg_start.clone())
         .arg(arg_end.clone())
         .arg(
@@ -149,7 +142,6 @@ pub fn get_app() -> clap::Command {
             .about("Analyze repository changes and targets")
             .after_help(r#"This command analyzes staged, unpushed, and pushed changes between two checkpoints in version control history, as well as unstaged changes present only in your local filesystem. By default, only outputs a list of affected targets."#)
             .arg(arg_git_path.clone())
-            .arg(arg_use_libgit2_status.clone())
             .arg(arg_start.clone())
             .arg(arg_end.clone())
             .arg(
@@ -320,7 +312,6 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::HandleCheckpointUpdateInput<'a>
                 git_path: cmd
                     .get_one::<String>(ARG_GIT_PATH)
                     .ok_or(MonorailError::MissingArg(ARG_GIT_PATH.into()))?,
-                use_libgit2_status: cmd.get_flag(ARG_USE_LIBGIT2_STATUS),
             },
             pending: cmd.get_flag(ARG_PENDING),
         })
@@ -338,7 +329,6 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::RunInput<'a> {
                 git_path: cmd
                     .get_one::<String>(ARG_GIT_PATH)
                     .ok_or(MonorailError::MissingArg(ARG_GIT_PATH.into()))?,
-                use_libgit2_status: cmd.get_flag(ARG_USE_LIBGIT2_STATUS),
             },
             functions: cmd
                 .get_many::<String>(ARG_FUNCTION)
@@ -364,7 +354,6 @@ impl<'a> From<&'a clap::ArgMatches> for core::AnalyzeInput<'a> {
                     .map(|x: &String| x.as_str()),
                 end: cmd.get_one::<String>(ARG_END).map(|x: &String| x.as_str()),
                 git_path: cmd.get_one::<String>(ARG_GIT_PATH).unwrap(),
-                use_libgit2_status: cmd.get_flag(ARG_USE_LIBGIT2_STATUS),
             },
             show_changes: cmd.get_flag(ARG_SHOW_CHANGES),
             show_change_targets: cmd.get_flag(ARG_SHOW_CHANGE_TARGETS),
