@@ -1487,6 +1487,8 @@ uses = [
         )
         .unwrap();
 
+        dbg!(&end);
+
         // update checkpoint to include file and check that it is no longer seen
         assert_eq!(
             get_git_all_changes(
