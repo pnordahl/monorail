@@ -1473,7 +1473,7 @@ uses = [
                 .unwrap()
                 .unwrap()
                 .len(),
-            2 // TODO: this is a dumb duplication that is a result of how we create commits; fix
+            1
         );
 
         // update checkpoint to include file and check that it is no longer seen
