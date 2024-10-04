@@ -1451,6 +1451,7 @@ uses = [
             0
         );
 
+        // create a new file and check that it is seen
         let foo_path = Path::new(&repo_path).join("foo.txt");
         let foo_checksum = write_with_checksum(&foo_path, &vec![1]).await.unwrap();
         tokio::process::Command::new("git")
@@ -1461,12 +1462,11 @@ uses = [
             .status()
             .await
             .unwrap();
-        let oid2 = commit_file(&repo, "foo.txt", Some("HEAD"), &[&get_commit(&repo, oid1)]);
+        // let oid2 = commit_file(&repo, "foo.txt", Some("HEAD"), &[&get_commit(&repo, oid1)]);
         // let end = format!("{}", oid2);
         // git_opts.end = Some(&end);
         git_opts.end = None;
 
-        // create a new file and check that it is seen
         assert_eq!(
             get_git_all_changes(&repo, &git_opts, &None, &repo_path)
                 .await
