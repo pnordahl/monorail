@@ -22,7 +22,7 @@ use trie_rs::{Trie, TrieBuilder};
 use crate::error::{GraphError, MonorailError};
 
 #[derive(Debug)]
-pub struct GitChangeOptions<'a> {
+pub struct GitOptions<'a> {
     pub(crate) start: Option<&'a str>,
     pub(crate) end: Option<&'a str>,
     pub(crate) git_path: &'a str,
@@ -30,7 +30,7 @@ pub struct GitChangeOptions<'a> {
 
 #[derive(Debug)]
 pub struct RunInput<'a> {
-    pub(crate) git_change_options: GitChangeOptions<'a>,
+    pub(crate) git_opts: GitOptions<'a>,
     pub(crate) functions: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
 }
@@ -157,7 +157,7 @@ async fn get_filtered_changes(
 
 // Fetch diff changes, using the tracking checkpoint commit if present.
 async fn get_git_diff_changes<'a>(
-    git_opts: &'a GitChangeOptions<'a>,
+    git_opts: &'a GitOptions<'a>,
     checkpoint: &'a Option<tracking::Checkpoint>,
     workdir: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
@@ -192,7 +192,7 @@ async fn get_git_diff_changes<'a>(
 }
 
 async fn get_git_all_changes<'a>(
-    git_opts: &'a GitChangeOptions<'a>,
+    git_opts: &'a GitOptions<'a>,
     checkpoint: &'a Option<tracking::Checkpoint>,
     workdir: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
@@ -249,9 +249,7 @@ pub async fn handle_run<'a>(
             });
 
             let changes = match config.vcs.r#use {
-                VcsKind::Git => {
-                    get_git_diff_changes(&input.git_change_options, &checkpoint, workdir).await?
-                }
+                VcsKind::Git => get_git_diff_changes(&input.git_opts, &checkpoint, workdir).await?,
             };
             let ao = analyze(&mut lookups, changes, false, false, true)?;
             let target_groups = ao
@@ -459,7 +457,7 @@ async fn run_bash_command(
 
 #[derive(Debug)]
 pub struct AnalyzeInput<'a> {
-    pub(crate) git_change_options: GitChangeOptions<'a>,
+    pub(crate) git_opts: GitOptions<'a>,
     pub(crate) show_changes: bool,
     pub(crate) show_change_targets: bool,
     pub(crate) show_target_groups: bool,
@@ -530,7 +528,7 @@ pub async fn handle_analyze<'a>(
                                 return Err(e);
                             }
                         });
-                        get_git_all_changes(&input.git_change_options, &checkpoint, workdir).await?
+                        get_git_all_changes(&input.git_opts, &checkpoint, workdir).await?
                     }
                 },
             };
@@ -736,17 +734,46 @@ pub fn handle_target_list(
     Ok(o)
 }
 
+#[derive(Debug, Serialize)]
+pub struct CheckpointClearOutput {
+    checkpoint: tracking::Checkpoint,
+}
+
+pub async fn handle_checkpoint_clear(
+    workdir: &path::Path,
+) -> Result<CheckpointClearOutput, MonorailError> {
+    let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
+    let mut checkpoint = tracking.open_checkpoint().await?;
+    checkpoint.commit = "".to_string();
+    checkpoint.pending = None;
+    checkpoint.save().await?;
+
+    Ok(CheckpointClearOutput { checkpoint })
+}
+
+#[derive(Debug, Serialize)]
+pub struct CheckpointShowOutput {
+    checkpoint: tracking::Checkpoint,
+}
+
+pub async fn handle_checkpoint_show(
+    workdir: &path::Path,
+) -> Result<CheckpointShowOutput, MonorailError> {
+    let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
+    Ok(CheckpointShowOutput {
+        checkpoint: tracking.open_checkpoint().await?,
+    })
+}
+
 #[derive(Debug)]
 pub struct HandleCheckpointUpdateInput<'a> {
     pub(crate) pending: bool,
-    pub(crate) git_change_options: GitChangeOptions<'a>,
+    pub(crate) git_opts: GitOptions<'a>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CheckpointUpdateOutput {
-    commit: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pending: Option<HashMap<String, String>>,
+    checkpoint: tracking::Checkpoint,
 }
 
 pub async fn handle_checkpoint_update(
@@ -755,40 +782,41 @@ pub async fn handle_checkpoint_update(
     workdir: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
     match cfg.vcs.r#use {
-        VcsKind::Git => {
-            let repo = git2::Repository::open(workdir)?;
-            let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
-            let mut checkpoint = match tracking.open_checkpoint().await {
-                Ok(cp) => cp,
-                Err(MonorailError::CheckpointNotFound(_)) => tracking.new_checkpoint(),
-                // TODO: need to set path on checkpoint tho; don't use default
-                Err(e) => {
-                    return Err(e);
+        VcsKind::Git => checkpoint_update_git(input.pending, &input.git_opts, workdir).await,
+    }
+}
+
+async fn checkpoint_update_git<'a>(
+    include_pending: bool,
+    git_opts: &'a GitOptions<'a>,
+    workdir: &path::Path,
+) -> Result<CheckpointUpdateOutput, MonorailError> {
+    let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
+    let mut checkpoint = match tracking.open_checkpoint().await {
+        Ok(cp) => cp,
+        Err(MonorailError::CheckpointNotFound(_)) => tracking.new_checkpoint(),
+        // TODO: need to set path on checkpoint tho; don't use default
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    checkpoint.commit = "head".to_string();
+    if include_pending {
+        // get all changes with no checkpoint, so diff will return [HEAD, staging area]
+        let pending_changes = get_git_all_changes(git_opts, &None, workdir).await?;
+        if let Some(pending_changes) = pending_changes {
+            if !pending_changes.is_empty() {
+                let mut pending = HashMap::new();
+                for change in pending_changes.iter() {
+                    let p = workdir.join(&change.name);
+                    pending.insert(change.name.clone(), get_file_checksum(&p).await?);
                 }
-            };
-            checkpoint.commit = repo.revparse_single("HEAD")?.id().to_string();
-            if input.pending {
-                // get all changes with no checkpoint, so diff will return [HEAD, staging area]
-                let pending_changes =
-                    get_git_all_changes(&input.git_change_options, &None, workdir).await?;
-                if let Some(pending_changes) = pending_changes {
-                    if !pending_changes.is_empty() {
-                        let mut pending = HashMap::new();
-                        for change in pending_changes.iter() {
-                            let p = workdir.join(&change.name);
-                            pending.insert(change.name.clone(), get_file_checksum(&p).await?);
-                        }
-                        checkpoint.pending = Some(pending);
-                    }
-                }
+                checkpoint.pending = Some(pending);
             }
-            checkpoint.save().await?;
-            Ok(CheckpointUpdateOutput {
-                commit: checkpoint.commit,
-                pending: checkpoint.pending,
-            })
         }
     }
+    checkpoint.save().await?;
+    Ok(CheckpointUpdateOutput { checkpoint })
 }
 
 async fn git_cmd_other_changes(
@@ -1125,7 +1153,7 @@ uses = [
     #[tokio::test]
     async fn test_get_git_diff_changes_ok() -> Result<(), Box<dyn std::error::Error>> {
         let (repo, repo_path) = get_repo(false);
-        let mut git_opts = GitChangeOptions {
+        let mut git_opts = GitOptions {
             start: None,
             end: None,
             git_path: "git",
@@ -1191,7 +1219,7 @@ uses = [
     async fn test_get_git_diff_changes_ok_with_checkpoint() -> Result<(), Box<dyn std::error::Error>>
     {
         let (_repo, repo_path) = get_repo(false);
-        let git_opts = GitChangeOptions {
+        let git_opts = GitOptions {
             start: None,
             end: None,
             git_path: "git",
@@ -1275,7 +1303,7 @@ uses = [
         // foo is visible if user passes start, since it has higher priority over checkpoint commit
         assert_eq!(
             get_git_diff_changes(
-                &GitChangeOptions {
+                &GitOptions {
                     start: Some(&first_head),
                     end: None,
                     git_path: "git",
@@ -1300,7 +1328,7 @@ uses = [
     #[tokio::test]
     async fn test_get_git_diff_changes_err() -> Result<(), Box<dyn std::error::Error>> {
         let (repo, repo_path) = get_repo(false);
-        let mut git_opts = GitChangeOptions {
+        let mut git_opts = GitOptions {
             start: None,
             end: None,
             git_path: "git",
@@ -1348,7 +1376,7 @@ uses = [
         let (_repo, repo_path) = get_repo(false);
         // no changes, no checkpoint is ok
         assert!(get_git_all_changes(
-            &GitChangeOptions {
+            &GitOptions {
                 start: None,
                 end: None,
                 git_path: "git",
@@ -1364,7 +1392,7 @@ uses = [
     #[tokio::test]
     async fn test_get_git_all_changes_ok2() {
         let (repo, repo_path) = get_repo(false);
-        let mut git_opts = GitChangeOptions {
+        let mut git_opts = GitOptions {
             start: None,
             end: None,
             git_path: "git",
@@ -1399,7 +1427,7 @@ uses = [
     #[tokio::test]
     async fn test_get_git_all_changes_ok3() {
         let (repo, repo_path) = get_repo(false);
-        let mut git_opts = GitChangeOptions {
+        let mut git_opts = GitOptions {
             start: None,
             end: None,
             git_path: "git",

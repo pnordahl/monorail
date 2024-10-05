@@ -12,7 +12,9 @@ use std::result::Result;
 pub const CMD_MONORAIL: &str = "monorail";
 pub const CMD_CONFIG: &str = "config";
 pub const CMD_CHECKPOINT: &str = "checkpoint";
+pub const CMD_CLEAR: &str = "clear";
 pub const CMD_UPDATE: &str = "update";
+pub const CMD_SHOW: &str = "show";
 pub const CMD_TARGET: &str = "target";
 pub const CMD_LIST: &str = "list";
 pub const CMD_RUN: &str = "run";
@@ -86,7 +88,7 @@ pub fn get_app() -> clap::Command {
         .subcommand(
         Command::new(CMD_UPDATE)
             .about("Update the tracking checkpoint")
-            .after_help(r#"This command updates the tracking checkpoint file with data appropriate for the configured vcs."#)
+            .after_help(r#"This command updates the tracking checkpoint with data appropriate for the configured vcs."#)
             .arg(arg_git_path.clone())
             .arg(
                 Arg::new(ARG_PENDING)
@@ -95,6 +97,16 @@ pub fn get_app() -> clap::Command {
                     .help("Add pending changes to the checkpoint. E.g. for git, this means the paths and content checksums of uncommitted and unstaged changes since the last commit.")
                     .action(ArgAction::SetTrue),
             )
+        )
+        .subcommand(
+        Command::new(CMD_CLEAR)
+            .about("Clear the tracking checkpoint")
+            .after_help(r#"This command removes the tracking checkpoint."#)
+        )
+        .subcommand(
+        Command::new(CMD_SHOW)
+            .about("Show the tracking checkpoint")
+            .after_help(r#"This command displays the tracking checkpoint."#)
         )
         // TODO: monorail checkpoint show
         // TODO: monorail checkpoint clear
@@ -216,6 +228,16 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
                 }
+                if checkpoint.subcommand_matches(CMD_CLEAR).is_some() {
+                    let res = core::handle_checkpoint_clear(&workdir).await;
+                    write_result(&res, output_format)?;
+                    return Ok(get_code(res.is_err()));
+                }
+                if checkpoint.subcommand_matches(CMD_SHOW).is_some() {
+                    let res = core::handle_checkpoint_show(&workdir).await;
+                    write_result(&res, output_format)?;
+                    return Ok(get_code(res.is_err()));
+                }
             }
 
             if let Some(target) = matches.subcommand_matches(CMD_TARGET) {
@@ -295,7 +317,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::HandleCheckpointUpdateInput<'a>
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            git_change_options: core::GitChangeOptions {
+            git_opts: core::GitOptions {
                 start: None,
                 end: None,
                 git_path: cmd
@@ -310,7 +332,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::RunInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            git_change_options: core::GitChangeOptions {
+            git_opts: core::GitOptions {
                 start: cmd
                     .get_one::<String>(ARG_START)
                     .map(|x: &String| x.as_str()),
@@ -337,7 +359,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::RunInput<'a> {
 impl<'a> From<&'a clap::ArgMatches> for core::AnalyzeInput<'a> {
     fn from(cmd: &'a clap::ArgMatches) -> Self {
         Self {
-            git_change_options: core::GitChangeOptions {
+            git_opts: core::GitOptions {
                 start: cmd
                     .get_one::<String>(ARG_START)
                     .map(|x: &String| x.as_str()),
