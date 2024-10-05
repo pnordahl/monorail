@@ -208,35 +208,9 @@ mod tests {
         ]);
 
         dag.set_subtree_visibility(1, false);
-        assert_eq!(dag.visibility[0], true);
-        assert_eq!(dag.visibility[1], false);
-        assert_eq!(dag.visibility[2], false);
-        assert_eq!(dag.visibility[3], true);
+        assert!(dag.visibility[0]);
+        assert!(!dag.visibility[1]);
+        assert!(!dag.visibility[2]);
+        assert!(dag.visibility[3]);
     }
-
-    // #[test]
-    // fn test_get_labeled_set() {
-    //     let mut dag = fill_dag(vec![
-    //         ("0", 0, vec![1, 2], true),
-    //         ("1", 1, vec![2], true),
-    //         ("2", 2, vec![], true),
-    //         ("3", 3, vec![1], true),
-    //     ]);
-
-    //     let targets = vec![];
-    //     let lts = dag.get_labeled_set(&targets).unwrap();
-    //     assert_eq!(lts.len(), 0);
-
-    //     let targets = vec!["2".to_string()];
-    //     let lts = dag.get_labeled_set(&targets).unwrap();
-    //     assert_eq!(lts.len(), 1);
-    //     assert!(lts.contains("2"));
-
-    //     let targets = vec!["0".to_string()];
-    //     let lts = dag.get_labeled_set(&targets).unwrap();
-    //     assert_eq!(lts.len(), 3);
-    //     assert!(lts.contains("0"));
-    //     assert!(lts.contains("1"));
-    //     assert!(lts.contains("2"));
-    // }
 }

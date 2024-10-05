@@ -6,7 +6,7 @@ use clap::{Arg, ArgAction, Command};
 use serde::Serialize;
 use std::env;
 use std::io::Write;
-use std::path::Path;
+use std::path;
 use std::result::Result;
 
 pub const CMD_MONORAIL: &str = "monorail";
@@ -196,26 +196,14 @@ fn get_code(is_err: bool) -> i32 {
 }
 
 pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i32, MonorailError> {
-    let wd: String = match matches.get_one::<String>(ARG_WORKING_DIRECTORY) {
-        Some(wd) => wd.into(),
-        None => {
-            let pb = env::current_dir()?;
-            let s = pb.to_str();
-            match s {
-                Some(s) => s.to_string(),
-                None => {
-                    return Err(MonorailError::from("Failed to get current dir"));
-                }
-            }
-        }
+    let workdir: path::PathBuf = match matches.get_one::<String>(ARG_WORKING_DIRECTORY) {
+        Some(wd) => path::Path::new(wd).to_path_buf(),
+        None => env::current_dir()?,
     };
 
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
         Some(cfg_path) => {
-            let mut cfg =
-                core::Config::new(Path::new(&wd).join(cfg_path).to_str().unwrap_or(cfg_path))?;
-            cfg.workdir.clone_from(&wd);
-            cfg.validate()?;
+            let cfg = core::Config::new(&workdir.join(cfg_path))?;
 
             if let Some(_config) = matches.subcommand_matches(CMD_CONFIG) {
                 write_result(&Ok(cfg), output_format)?;
@@ -224,7 +212,7 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
             if let Some(checkpoint) = matches.subcommand_matches(CMD_CHECKPOINT) {
                 if let Some(update) = checkpoint.subcommand_matches(CMD_UPDATE) {
                     let i = core::HandleCheckpointUpdateInput::try_from(update)?;
-                    let res = core::handle_checkpoint_update(&cfg, &i, &wd).await;
+                    let res = core::handle_checkpoint_update(&cfg, &i, &workdir).await;
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
                 }
@@ -237,6 +225,7 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                         core::HandleTargetListInput {
                             show_target_groups: list.get_flag(ARG_SHOW_TARGET_GROUPS),
                         },
+                        &workdir,
                     );
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
@@ -245,14 +234,14 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
 
             if let Some(analyze) = matches.subcommand_matches(CMD_ANALYZE) {
                 let i = core::AnalyzeInput::from(analyze);
-                let res = core::handle_analyze(&cfg, &i, &wd).await;
+                let res = core::handle_analyze(&cfg, &i, &workdir).await;
                 write_result(&res, output_format)?;
                 return Ok(get_code(res.is_err()));
             }
 
             if let Some(run) = matches.subcommand_matches(CMD_RUN) {
                 let i = core::RunInput::try_from(run).unwrap();
-                match core::handle_run(&cfg, &i, &wd).await {
+                match core::handle_run(&cfg, &i, &workdir).await {
                     Ok(o) => {
                         let mut code = HANDLE_OK;
                         if o.failed {
