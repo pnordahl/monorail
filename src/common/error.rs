@@ -31,7 +31,7 @@ impl fmt::Display for GraphError {
 #[derive(Debug)]
 pub enum MonorailError {
     Generic(String),
-    Git2(git2::Error),
+    Git(String),
     Io(io::Error),
     PathDNE(String),
     TomlDeserialize(toml::de::Error),
@@ -40,7 +40,8 @@ pub enum MonorailError {
     ParseInt(num::ParseIntError),
     DependencyGraph(GraphError),
     Join(tokio::task::JoinError),
-    CheckpointNotFound(io::Error),
+    TrackingCheckpointNotFound(io::Error),
+    TrackingLogInfoNotFound(io::Error),
     MissingArg(String),
 }
 impl From<String> for MonorailError {
@@ -51,11 +52,6 @@ impl From<String> for MonorailError {
 impl From<&str> for MonorailError {
     fn from(error: &str) -> Self {
         MonorailError::Generic(error.to_owned())
-    }
-}
-impl From<git2::Error> for MonorailError {
-    fn from(error: git2::Error) -> Self {
-        MonorailError::Git2(error)
     }
 }
 impl From<std::io::Error> for MonorailError {
@@ -93,7 +89,7 @@ impl fmt::Display for MonorailError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MonorailError::Generic(error) => write!(f, "Error: {}", error),
-            MonorailError::Git2(error) => write!(f, "Git2 error: {}", error),
+            MonorailError::Git(error) => write!(f, "Git error: {}", error),
             MonorailError::Io(error) => write!(f, "IO error: {}", error),
             MonorailError::PathDNE(error) => write!(f, "Path does not exist: {}", error),
             MonorailError::TomlDeserialize(error) => {
@@ -107,8 +103,11 @@ impl fmt::Display for MonorailError {
             }
             MonorailError::Join(error) => write!(f, "Task join error: {}", error),
             MonorailError::MissingArg(s) => write!(f, "Missing argument error: {}", s),
-            MonorailError::CheckpointNotFound(error) => {
+            MonorailError::TrackingCheckpointNotFound(error) => {
                 write!(f, "Tracking checkpoint open error: {}", error)
+            }
+            MonorailError::TrackingLogInfoNotFound(error) => {
+                write!(f, "Tracking log info open error: {}", error)
             }
         }
     }
@@ -127,8 +126,8 @@ impl Serialize for MonorailError {
                 state.serialize_field("type", "generic")?;
                 state.serialize_field("message", &self.to_string())?;
             }
-            MonorailError::Git2(_) => {
-                state.serialize_field("type", "git2")?;
+            MonorailError::Git(_) => {
+                state.serialize_field("type", "Git")?;
                 state.serialize_field("message", &self.to_string())?;
             }
             MonorailError::Io(_) => {
@@ -163,8 +162,12 @@ impl Serialize for MonorailError {
                 state.serialize_field("type", "task_join")?;
                 state.serialize_field("message", &self.to_string())?;
             }
-            MonorailError::CheckpointNotFound(_) => {
-                state.serialize_field("type", "checkpoint_not_found")?;
+            MonorailError::TrackingCheckpointNotFound(_) => {
+                state.serialize_field("type", "tracking_checkpoint_not_found")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::TrackingLogInfoNotFound(_) => {
+                state.serialize_field("type", "tracking_log_info_not_found")?;
                 state.serialize_field("message", &self.to_string())?;
             }
             MonorailError::MissingArg(_) => {

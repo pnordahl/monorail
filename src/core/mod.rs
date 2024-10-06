@@ -1,4 +1,5 @@
-use crate::{graph, tracking};
+mod graph;
+mod tracking;
 
 use std::cmp::Ordering;
 use std::{fs, path};
@@ -19,7 +20,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio_stream::StreamExt;
 use trie_rs::{Trie, TrieBuilder};
 
-use crate::error::{GraphError, MonorailError};
+use crate::common::error::{GraphError, MonorailError};
 
 #[derive(Debug)]
 pub struct GitOptions<'a> {
@@ -94,10 +95,6 @@ impl TargetRunFailure {
     }
 }
 
-fn get_tracking_path(workdir: &path::Path) -> path::PathBuf {
-    workdir.join("monorail-out").join("tracking")
-}
-
 // Open a file from the provided path, and compute its checksum
 // TODO: allow hasher to be passed in?
 // TODO: configure buffer size based on file size?
@@ -120,13 +117,13 @@ async fn get_file_checksum(path: &path::Path) -> Result<String, MonorailError> {
 
 async fn checksum_is_equal(
     pending: &HashMap<String, String>,
-    workdir: &path::Path,
+    work_dir: &path::Path,
     name: &str,
 ) -> bool {
     match pending.get(name) {
         Some(checksum) => {
             // compute checksum of x.name and check not equal
-            get_file_checksum(&workdir.join(name))
+            get_file_checksum(&work_dir.join(name))
                 .await
                 // Note that any error here is ignored; the reason for this is that checkpoints
                 // can reference stale or deleted paths, and it's not in our best interest to
@@ -140,11 +137,11 @@ async fn checksum_is_equal(
 async fn get_filtered_changes(
     changes: Vec<Change>,
     pending: &HashMap<String, String>,
-    workdir: &path::Path,
+    work_dir: &path::Path,
 ) -> Vec<Change> {
     tokio_stream::iter(changes)
         .then(|x| async {
-            if checksum_is_equal(pending, workdir, &x.name).await {
+            if checksum_is_equal(pending, work_dir, &x.name).await {
                 None
             } else {
                 Some(x)
@@ -159,7 +156,7 @@ async fn get_filtered_changes(
 async fn get_git_diff_changes<'a>(
     git_opts: &'a GitOptions<'a>,
     checkpoint: &'a Option<tracking::Checkpoint>,
-    workdir: &path::Path,
+    work_dir: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
     let start = git_opts.start.or_else(|| {
         // otherwise, check checkpoint.commit; if provided, use that
@@ -180,7 +177,7 @@ async fn get_git_diff_changes<'a>(
         None => None,
     };
 
-    let diff_changes = git_cmd_diff_changes(git_opts.git_path, workdir, start, end).await?;
+    let diff_changes = git_cmd_diff_changes(git_opts.git_path, work_dir, start, end).await?;
     if start.is_none() && end.is_none() && diff_changes.is_empty() {
         // no pending changes and diff range is ok, but signficant in that it
         // means change detection is impossible and other processes should consider
@@ -194,10 +191,10 @@ async fn get_git_diff_changes<'a>(
 async fn get_git_all_changes<'a>(
     git_opts: &'a GitOptions<'a>,
     checkpoint: &'a Option<tracking::Checkpoint>,
-    workdir: &path::Path,
+    work_dir: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
-    let diff_changes = get_git_diff_changes(git_opts, checkpoint, workdir).await?;
-    let mut other_changes = git_cmd_other_changes(git_opts.git_path, workdir).await?;
+    let diff_changes = get_git_diff_changes(git_opts, checkpoint, work_dir).await?;
+    let mut other_changes = git_cmd_other_changes(git_opts.git_path, work_dir).await?;
     if let Some(diff_changes) = diff_changes {
         other_changes.extend(diff_changes);
     }
@@ -205,7 +202,7 @@ async fn get_git_all_changes<'a>(
         Some(checkpoint) => {
             if let Some(pending) = &checkpoint.pending {
                 if !pending.is_empty() {
-                    get_filtered_changes(other_changes, pending, workdir).await
+                    get_filtered_changes(other_changes, pending, work_dir).await
                 } else {
                     other_changes
                 }
@@ -226,39 +223,45 @@ async fn get_git_all_changes<'a>(
     Ok(Some(filtered_changes))
 }
 
+// todo/ monorail-out/log not created automatically
+
 pub async fn handle_run<'a>(
-    config: &'a Config,
+    cfg: &'a Config,
     input: &'a RunInput<'a>,
-    workdir: &'a path::Path,
+    work_dir: &'a path::Path,
 ) -> Result<RunOutput<'a>, MonorailError> {
-    let targets = config
+    let tracking_table = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
+
+    let targets = cfg
         .targets
         .as_ref()
         .ok_or(MonorailError::from("No configured targets"))?;
     match input.targets.len() {
         0 => {
-            let ths = config.get_target_path_set();
-            let mut lookups = Lookups::new(config, &ths, workdir)?;
-            let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
-            let checkpoint = Some(match tracking.open_checkpoint().await {
-                Ok(checkpoint) => checkpoint,
-                Err(MonorailError::CheckpointNotFound(_)) => tracking.new_checkpoint(),
+            let ths = cfg.get_target_path_set();
+            let mut lookups = Lookups::new(cfg, &ths, work_dir)?;
+            let checkpoint = match tracking_table.open_checkpoint().await {
+                Ok(checkpoint) => Some(checkpoint),
+                Err(MonorailError::TrackingCheckpointNotFound(_)) => None,
                 Err(e) => {
                     return Err(e);
                 }
-            });
+            };
 
-            let changes = match config.vcs.r#use {
-                VcsKind::Git => get_git_diff_changes(&input.git_opts, &checkpoint, workdir).await?,
+            let changes = match cfg.vcs.r#use {
+                VcsKind::Git => {
+                    get_git_diff_changes(&input.git_opts, &checkpoint, work_dir).await?
+                }
             };
             let ao = analyze(&mut lookups, changes, false, false, true)?;
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
             run(
+                cfg,
+                &tracking_table,
                 &lookups,
-                workdir,
-                "todochangeme",
+                work_dir,
                 &input.functions,
                 targets.clone(),
                 &target_groups,
@@ -266,15 +269,16 @@ pub async fn handle_run<'a>(
             .await
         }
         _ => {
-            let mut lookups = Lookups::new(config, &input.targets, workdir)?;
+            let mut lookups = Lookups::new(cfg, &input.targets, work_dir)?;
             let ao = analyze(&mut lookups, None, false, false, true)?;
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
             run(
+                cfg,
+                &tracking_table,
                 &lookups,
-                workdir,
-                "todochangeme",
+                work_dir,
                 &input.functions,
                 targets.clone(),
                 &target_groups,
@@ -285,9 +289,10 @@ pub async fn handle_run<'a>(
 }
 
 async fn run<'a>(
+    cfg: &'a Config,
+    tracking_table: &tracking::Table,
     lookups: &Lookups<'_>,
-    workdir: &path::Path,
-    log_id: &str,
+    work_dir: &path::Path,
     functions: &'a [&'a String],
     targets: Vec<Target>,
     target_groups: &Vec<Vec<String>>,
@@ -296,6 +301,21 @@ async fn run<'a>(
         failed: false,
         results: vec![],
     };
+    // obtain current log info counter and increment it before using
+    let mut log_info = match tracking_table.open_log_info().await {
+        Ok(log_info) => log_info,
+        Err(MonorailError::TrackingLogInfoNotFound(_)) => tracking_table.new_log_info(),
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    if log_info.id >= cfg.max_retained_run_logs {
+        log_info.id = 0;
+    }
+    log_info.id += 1;
+
+    log_info.save().await?;
+    let log_dir = cfg.get_log_path(work_dir).join(&format!("{}", log_info.id));
     for f in functions.iter() {
         for group in target_groups {
             let mut tuples: Vec<(String, String, String)> = vec![];
@@ -322,18 +342,13 @@ async fn run<'a>(
                     f.to_string(),
                 ));
             }
+
             let mut js = tokio::task::JoinSet::new();
             for (target_path, script_path, func) in tuples {
                 // TODO: check file type to pick command
-                let lp = LogPaths::new(
-                    workdir,
-                    "monorail-out/logs",
-                    log_id,
-                    func.as_str(),
-                    &target_path,
-                );
+                let lp = LogPaths::new(&log_dir, func.as_str(), &target_path);
                 js.spawn(run_bash_command(
-                    workdir.to_owned(),
+                    work_dir.to_owned(),
                     target_path.to_owned(),
                     script_path,
                     func.to_owned(),
@@ -397,8 +412,8 @@ pub struct LogPaths {
     stderr_log_path: path::PathBuf,
 }
 impl LogPaths {
-    fn new(workdir: &path::Path, logdir: &str, id: &str, function: &str, target: &str) -> Self {
-        let dir_path = workdir.join(logdir).join(id).join(function).join(target);
+    fn new(log_dir: &path::Path, function: &str, target: &str) -> Self {
+        let dir_path = log_dir.join(function).join(target);
         let stdout_log_path = dir_path.clone().join("stdout");
         let stderr_log_path = dir_path.clone().join("stderr");
         Self {
@@ -429,7 +444,7 @@ impl LogPaths {
 // TODO: LogPaths -> TargetPaths and include all paths in it
 // TODO: clean up this returning of the string target_path
 async fn run_bash_command(
-    workdir: path::PathBuf,
+    work_dir: path::PathBuf,
     target_path: String,
     script: String,
     function: String,
@@ -439,7 +454,7 @@ async fn run_bash_command(
     let mut cmd = tokio::process::Command::new("bash")
         .arg("-c")
         .arg(format!("source $(pwd)/{} && {}", script, function))
-        .current_dir(workdir)
+        .current_dir(work_dir)
         .stdout(stdout_log_file)
         .stderr(stderr_log_file)
         // parallel execution makes use of stdin impractical
@@ -511,33 +526,34 @@ enum AnalyzedChangeTargetReason {
 }
 
 pub async fn handle_analyze<'a>(
-    config: &'a Config,
+    cfg: &'a Config,
     input: &AnalyzeInput<'a>,
-    workdir: &'a path::Path,
+    work_dir: &'a path::Path,
 ) -> Result<AnalyzeOutput, MonorailError> {
     let (mut lookups, changes) = match input.targets.len() {
         0 => {
-            let changes = match config.vcs.r#use {
-                VcsKind::Git => match config.vcs.r#use {
+            let changes = match cfg.vcs.r#use {
+                VcsKind::Git => match cfg.vcs.r#use {
                     VcsKind::Git => {
-                        let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
-                        let checkpoint = Some(match tracking.open_checkpoint().await {
-                            Ok(checkpoint) => checkpoint,
-                            Err(MonorailError::CheckpointNotFound(_)) => tracking.new_checkpoint(),
+                        let tracking =
+                            tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
+                        let checkpoint = match tracking.open_checkpoint().await {
+                            Ok(checkpoint) => Some(checkpoint),
+                            Err(MonorailError::TrackingCheckpointNotFound(_)) => None,
                             Err(e) => {
                                 return Err(e);
                             }
-                        });
-                        get_git_all_changes(&input.git_opts, &checkpoint, workdir).await?
+                        };
+                        get_git_all_changes(&input.git_opts, &checkpoint, work_dir).await?
                     }
                 },
             };
             (
-                Lookups::new(config, &config.get_target_path_set(), workdir)?,
+                Lookups::new(cfg, &cfg.get_target_path_set(), work_dir)?,
                 changes,
             )
         }
-        _ => (Lookups::new(config, &input.targets, workdir)?, None),
+        _ => (Lookups::new(cfg, &input.targets, work_dir)?, None),
     };
 
     analyze(
@@ -721,34 +737,36 @@ pub struct TargetListOutput {
 pub fn handle_target_list(
     cfg: &Config,
     input: HandleTargetListInput,
-    workdir: &path::Path,
+    work_dir: &path::Path,
 ) -> Result<TargetListOutput, MonorailError> {
     let mut o = TargetListOutput {
         targets: cfg.targets.clone(),
         target_groups: None,
     };
     if input.show_target_groups {
-        let mut lookups = Lookups::new(cfg, &cfg.get_target_path_set(), workdir)?;
+        let mut lookups = Lookups::new(cfg, &cfg.get_target_path_set(), work_dir)?;
         o.target_groups = Some(lookups.dag.get_labeled_groups()?);
     }
     Ok(o)
 }
 
 #[derive(Debug, Serialize)]
-pub struct CheckpointClearOutput {
+pub struct CheckpointDeleteOutput {
     checkpoint: tracking::Checkpoint,
 }
 
-pub async fn handle_checkpoint_clear(
-    workdir: &path::Path,
-) -> Result<CheckpointClearOutput, MonorailError> {
-    let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
+pub async fn handle_checkpoint_delete(
+    cfg: &Config,
+    work_dir: &path::Path,
+) -> Result<CheckpointDeleteOutput, MonorailError> {
+    let tracking = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
     let mut checkpoint = tracking.open_checkpoint().await?;
     checkpoint.commit = "".to_string();
     checkpoint.pending = None;
-    checkpoint.save().await?;
 
-    Ok(CheckpointClearOutput { checkpoint })
+    tokio::fs::remove_file(&checkpoint.path).await?;
+
+    Ok(CheckpointDeleteOutput { checkpoint })
 }
 
 #[derive(Debug, Serialize)]
@@ -757,9 +775,10 @@ pub struct CheckpointShowOutput {
 }
 
 pub async fn handle_checkpoint_show(
-    workdir: &path::Path,
+    cfg: &Config,
+    work_dir: &path::Path,
 ) -> Result<CheckpointShowOutput, MonorailError> {
-    let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
+    let tracking = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
     Ok(CheckpointShowOutput {
         checkpoint: tracking.open_checkpoint().await?,
     })
@@ -779,22 +798,31 @@ pub struct CheckpointUpdateOutput {
 pub async fn handle_checkpoint_update(
     cfg: &Config,
     input: &HandleCheckpointUpdateInput<'_>,
-    workdir: &path::Path,
+    work_dir: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
     match cfg.vcs.r#use {
-        VcsKind::Git => checkpoint_update_git(input.pending, &input.git_opts, workdir).await,
+        VcsKind::Git => {
+            checkpoint_update_git(
+                input.pending,
+                &input.git_opts,
+                work_dir,
+                &cfg.get_tracking_path(work_dir),
+            )
+            .await
+        }
     }
 }
 
 async fn checkpoint_update_git<'a>(
     include_pending: bool,
     git_opts: &'a GitOptions<'a>,
-    workdir: &path::Path,
+    work_dir: &path::Path,
+    tracking_path: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
-    let tracking = tracking::Table::open(&get_tracking_path(workdir)).await?;
+    let tracking = tracking::Table::open(tracking_path).await?;
     let mut checkpoint = match tracking.open_checkpoint().await {
         Ok(cp) => cp,
-        Err(MonorailError::CheckpointNotFound(_)) => tracking.new_checkpoint(),
+        Err(MonorailError::TrackingCheckpointNotFound(_)) => tracking.new_checkpoint(),
         // TODO: need to set path on checkpoint tho; don't use default
         Err(e) => {
             return Err(e);
@@ -803,12 +831,12 @@ async fn checkpoint_update_git<'a>(
     checkpoint.commit = "head".to_string();
     if include_pending {
         // get all changes with no checkpoint, so diff will return [HEAD, staging area]
-        let pending_changes = get_git_all_changes(git_opts, &None, workdir).await?;
+        let pending_changes = get_git_all_changes(git_opts, &None, work_dir).await?;
         if let Some(pending_changes) = pending_changes {
             if !pending_changes.is_empty() {
                 let mut pending = HashMap::new();
                 for change in pending_changes.iter() {
-                    let p = workdir.join(&change.name);
+                    let p = work_dir.join(&change.name);
                     pending.insert(change.name.clone(), get_file_checksum(&p).await?);
                 }
                 checkpoint.pending = Some(pending);
@@ -821,11 +849,11 @@ async fn checkpoint_update_git<'a>(
 
 async fn git_cmd_other_changes(
     git_path: &str,
-    workdir: &path::Path,
+    work_dir: &path::Path,
 ) -> Result<Vec<Change>, MonorailError> {
     let mut child = tokio::process::Command::new(git_path)
         .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(workdir)
+        .current_dir(work_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -860,7 +888,7 @@ async fn git_cmd_other_changes(
 
 async fn git_cmd_diff_changes(
     git_path: &str,
-    workdir: &path::Path,
+    work_dir: &path::Path,
     start: Option<&str>,
     end: Option<&str>,
 ) -> Result<Vec<Change>, MonorailError> {
@@ -873,7 +901,7 @@ async fn git_cmd_diff_changes(
     }
     let mut child = tokio::process::Command::new(git_path)
         .args(&args)
-        .current_dir(workdir)
+        .current_dir(work_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -907,8 +935,8 @@ async fn git_cmd_diff_changes(
 }
 
 #[inline(always)]
-fn require_existence(workdir: &path::Path, path: &str) -> Result<(), MonorailError> {
-    let p = workdir.join(path);
+fn require_existence(work_dir: &path::Path, path: &str) -> Result<(), MonorailError> {
+    let p = work_dir.join(path);
     if p.is_file() {
         return Ok(());
     }
@@ -942,7 +970,7 @@ impl<'a> Lookups<'a> {
     fn new(
         cfg: &'a Config,
         visible_targets: &HashSet<&String>,
-        workdir: &path::Path,
+        work_dir: &path::Path,
     ) -> Result<Self, MonorailError> {
         let mut targets = vec![];
         let mut targets_builder = TrieBuilder::new();
@@ -961,7 +989,7 @@ impl<'a> Lookups<'a> {
             cfg_targets.iter().enumerate().try_for_each(|(i, target)| {
                 targets.push(target.path.to_owned());
                 let target_path_str = target.path.as_str();
-                require_existence(workdir, target_path_str)?;
+                require_existence(work_dir, target_path_str)?;
                 if dag.label2node.contains_key(target_path_str) {
                     return Err(MonorailError::DependencyGraph(GraphError::DuplicateLabel(
                         target.path.to_owned(),
@@ -1080,6 +1108,10 @@ impl FromStr for VcsKind {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
+    #[serde(default = "Config::default_output_path")]
+    output_dir: String,
+    #[serde(default = "Config::default_max_retained_run_logs")]
+    max_retained_run_logs: usize,
     #[serde(default)]
     vcs: Vcs,
     targets: Option<Vec<Target>>,
@@ -1099,6 +1131,18 @@ impl Config {
             }
         }
         o
+    }
+    pub fn get_tracking_path(&self, work_dir: &path::Path) -> path::PathBuf {
+        work_dir.join(&self.output_dir).join("tracking")
+    }
+    pub fn get_log_path(&self, work_dir: &path::Path) -> path::PathBuf {
+        work_dir.join(&self.output_dir).join("log")
+    }
+    fn default_output_path() -> String {
+        "monorail-out".to_string()
+    }
+    fn default_max_retained_run_logs() -> usize {
+        10
     }
 }
 
@@ -1152,15 +1196,15 @@ uses = [
 
     #[tokio::test]
     async fn test_get_git_diff_changes_ok() -> Result<(), Box<dyn std::error::Error>> {
-        let (repo, repo_path) = get_repo(false);
+        let repo_path = init(false).await;
         let mut git_opts = GitOptions {
             start: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
-        let start = format!("{}", oid1);
+        commit(&repo_path).await;
+        let start = get_head(&repo_path).await;
 
         // no start/end without a checkpoint or pending changes is ok(none)
         assert_eq!(
@@ -1179,14 +1223,13 @@ uses = [
                 .unwrap(),
             Some(vec![])
         );
-        git_opts.start = None;
-        git_opts.end = None;
 
         // start < end with changes is ok
         let foo_path = &repo_path.join("foo.txt");
         let _foo_checksum = write_with_checksum(foo_path, &[1]).await?;
-        let oid2 = commit_file(&repo, "foo.txt", Some("HEAD"), &[&get_commit(&repo, oid1)]);
-        let end = format!("{}", oid2);
+        add("foo.txt", &repo_path).await;
+        commit(&repo_path).await;
+        let end = get_head(&repo_path).await;
         git_opts.start = Some(&start);
         git_opts.end = Some(&end);
         assert_eq!(
@@ -1197,8 +1240,6 @@ uses = [
                 name: "foo.txt".to_string()
             }])
         );
-        git_opts.start = None;
-        git_opts.end = None;
 
         // start > end with changes is ok
         git_opts.start = Some(&end);
@@ -1218,7 +1259,7 @@ uses = [
     #[tokio::test]
     async fn test_get_git_diff_changes_ok_with_checkpoint() -> Result<(), Box<dyn std::error::Error>>
     {
-        let (_repo, repo_path) = get_repo(false);
+        let repo_path = init(false).await;
         let git_opts = GitOptions {
             start: None,
             end: None,
@@ -1327,15 +1368,15 @@ uses = [
 
     #[tokio::test]
     async fn test_get_git_diff_changes_err() -> Result<(), Box<dyn std::error::Error>> {
-        let (repo, repo_path) = get_repo(false);
+        let repo_path = init(false).await;
         let mut git_opts = GitOptions {
             start: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
-        let start = format!("{}", oid1);
+        commit(&repo_path).await;
+        let start = get_head(&repo_path).await;
 
         // no start/end, with invalid checkpoint commit is err
         assert!(get_git_diff_changes(
@@ -1373,7 +1414,7 @@ uses = [
 
     #[tokio::test]
     async fn test_get_git_all_changes_ok1() {
-        let (_repo, repo_path) = get_repo(false);
+        let repo_path = init(false).await;
         // no changes, no checkpoint is ok
         assert!(get_git_all_changes(
             &GitOptions {
@@ -1391,15 +1432,15 @@ uses = [
 
     #[tokio::test]
     async fn test_get_git_all_changes_ok2() {
-        let (repo, repo_path) = get_repo(false);
+        let repo_path = init(false).await;
         let mut git_opts = GitOptions {
             start: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
-        let start = format!("{}", oid1);
+        commit(&repo_path).await;
+        let start = get_head(&repo_path).await;
         git_opts.start = Some(&start);
 
         // no changes, with checkpoint is ok
@@ -1426,15 +1467,15 @@ uses = [
 
     #[tokio::test]
     async fn test_get_git_all_changes_ok3() {
-        let (repo, repo_path) = get_repo(false);
+        let repo_path = init(false).await;
         let mut git_opts = GitOptions {
             start: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
-        let oid1 = create_commit(&repo, &get_tree(&repo), "a", Some("HEAD"), &[]);
-        let start = format!("{}", oid1);
+        commit(&repo_path).await;
+        let start = get_head(&repo_path).await;
         git_opts.start = Some(&start);
 
         // create a new file and check that it is seen
@@ -1525,7 +1566,7 @@ uses = [
 
     #[tokio::test]
     async fn test_get_filtered_changes() {
-        let (_repo, repo_path) = get_repo(false);
+        let repo_path = init(false).await;
         let root_path = &repo_path;
         let fname1 = "test1.txt";
         let fname2 = "test2.txt";
@@ -1609,7 +1650,7 @@ uses = [
 
     #[tokio::test]
     async fn test_checksum_is_equal() {
-        let (_repo, repo_path) = get_repo(false);
+        let repo_path = init(false).await;
         let fname1 = "test1.txt";
 
         let root_path = &repo_path;
@@ -1637,7 +1678,7 @@ uses = [
 
     #[tokio::test]
     async fn test_get_file_checksum() {
-        let (_repo, repo_path) = get_repo(false);
+        let repo_path = init(false).await;
 
         // files that don't exist can't be checksummed
         let p = &repo_path.join("test.txt");
@@ -1677,8 +1718,8 @@ uses = [
         // TODO
     }
 
-    fn prep_raw_config_repo() -> (Config, path::PathBuf) {
-        let (_repo, repo_path) = get_repo(false);
+    async fn prep_raw_config_repo() -> (Config, path::PathBuf) {
+        let repo_path = init(false).await;
         let c: Config = toml::from_str(RAW_CONFIG).unwrap();
 
         create_file(
@@ -1686,29 +1727,31 @@ uses = [
             "rust",
             "monorail.sh",
             b"function whoami { echo 'rust' }",
-        );
+        )
+        .await;
         create_file(
             &repo_path,
             "rust/target",
             "monorail.sh",
             b"function whoami { echo 'rust/target' }",
-        );
+        )
+        .await;
         (c, repo_path)
     }
 
-    #[test]
-    fn test_analyze_empty() {
+    #[tokio::test]
+    async fn test_analyze_empty() {
         let changes = vec![];
-        let (c, workdir) = prep_raw_config_repo();
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &workdir).unwrap();
+        let (c, work_dir) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let o = analyze(&mut lookups, Some(changes), true, false, false).unwrap();
 
         assert!(o.changes.unwrap().is_empty());
         assert!(o.targets.is_empty());
     }
 
-    #[test]
-    fn test_analyze_unknown() {
+    #[tokio::test]
+    async fn test_analyze_unknown() {
         let change1 = "foo.txt";
         let changes = vec![Change {
             name: change1.to_string(),
@@ -1719,8 +1762,8 @@ uses = [
             targets: Some(vec![]),
         }];
 
-        let (c, workdir) = prep_raw_config_repo();
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &workdir).unwrap();
+        let (c, work_dir) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
@@ -1728,8 +1771,8 @@ uses = [
         assert_eq!(o.target_groups, Some(vec![]));
     }
 
-    #[test]
-    fn test_analyze_target_file() {
+    #[tokio::test]
+    async fn test_analyze_target_file() {
         let change1 = "rust/lib.rs";
         let changes = vec![Change {
             name: change1.to_string(),
@@ -1745,16 +1788,16 @@ uses = [
             }]),
         }];
 
-        let (c, workdir) = prep_raw_config_repo();
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &workdir).unwrap();
+        let (c, work_dir) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
         assert_eq!(o.target_groups, Some(expected_target_groups));
     }
-    #[test]
-    fn test_analyze_target() {
+    #[tokio::test]
+    async fn test_analyze_target() {
         let change1 = "rust";
         let changes = vec![Change {
             name: change1.to_string(),
@@ -1770,8 +1813,8 @@ uses = [
             }]),
         }];
 
-        let (c, workdir) = prep_raw_config_repo();
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &workdir).unwrap();
+        let (c, work_dir) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
@@ -1779,8 +1822,8 @@ uses = [
         assert_eq!(o.target_groups, Some(expected_target_groups));
     }
 
-    #[test]
-    fn test_analyze_target_ancestors() {
+    #[tokio::test]
+    async fn test_analyze_target_ancestors() {
         let change1 = "rust/target/foo.txt";
         let changes = vec![Change {
             name: change1.to_string(),
@@ -1807,8 +1850,8 @@ uses = [
             ]),
         }];
 
-        let (c, workdir) = prep_raw_config_repo();
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &workdir).unwrap();
+        let (c, work_dir) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
@@ -1816,8 +1859,8 @@ uses = [
         assert_eq!(o.target_groups, Some(expected_target_groups));
     }
 
-    #[test]
-    fn test_analyze_target_uses() {
+    #[tokio::test]
+    async fn test_analyze_target_uses() {
         let change1 = "common/foo.txt";
         let changes = vec![Change {
             name: change1.to_string(),
@@ -1840,8 +1883,8 @@ uses = [
             ]),
         }];
 
-        let (c, workdir) = prep_raw_config_repo();
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &workdir).unwrap();
+        let (c, work_dir) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
@@ -1849,8 +1892,8 @@ uses = [
         assert_eq!(o.target_groups, Some(expected_target_groups));
     }
 
-    #[test]
-    fn test_analyze_target_ignores() {
+    #[tokio::test]
+    async fn test_analyze_target_ignores() {
         let change1 = "rust/target/ignoreme.txt";
         let changes = vec![Change {
             name: change1.to_string(),
@@ -1880,8 +1923,8 @@ uses = [
             ]),
         }];
 
-        let (c, workdir) = prep_raw_config_repo();
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &workdir).unwrap();
+        let (c, work_dir) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
@@ -1889,10 +1932,10 @@ uses = [
         assert_eq!(o.target_groups, Some(vec![vec![target1.to_string()]]));
     }
 
-    #[test]
-    fn test_lookups() {
-        let (c, workdir) = prep_raw_config_repo();
-        let l = Lookups::new(&c, &c.get_target_path_set(), &workdir).unwrap();
+    #[tokio::test]
+    async fn test_lookups() {
+        let (c, work_dir) = prep_raw_config_repo().await;
+        let l = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
 
         assert_eq!(
             l.targets_trie
@@ -1930,43 +1973,7 @@ path = "rust"
 path = "rust"
 "#;
         let c: Config = toml::from_str(config_str).unwrap();
-        let workdir = std::env::current_dir().unwrap();
-        assert!(Lookups::new(&c, &c.get_target_path_set(), &workdir).is_err());
-    }
-
-    async fn add(name: &str, repo_path: &path::Path) {
-        let _ = tokio::process::Command::new("git")
-            .arg("add")
-            .arg(name)
-            .current_dir(repo_path)
-            .output()
-            .await
-            .unwrap();
-    }
-    async fn commit(repo_path: &path::Path) {
-        let _ = tokio::process::Command::new("git")
-            .arg("commit")
-            .arg("-a")
-            .arg("-m")
-            .arg("test")
-            .arg("--allow-empty")
-            .current_dir(repo_path)
-            .output()
-            .await
-            .unwrap();
-    }
-    async fn get_head(repo_path: &path::Path) -> String {
-        let end = String::from_utf8(
-            tokio::process::Command::new("git")
-                .arg("rev-parse")
-                .arg("HEAD")
-                .current_dir(repo_path)
-                .output()
-                .await
-                .unwrap()
-                .stdout,
-        )
-        .unwrap();
-        String::from(end.trim())
+        let work_dir = std::env::current_dir().unwrap();
+        assert!(Lookups::new(&c, &c.get_target_path_set(), &work_dir).is_err());
     }
 }

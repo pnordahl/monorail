@@ -48,4 +48,4 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 - Replaced `monorail checkpoint create` with `monorail checkpoint update`
 - Removed `git.trunk`, `git.remote`, and `git.tags_refspec_prefix` configuration
 - Removed `extension` configuration
-- Removed `use_libgit2_status` argument
+- Removed `libgit` integration and `use_libgit2_status` argument

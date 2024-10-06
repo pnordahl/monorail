@@ -1,5 +1,5 @@
+use crate::common::error::MonorailError;
 use crate::core;
-use crate::error::MonorailError;
 
 use clap::builder::ArgPredicate;
 use clap::{Arg, ArgAction, Command};
@@ -12,13 +12,14 @@ use std::result::Result;
 pub const CMD_MONORAIL: &str = "monorail";
 pub const CMD_CONFIG: &str = "config";
 pub const CMD_CHECKPOINT: &str = "checkpoint";
-pub const CMD_CLEAR: &str = "clear";
+pub const CMD_DELETE: &str = "delete";
 pub const CMD_UPDATE: &str = "update";
 pub const CMD_SHOW: &str = "show";
 pub const CMD_TARGET: &str = "target";
 pub const CMD_LIST: &str = "list";
 pub const CMD_RUN: &str = "run";
 pub const CMD_ANALYZE: &str = "analyze";
+pub const CMD_LOG: &str = "log";
 
 pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_START: &str = "start";
@@ -99,8 +100,8 @@ pub fn get_app() -> clap::Command {
             )
         )
         .subcommand(
-        Command::new(CMD_CLEAR)
-            .about("Clear the tracking checkpoint")
+        Command::new(CMD_DELETE)
+            .about("Remove the tracking checkpoint")
             .after_help(r#"This command removes the tracking checkpoint."#)
         )
         .subcommand(
@@ -108,8 +109,6 @@ pub fn get_app() -> clap::Command {
             .about("Show the tracking checkpoint")
             .after_help(r#"This command displays the tracking checkpoint."#)
         )
-        // TODO: monorail checkpoint show
-        // TODO: monorail checkpoint clear
     )
     .subcommand(Command::new(CMD_TARGET)
         .subcommand(
@@ -148,6 +147,8 @@ pub fn get_app() -> clap::Command {
                 .help("A list of targets for which functions will be executed.")
         )
     )
+    .subcommand(Command::new(CMD_LOG).subcommand(Command::new(CMD_SHOW).about("Show logs")))
+
     // TODO: monorail change analyze?
     .subcommand(
         Command::new(CMD_ANALYZE)
@@ -208,14 +209,14 @@ fn get_code(is_err: bool) -> i32 {
 }
 
 pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i32, MonorailError> {
-    let workdir: path::PathBuf = match matches.get_one::<String>(ARG_WORKING_DIRECTORY) {
+    let work_dir: path::PathBuf = match matches.get_one::<String>(ARG_WORKING_DIRECTORY) {
         Some(wd) => path::Path::new(wd).to_path_buf(),
         None => env::current_dir()?,
     };
 
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
         Some(cfg_path) => {
-            let cfg = core::Config::new(&workdir.join(cfg_path))?;
+            let cfg = core::Config::new(&work_dir.join(cfg_path))?;
 
             if let Some(_config) = matches.subcommand_matches(CMD_CONFIG) {
                 write_result(&Ok(cfg), output_format)?;
@@ -224,17 +225,17 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
             if let Some(checkpoint) = matches.subcommand_matches(CMD_CHECKPOINT) {
                 if let Some(update) = checkpoint.subcommand_matches(CMD_UPDATE) {
                     let i = core::HandleCheckpointUpdateInput::try_from(update)?;
-                    let res = core::handle_checkpoint_update(&cfg, &i, &workdir).await;
+                    let res = core::handle_checkpoint_update(&cfg, &i, &work_dir).await;
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
                 }
-                if checkpoint.subcommand_matches(CMD_CLEAR).is_some() {
-                    let res = core::handle_checkpoint_clear(&workdir).await;
+                if checkpoint.subcommand_matches(CMD_DELETE).is_some() {
+                    let res = core::handle_checkpoint_delete(&cfg, &work_dir).await;
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
                 }
                 if checkpoint.subcommand_matches(CMD_SHOW).is_some() {
-                    let res = core::handle_checkpoint_show(&workdir).await;
+                    let res = core::handle_checkpoint_show(&cfg, &work_dir).await;
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
                 }
@@ -247,7 +248,7 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                         core::HandleTargetListInput {
                             show_target_groups: list.get_flag(ARG_SHOW_TARGET_GROUPS),
                         },
-                        &workdir,
+                        &work_dir,
                     );
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
@@ -256,14 +257,14 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
 
             if let Some(analyze) = matches.subcommand_matches(CMD_ANALYZE) {
                 let i = core::AnalyzeInput::from(analyze);
-                let res = core::handle_analyze(&cfg, &i, &workdir).await;
+                let res = core::handle_analyze(&cfg, &i, &work_dir).await;
                 write_result(&res, output_format)?;
                 return Ok(get_code(res.is_err()));
             }
 
             if let Some(run) = matches.subcommand_matches(CMD_RUN) {
                 let i = core::RunInput::try_from(run).unwrap();
-                match core::handle_run(&cfg, &i, &workdir).await {
+                match core::handle_run(&cfg, &i, &work_dir).await {
                     Ok(o) => {
                         let mut code = HANDLE_OK;
                         if o.failed {

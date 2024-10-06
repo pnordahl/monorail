@@ -1,5 +1,9 @@
 # See https://github.com/toml-lang/toml#spec for details on how TOML is structured.
 
+# Directory to place logs, caches, and other runtime outputs.
+# Optional. Default: "monorail-out"
+output_dir = "monorail-out"
+
 [vcs]
 # The version control system that the repository uses.
 # Required. One of: ["git"]
