@@ -88,26 +88,26 @@ impl From<tokio::task::JoinError> for MonorailError {
 impl fmt::Display for MonorailError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MonorailError::Generic(error) => write!(f, "Error: {}", error),
-            MonorailError::Git(error) => write!(f, "Git error: {}", error),
-            MonorailError::Io(error) => write!(f, "IO error: {}", error),
+            MonorailError::Generic(error) => write!(f, "Error; {}", error),
+            MonorailError::Git(error) => write!(f, "Git error; {}", error),
+            MonorailError::Io(error) => write!(f, "IO error; {}", error),
             MonorailError::PathDNE(error) => write!(f, "Path does not exist: {}", error),
             MonorailError::TomlDeserialize(error) => {
-                write!(f, "TOML deserialize error: {}", error)
+                write!(f, "TOML deserialize error; {}", error)
             }
-            MonorailError::SerdeJSON(error) => write!(f, "JSON error: {}", error),
-            MonorailError::Utf8(error) => write!(f, "UTF8 error: {}", error),
-            MonorailError::ParseInt(error) => write!(f, "Integer parsing error: {}", error),
+            MonorailError::SerdeJSON(error) => write!(f, "JSON error; {}", error),
+            MonorailError::Utf8(error) => write!(f, "UTF8 error; {}", error),
+            MonorailError::ParseInt(error) => write!(f, "Integer parsing error; {}", error),
             MonorailError::DependencyGraph(error) => {
-                write!(f, "Dependency graph error: {}", error)
+                write!(f, "Dependency graph error; {}", error)
             }
-            MonorailError::Join(error) => write!(f, "Task join error: {}", error),
-            MonorailError::MissingArg(s) => write!(f, "Missing argument error: {}", s),
+            MonorailError::Join(error) => write!(f, "Task join error; {}", error),
+            MonorailError::MissingArg(s) => write!(f, "Missing argument error; {}", s),
             MonorailError::TrackingCheckpointNotFound(error) => {
-                write!(f, "Tracking checkpoint open error: {}", error)
+                write!(f, "Tracking checkpoint open error; {}", error)
             }
             MonorailError::TrackingLogInfoNotFound(error) => {
-                write!(f, "Tracking log info open error: {}", error)
+                write!(f, "Tracking log info open error; {}", error)
             }
         }
     }

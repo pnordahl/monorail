@@ -16,7 +16,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio_stream::StreamExt;
 use trie_rs::{Trie, TrieBuilder};
 
@@ -315,7 +315,9 @@ async fn run<'a>(
     log_info.id += 1;
 
     log_info.save().await?;
-    let log_dir = cfg.get_log_path(work_dir).join(&format!("{}", log_info.id));
+    let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
+    // remove the log_dir path if it exists
+    std::fs::remove_dir_all(&log_dir).unwrap_or(());
     for f in functions.iter() {
         for group in target_groups {
             let mut tuples: Vec<(String, String, String)> = vec![];
@@ -364,10 +366,20 @@ async fn run<'a>(
                 let res = join_res?;
                 match res {
                     Ok((status, target_path, lp)) => {
+                        // record the exit code if any; if the process was ended by a signal,
+                        // code is None and this file will be empty; this should be interpreted
+                        // as such by other commands
+                        let code = status.code();
+                        if let Some(code) = code {
+                            lp.open_code()
+                                .await?
+                                .write_all(code.to_string().as_bytes())
+                                .await?;
+                        }
                         if status.success() {
                             frr.successes.push(TargetRunSuccess::new(
                                 target_path,
-                                status.code(),
+                                code,
                                 lp.stdout_log_path,
                                 lp.stderr_log_path,
                             ));
@@ -376,17 +388,19 @@ async fn run<'a>(
                             let error = MonorailError::from("Function returned an error");
                             frr.failures.push(TargetRunFailure::new(
                                 target_path,
-                                status.code(),
+                                code,
                                 Some(lp.stdout_log_path),
                                 Some(lp.stderr_log_path),
                                 error,
                             ));
                         }
                     }
-                    Err((target_path, e)) => {
+                    Err((target_path, lp, e)) => {
                         // TODO: --halt-on-first-failure
-                        let error =
-                            MonorailError::Generic(format!("Function could not execute: {}", e));
+                        let msg = format!("Function could not execute: {}", e);
+                        let error = MonorailError::from(msg.as_str());
+                        lp.open_code().await?.write_all("-1".as_bytes()).await?;
+                        lp.open_fatal().await?.write_all(msg.as_bytes()).await?;
                         frr.failures.push(TargetRunFailure::new(
                             target_path,
                             None,
@@ -406,23 +420,30 @@ async fn run<'a>(
     Ok(o)
 }
 
+#[derive(Clone)]
 pub struct LogPaths {
     dir_path: path::PathBuf,
+    code_path: path::PathBuf,
     stdout_log_path: path::PathBuf,
     stderr_log_path: path::PathBuf,
+    fatal_path: path::PathBuf,
 }
 impl LogPaths {
     fn new(log_dir: &path::Path, function: &str, target: &str) -> Self {
         let dir_path = log_dir.join(function).join(target);
         let stdout_log_path = dir_path.clone().join("stdout");
         let stderr_log_path = dir_path.clone().join("stderr");
+        let fatal_path = dir_path.clone().join("fatal");
+        let code_path = dir_path.clone().join("code");
         Self {
             dir_path,
             stdout_log_path,
             stderr_log_path,
+            fatal_path,
+            code_path,
         }
     }
-    fn open(&self) -> Result<(fs::File, fs::File), MonorailError> {
+    fn open_logs(&self) -> Result<(fs::File, fs::File), MonorailError> {
         std::fs::create_dir_all(&self.dir_path)?;
         let stdout_log_file = OpenOptions::new()
             .create(true)
@@ -437,7 +458,26 @@ impl LogPaths {
             .truncate(true)
             .open(&self.stderr_log_path)
             .map_err(|e| MonorailError::Generic(e.to_string()))?;
+
         Ok((stdout_log_file, stderr_log_file))
+    }
+    async fn open_fatal(&self) -> Result<tokio::fs::File, MonorailError> {
+        tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&self.fatal_path)
+            .await
+            .map_err(|e| MonorailError::Generic(e.to_string()))
+    }
+    async fn open_code(&self) -> Result<tokio::fs::File, MonorailError> {
+        tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&self.code_path)
+            .await
+            .map_err(|e| MonorailError::Generic(e.to_string()))
     }
 }
 
@@ -449,8 +489,10 @@ async fn run_bash_command(
     script: String,
     function: String,
     lp: LogPaths,
-) -> Result<(std::process::ExitStatus, String, LogPaths), (String, MonorailError)> {
-    let (stdout_log_file, stderr_log_file) = lp.open().map_err(|e| (target_path.clone(), e))?;
+) -> Result<(std::process::ExitStatus, String, LogPaths), (String, LogPaths, MonorailError)> {
+    let (stdout_log_file, stderr_log_file) = lp
+        .open_logs()
+        .map_err(|e| (target_path.clone(), lp.clone(), e))?;
     let mut cmd = tokio::process::Command::new("bash")
         .arg("-c")
         .arg(format!("source $(pwd)/{} && {}", script, function))
@@ -460,11 +502,11 @@ async fn run_bash_command(
         // parallel execution makes use of stdin impractical
         .stdin(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| (target_path.clone(), MonorailError::from(e)))?;
+        .map_err(|e| (target_path.clone(), lp.clone(), MonorailError::from(e)))?;
     Ok((
         cmd.wait()
             .await
-            .map_err(|e| (target_path.clone(), MonorailError::from(e)))?,
+            .map_err(|e| (target_path.clone(), lp.clone(), MonorailError::from(e)))?,
         target_path,
         lp,
     ))
