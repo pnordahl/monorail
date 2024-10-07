@@ -16,10 +16,9 @@ pub const CMD_DELETE: &str = "delete";
 pub const CMD_UPDATE: &str = "update";
 pub const CMD_SHOW: &str = "show";
 pub const CMD_TARGET: &str = "target";
-pub const CMD_LIST: &str = "list";
 pub const CMD_RUN: &str = "run";
-pub const CMD_ANALYZE: &str = "analyze";
-pub const CMD_LOG: &str = "log";
+pub const CMD_ANALYSIS: &str = "analysis";
+pub const CMD_RESULT: &str = "result";
 
 pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_START: &str = "start";
@@ -30,10 +29,10 @@ pub const ARG_OUTPUT_FORMAT: &str = "output-format";
 pub const ARG_PENDING: &str = "pending";
 pub const ARG_FUNCTION: &str = "function";
 pub const ARG_TARGET: &str = "target";
-pub const ARG_SHOW_CHANGES: &str = "show-changes";
-pub const ARG_SHOW_CHANGE_TARGETS: &str = "show-change-targets";
-pub const ARG_SHOW_TARGET_GROUPS: &str = "show-target-groups";
-pub const ARG_SHOW_ALL: &str = "show-all";
+pub const ARG_CHANGES: &str = "changes";
+pub const ARG_CHANGE_TARGETS: &str = "change-targets";
+pub const ARG_TARGET_GROUPS: &str = "target-groups";
+pub const ARG_ALL: &str = "all";
 
 pub const VAL_JSON: &str = "json";
 
@@ -84,7 +83,7 @@ pub fn get_app() -> clap::Command {
             .default_value(VAL_JSON)
             .num_args(1),
     )
-    .subcommand(Command::new(CMD_CONFIG).about("Show configuration, including runtime default values"))
+    .subcommand(Command::new(CMD_CONFIG).subcommand(Command::new(CMD_SHOW).about("Show configuration, including runtime default values")))
     .subcommand(Command::new(CMD_CHECKPOINT)
         .subcommand(
         Command::new(CMD_UPDATE)
@@ -112,13 +111,13 @@ pub fn get_app() -> clap::Command {
     )
     .subcommand(Command::new(CMD_TARGET)
         .subcommand(
-        Command::new(CMD_LIST)
+        Command::new(CMD_SHOW)
             .about("List targets and their properties.")
             .after_help(r#"This command reads targets from configuration data, and displays their properties."#)
             .arg(
-                Arg::new(ARG_SHOW_TARGET_GROUPS)
+                Arg::new(ARG_TARGET_GROUPS)
                     .short('g')
-                    .long(ARG_SHOW_TARGET_GROUPS)
+                    .long(ARG_TARGET_GROUPS)
                     .help("Display a representation of the 'depends on' relationship of targets. The array represents a topological ordering of the graph, with each element of the array being a set of targets that do not depend on each other at that position of the ordering.")
                     .action(ArgAction::SetTrue),
             )
@@ -147,41 +146,40 @@ pub fn get_app() -> clap::Command {
                 .help("A list of targets for which functions will be executed.")
         )
     )
-    .subcommand(Command::new(CMD_LOG).subcommand(Command::new(CMD_SHOW).about("Show logs")))
+    .subcommand(Command::new(CMD_RESULT).subcommand(Command::new(CMD_SHOW).about("Show results from `run` invocations")))
 
     // TODO: monorail change analyze?
     .subcommand(
-        Command::new(CMD_ANALYZE)
-            .about("Analyze repository changes and targets")
-            .after_help(r#"This command analyzes staged, unpushed, and pushed changes between two checkpoints in version control history, as well as unstaged changes present only in your local filesystem. By default, only outputs a list of affected targets."#)
+        Command::new(CMD_ANALYSIS).subcommand(Command::new(CMD_SHOW).about("Display an analysis of repository changes and targets")
+            .after_help(r#"This command shows an analysis of staged, unpushed, and pushed changes between two checkpoints in version control history, as well as unstaged changes present only in your local filesystem. By default, only outputs a list of affected targets."#)
             .arg(arg_git_path.clone())
             .arg(arg_start.clone())
             .arg(arg_end.clone())
             .arg(
-                Arg::new(ARG_SHOW_CHANGES)
-                    .long(ARG_SHOW_CHANGES)
+                Arg::new(ARG_CHANGES)
+                    .long(ARG_CHANGES)
                     .help("Display changes")
                     .action(ArgAction::SetTrue)
-                    .default_value_if(ARG_SHOW_CHANGE_TARGETS, ArgPredicate::IsPresent, Some("true"))
-                    .default_value_if(ARG_SHOW_ALL, ArgPredicate::IsPresent, Some("true")),
+                    .default_value_if(ARG_CHANGE_TARGETS, ArgPredicate::IsPresent, Some("true"))
+                    .default_value_if(ARG_ALL, ArgPredicate::IsPresent, Some("true")),
             )
             .arg(
-                Arg::new(ARG_SHOW_CHANGE_TARGETS)
-                    .long(ARG_SHOW_CHANGE_TARGETS)
+                Arg::new(ARG_CHANGE_TARGETS)
+                    .long(ARG_CHANGE_TARGETS)
                     .help("Display targets for each change")
                     .action(ArgAction::SetTrue)
-                    .default_value_if(ARG_SHOW_ALL, ArgPredicate::IsPresent, Some("true")),
+                    .default_value_if(ARG_ALL, ArgPredicate::IsPresent, Some("true")),
             )
             .arg(
-                Arg::new(ARG_SHOW_TARGET_GROUPS)
-                    .long(ARG_SHOW_TARGET_GROUPS)
+                Arg::new(ARG_TARGET_GROUPS)
+                    .long(ARG_TARGET_GROUPS)
                     .help("Display targets grouped according to the dependency graph. Each array in the output array contains the targets that are valid to execute in parallel.")
                     .action(ArgAction::SetTrue)
-                    .default_value_if(ARG_SHOW_ALL, ArgPredicate::IsPresent, Some("true")),
+                    .default_value_if(ARG_ALL, ArgPredicate::IsPresent, Some("true")),
             )
             .arg(
-                Arg::new(ARG_SHOW_ALL)
-                    .long(ARG_SHOW_ALL)
+                Arg::new(ARG_ALL)
+                    .long(ARG_ALL)
                     .help("Display changes, change targets, and targets")
                     .action(ArgAction::SetTrue),
             )
@@ -191,9 +189,7 @@ pub fn get_app() -> clap::Command {
                 .long(ARG_TARGET)
                 .required(false)
                 .action(ArgAction::Append)
-                .help("Scope analysis to only the provided targets.")
-        )
-    )
+                .help("Scope analysis to only the provided targets."))))
 }
 
 pub const HANDLE_OK: i32 = 0;
@@ -218,9 +214,11 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
         Some(cfg_path) => {
             let cfg = core::Config::new(&work_dir.join(cfg_path))?;
 
-            if let Some(_config) = matches.subcommand_matches(CMD_CONFIG) {
-                write_result(&Ok(cfg), output_format)?;
-                return Ok(HANDLE_OK);
+            if let Some(config) = matches.subcommand_matches(CMD_CONFIG) {
+                if config.subcommand_matches(CMD_SHOW).is_some() {
+                    write_result(&Ok(cfg), output_format)?;
+                    return Ok(HANDLE_OK);
+                }
             }
             if let Some(checkpoint) = matches.subcommand_matches(CMD_CHECKPOINT) {
                 if let Some(update) = checkpoint.subcommand_matches(CMD_UPDATE) {
@@ -241,12 +239,21 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                 }
             }
 
+            if let Some(result) = matches.subcommand_matches(CMD_RESULT) {
+                if result.subcommand_matches(CMD_SHOW).is_some() {
+                    let i = core::HandleResultShowInput::try_from(result)?;
+                    let res = core::handle_result_show(&cfg, &i, &work_dir).await;
+                    write_result(&res, output_format)?;
+                    return Ok(get_code(res.is_err()));
+                }
+            }
+
             if let Some(target) = matches.subcommand_matches(CMD_TARGET) {
-                if let Some(list) = target.subcommand_matches(CMD_LIST) {
-                    let res = core::handle_target_list(
+                if let Some(list) = target.subcommand_matches(CMD_SHOW) {
+                    let res = core::handle_target_show(
                         &cfg,
-                        core::HandleTargetListInput {
-                            show_target_groups: list.get_flag(ARG_SHOW_TARGET_GROUPS),
+                        core::HandleTargetShowInput {
+                            show_target_groups: list.get_flag(ARG_TARGET_GROUPS),
                         },
                         &work_dir,
                     );
@@ -255,11 +262,13 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                 }
             }
 
-            if let Some(analyze) = matches.subcommand_matches(CMD_ANALYZE) {
-                let i = core::AnalyzeInput::from(analyze);
-                let res = core::handle_analyze(&cfg, &i, &work_dir).await;
-                write_result(&res, output_format)?;
-                return Ok(get_code(res.is_err()));
+            if let Some(analyze) = matches.subcommand_matches(CMD_ANALYSIS) {
+                if let Some(show) = analyze.subcommand_matches(CMD_SHOW) {
+                    let i = core::AnalysisShowInput::from(show);
+                    let res = core::handle_analyze_show(&cfg, &i, &work_dir).await;
+                    write_result(&res, output_format)?;
+                    return Ok(get_code(res.is_err()));
+                }
             }
 
             if let Some(run) = matches.subcommand_matches(CMD_RUN) {
@@ -314,6 +323,13 @@ where
     }
 }
 
+impl TryFrom<&clap::ArgMatches> for core::HandleResultShowInput {
+    type Error = MonorailError;
+    fn try_from(cmd: &clap::ArgMatches) -> Result<Self, Self::Error> {
+        Ok(Self {})
+    }
+}
+
 impl<'a> TryFrom<&'a clap::ArgMatches> for core::HandleCheckpointUpdateInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
@@ -357,7 +373,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::RunInput<'a> {
     }
 }
 
-impl<'a> From<&'a clap::ArgMatches> for core::AnalyzeInput<'a> {
+impl<'a> From<&'a clap::ArgMatches> for core::AnalysisShowInput<'a> {
     fn from(cmd: &'a clap::ArgMatches) -> Self {
         Self {
             git_opts: core::GitOptions {
@@ -367,9 +383,9 @@ impl<'a> From<&'a clap::ArgMatches> for core::AnalyzeInput<'a> {
                 end: cmd.get_one::<String>(ARG_END).map(|x: &String| x.as_str()),
                 git_path: cmd.get_one::<String>(ARG_GIT_PATH).unwrap(),
             },
-            show_changes: cmd.get_flag(ARG_SHOW_CHANGES),
-            show_change_targets: cmd.get_flag(ARG_SHOW_CHANGE_TARGETS),
-            show_target_groups: cmd.get_flag(ARG_SHOW_TARGET_GROUPS),
+            show_changes: cmd.get_flag(ARG_CHANGES),
+            show_change_targets: cmd.get_flag(ARG_CHANGE_TARGETS),
+            show_target_groups: cmd.get_flag(ARG_TARGET_GROUPS),
             targets: cmd
                 .get_many::<String>(ARG_TARGET)
                 .into_iter()

@@ -36,18 +36,18 @@ pub struct RunInput<'a> {
     pub(crate) targets: HashSet<&'a String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct RunOutput<'a> {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RunOutput {
     pub(crate) failed: bool,
-    results: Vec<FunctionRunResult<'a>>,
+    results: Vec<FunctionRunResult>,
 }
-#[derive(Debug, Serialize)]
-pub struct FunctionRunResult<'a> {
-    function: &'a str,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FunctionRunResult {
+    function: String,
     successes: Vec<TargetRunSuccess>,
     failures: Vec<TargetRunFailure>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TargetRunSuccess {
     target: String,
     code: Option<i32>,
@@ -69,13 +69,13 @@ impl TargetRunSuccess {
         }
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TargetRunFailure {
     target: String,
     code: Option<i32>,
     stdout_log_path: Option<path::PathBuf>,
     stderr_log_path: Option<path::PathBuf>,
-    error: MonorailError,
+    error: String,
 }
 impl TargetRunFailure {
     fn new(
@@ -83,7 +83,7 @@ impl TargetRunFailure {
         code: Option<i32>,
         stdout_log_path: Option<path::PathBuf>,
         stderr_log_path: Option<path::PathBuf>,
-        error: MonorailError,
+        error: String,
     ) -> Self {
         Self {
             target,
@@ -229,7 +229,7 @@ pub async fn handle_run<'a>(
     cfg: &'a Config,
     input: &'a RunInput<'a>,
     work_dir: &'a path::Path,
-) -> Result<RunOutput<'a>, MonorailError> {
+) -> Result<RunOutput, MonorailError> {
     let tracking_table = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
 
     let targets = cfg
@@ -253,7 +253,7 @@ pub async fn handle_run<'a>(
                     get_git_diff_changes(&input.git_opts, &checkpoint, work_dir).await?
                 }
             };
-            let ao = analyze(&mut lookups, changes, false, false, true)?;
+            let ao = analyze_show(&mut lookups, changes, false, false, true)?;
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
@@ -270,7 +270,7 @@ pub async fn handle_run<'a>(
         }
         _ => {
             let mut lookups = Lookups::new(cfg, &input.targets, work_dir)?;
-            let ao = analyze(&mut lookups, None, false, false, true)?;
+            let ao = analyze_show(&mut lookups, None, false, false, true)?;
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
@@ -296,7 +296,7 @@ async fn run<'a>(
     functions: &'a [&'a String],
     targets: Vec<Target>,
     target_groups: &Vec<Vec<String>>,
-) -> Result<RunOutput<'a>, MonorailError> {
+) -> Result<RunOutput, MonorailError> {
     let mut o = RunOutput {
         failed: false,
         results: vec![],
@@ -358,7 +358,7 @@ async fn run<'a>(
                 ));
             }
             let mut frr = FunctionRunResult {
-                function: f.as_str(),
+                function: f.to_string(),
                 successes: vec![],
                 failures: vec![],
             };
@@ -366,20 +366,10 @@ async fn run<'a>(
                 let res = join_res?;
                 match res {
                     Ok((status, target_path, lp)) => {
-                        // record the exit code if any; if the process was ended by a signal,
-                        // code is None and this file will be empty; this should be interpreted
-                        // as such by other commands
-                        let code = status.code();
-                        if let Some(code) = code {
-                            lp.open_code()
-                                .await?
-                                .write_all(code.to_string().as_bytes())
-                                .await?;
-                        }
                         if status.success() {
                             frr.successes.push(TargetRunSuccess::new(
                                 target_path,
-                                code,
+                                status.code(),
                                 lp.stdout_log_path,
                                 lp.stderr_log_path,
                             ));
@@ -388,25 +378,23 @@ async fn run<'a>(
                             let error = MonorailError::from("Function returned an error");
                             frr.failures.push(TargetRunFailure::new(
                                 target_path,
-                                code,
+                                status.code(),
                                 Some(lp.stdout_log_path),
                                 Some(lp.stderr_log_path),
-                                error,
+                                error.to_string(),
                             ));
                         }
                     }
                     Err((target_path, lp, e)) => {
                         // TODO: --halt-on-first-failure
-                        let msg = format!("Function could not execute: {}", e);
-                        let error = MonorailError::from(msg.as_str());
-                        lp.open_code().await?.write_all("-1".as_bytes()).await?;
-                        lp.open_fatal().await?.write_all(msg.as_bytes()).await?;
+                        let error =
+                            MonorailError::Generic(format!("Function could not execute: {}", e));
                         frr.failures.push(TargetRunFailure::new(
                             target_path,
                             None,
                             None,
                             None,
-                            error,
+                            error.to_string(),
                         ));
                     }
                 }
@@ -417,33 +405,35 @@ async fn run<'a>(
             o.results.push(frr);
         }
     }
+    // serialize and store the results of this run
+    let run_result_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_dir.join("run.json"))
+        .map_err(|e| MonorailError::Generic(e.to_string()))?;
+    serde_json::to_writer(&run_result_file, &o)?;
     Ok(o)
 }
 
 #[derive(Clone)]
 pub struct LogPaths {
     dir_path: path::PathBuf,
-    code_path: path::PathBuf,
     stdout_log_path: path::PathBuf,
     stderr_log_path: path::PathBuf,
-    fatal_path: path::PathBuf,
 }
 impl LogPaths {
     fn new(log_dir: &path::Path, function: &str, target: &str) -> Self {
         let dir_path = log_dir.join(function).join(target);
         let stdout_log_path = dir_path.clone().join("stdout");
         let stderr_log_path = dir_path.clone().join("stderr");
-        let fatal_path = dir_path.clone().join("fatal");
-        let code_path = dir_path.clone().join("code");
         Self {
             dir_path,
             stdout_log_path,
             stderr_log_path,
-            fatal_path,
-            code_path,
         }
     }
-    fn open_logs(&self) -> Result<(fs::File, fs::File), MonorailError> {
+    fn get_writable_log_files(&self) -> Result<(fs::File, fs::File), MonorailError> {
         std::fs::create_dir_all(&self.dir_path)?;
         let stdout_log_file = OpenOptions::new()
             .create(true)
@@ -461,24 +451,6 @@ impl LogPaths {
 
         Ok((stdout_log_file, stderr_log_file))
     }
-    async fn open_fatal(&self) -> Result<tokio::fs::File, MonorailError> {
-        tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.fatal_path)
-            .await
-            .map_err(|e| MonorailError::Generic(e.to_string()))
-    }
-    async fn open_code(&self) -> Result<tokio::fs::File, MonorailError> {
-        tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.code_path)
-            .await
-            .map_err(|e| MonorailError::Generic(e.to_string()))
-    }
 }
 
 // TODO: LogPaths -> TargetPaths and include all paths in it
@@ -491,7 +463,7 @@ async fn run_bash_command(
     lp: LogPaths,
 ) -> Result<(std::process::ExitStatus, String, LogPaths), (String, LogPaths, MonorailError)> {
     let (stdout_log_file, stderr_log_file) = lp
-        .open_logs()
+        .get_writable_log_files()
         .map_err(|e| (target_path.clone(), lp.clone(), e))?;
     let mut cmd = tokio::process::Command::new("bash")
         .arg("-c")
@@ -513,7 +485,30 @@ async fn run_bash_command(
 }
 
 #[derive(Debug)]
-pub struct AnalyzeInput<'a> {
+pub struct HandleResultShowInput {}
+
+pub async fn handle_result_show<'a>(
+    cfg: &'a Config,
+    input: &'a HandleResultShowInput,
+    work_dir: &'a path::Path,
+) -> Result<RunOutput, MonorailError> {
+    // open tracking and get log_info
+    let tracking_table = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
+    // use log_info to get results.json file in id dir
+    let log_info = tracking_table.open_log_info().await?;
+    let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
+    let mut run_output_file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .open(&log_dir.join("run.json"))
+        .await
+        .map_err(|e| MonorailError::Generic(e.to_string()))?;
+    let mut data = vec![];
+    run_output_file.read_to_end(&mut data).await?;
+    Ok(serde_json::from_slice(&data)?)
+}
+
+#[derive(Debug)]
+pub struct AnalysisShowInput<'a> {
     pub(crate) git_opts: GitOptions<'a>,
     pub(crate) show_changes: bool,
     pub(crate) show_change_targets: bool,
@@ -522,7 +517,7 @@ pub struct AnalyzeInput<'a> {
 }
 
 #[derive(Serialize, Debug)]
-pub struct AnalyzeOutput {
+pub struct AnalysisShowOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     changes: Option<Vec<AnalyzedChange>>,
     targets: Vec<String>,
@@ -567,11 +562,11 @@ enum AnalyzedChangeTargetReason {
     Ignores,
 }
 
-pub async fn handle_analyze<'a>(
+pub async fn handle_analyze_show<'a>(
     cfg: &'a Config,
-    input: &AnalyzeInput<'a>,
+    input: &AnalysisShowInput<'a>,
     work_dir: &'a path::Path,
-) -> Result<AnalyzeOutput, MonorailError> {
+) -> Result<AnalysisShowOutput, MonorailError> {
     let (mut lookups, changes) = match input.targets.len() {
         0 => {
             let changes = match cfg.vcs.r#use {
@@ -598,7 +593,7 @@ pub async fn handle_analyze<'a>(
         _ => (Lookups::new(cfg, &input.targets, work_dir)?, None),
     };
 
-    analyze(
+    analyze_show(
         &mut lookups,
         changes,
         input.show_changes,
@@ -607,14 +602,14 @@ pub async fn handle_analyze<'a>(
     )
 }
 
-fn analyze(
+fn analyze_show(
     lookups: &mut Lookups<'_>,
     changes: Option<Vec<Change>>,
     show_changes: bool,
     show_change_targets: bool,
     show_target_groups: bool,
-) -> Result<AnalyzeOutput, MonorailError> {
-    let mut output = AnalyzeOutput {
+) -> Result<AnalysisShowOutput, MonorailError> {
+    let mut output = AnalysisShowOutput {
         changes: if show_changes { Some(vec![]) } else { None },
         targets: vec![],
         target_groups: None,
@@ -767,7 +762,7 @@ fn analyze(
 }
 
 #[derive(Debug, Serialize)]
-pub struct HandleTargetListInput {
+pub struct HandleTargetShowInput {
     pub show_target_groups: bool,
 }
 #[derive(Debug, Serialize)]
@@ -776,9 +771,9 @@ pub struct TargetListOutput {
     target_groups: Option<Vec<Vec<String>>>,
 }
 
-pub fn handle_target_list(
+pub fn handle_target_show(
     cfg: &Config,
-    input: HandleTargetListInput,
+    input: HandleTargetShowInput,
     work_dir: &path::Path,
 ) -> Result<TargetListOutput, MonorailError> {
     let mut o = TargetListOutput {
@@ -1786,7 +1781,7 @@ uses = [
         let changes = vec![];
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze(&mut lookups, Some(changes), true, false, false).unwrap();
+        let o = analyze_show(&mut lookups, Some(changes), true, false, false).unwrap();
 
         assert!(o.changes.unwrap().is_empty());
         assert!(o.targets.is_empty());
@@ -1806,7 +1801,7 @@ uses = [
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
+        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -1832,7 +1827,7 @@ uses = [
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
+        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -1857,7 +1852,7 @@ uses = [
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
+        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -1894,7 +1889,7 @@ uses = [
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
+        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -1927,7 +1922,7 @@ uses = [
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
+        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -1967,7 +1962,7 @@ uses = [
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze(&mut lookups, Some(changes), true, true, true).unwrap();
+        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
