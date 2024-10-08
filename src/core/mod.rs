@@ -328,6 +328,9 @@ async fn run<'a>(
     // remove the log_dir path if it exists
     std::fs::remove_dir_all(&log_dir).unwrap_or(());
 
+    // for converting potentially deep nested paths into a single directory string
+    let mut path_hasher = sha2::Sha256::new();
+
     for f in functions.iter() {
         for group in target_groups {
             let mut run_data = vec![];
@@ -349,12 +352,17 @@ async fn run<'a>(
                     .ok_or(MonorailError::from("Run file not found"))?
                     .to_owned();
                 // TODO: check file exists
+                path_hasher.update(target_path);
                 run_data.push(RunData {
                     work_dir: work_dir.to_owned(),
                     target_path: target_path.to_owned(),
                     script_path: script_path.to_owned(),
                     function: f.to_string(),
-                    log_paths: LogPaths::new(&log_dir, f.as_str(), target_path),
+                    log_paths: LogPaths::new(
+                        &log_dir,
+                        f.as_str(),
+                        &format!("{:x}", path_hasher.finalize_reset()),
+                    ),
                 });
             }
             let run_data_len = run_data.len();
