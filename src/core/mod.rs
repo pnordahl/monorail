@@ -2,13 +2,13 @@ mod graph;
 mod tracking;
 
 use std::cmp::Ordering;
-use std::{fs, path};
+use std::{path, sync, time};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 
 use std::result::Result;
 use std::str::FromStr;
@@ -16,11 +16,15 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio_stream::StreamExt;
 use trie_rs::{Trie, TrieBuilder};
 
 use crate::common::error::{GraphError, MonorailError};
+
+const RUN_OUTPUT_FILE_NAME: &str = "run.json.gz";
+const STDOUT_FILE: &str = "stdout.gz";
+const STDERR_FILE: &str = "stderr.gz";
 
 #[derive(Debug)]
 pub struct GitOptions<'a> {
@@ -53,6 +57,7 @@ pub struct TargetRunSuccess {
     code: Option<i32>,
     stdout_log_path: path::PathBuf,
     stderr_log_path: path::PathBuf,
+    runtime_secs: f32,
 }
 impl TargetRunSuccess {
     fn new(
@@ -60,12 +65,14 @@ impl TargetRunSuccess {
         code: Option<i32>,
         stdout_log_path: path::PathBuf,
         stderr_log_path: path::PathBuf,
+        execution_dur: time::Duration,
     ) -> Self {
         Self {
             target,
             code,
             stdout_log_path,
             stderr_log_path,
+            runtime_secs: execution_dur.as_secs_f32(),
         }
     }
 }
@@ -76,6 +83,7 @@ pub struct TargetRunFailure {
     stdout_log_path: Option<path::PathBuf>,
     stderr_log_path: Option<path::PathBuf>,
     error: String,
+    runtime_secs: f32,
 }
 impl TargetRunFailure {
     fn new(
@@ -84,6 +92,7 @@ impl TargetRunFailure {
         stdout_log_path: Option<path::PathBuf>,
         stderr_log_path: Option<path::PathBuf>,
         error: String,
+        execution_dur: time::Duration,
     ) -> Self {
         Self {
             target,
@@ -91,6 +100,7 @@ impl TargetRunFailure {
             stdout_log_path,
             stderr_log_path,
             error,
+            runtime_secs: execution_dur.as_secs_f32(),
         }
     }
 }
@@ -231,7 +241,6 @@ pub async fn handle_run<'a>(
     work_dir: &'a path::Path,
 ) -> Result<RunOutput, MonorailError> {
     let tracking_table = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
-
     let targets = cfg
         .targets
         .as_ref()
@@ -309,7 +318,7 @@ async fn run<'a>(
             return Err(e);
         }
     };
-    if log_info.id >= cfg.max_retained_run_logs {
+    if log_info.id >= cfg.max_retained_run_results {
         log_info.id = 0;
     }
     log_info.id += 1;
@@ -318,9 +327,10 @@ async fn run<'a>(
     let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
     // remove the log_dir path if it exists
     std::fs::remove_dir_all(&log_dir).unwrap_or(());
+
     for f in functions.iter() {
         for group in target_groups {
-            let mut tuples: Vec<(String, String, String)> = vec![];
+            let mut run_data = vec![];
             for target_path in group {
                 let target_index = lookups
                     .dag
@@ -333,28 +343,29 @@ async fn run<'a>(
                 let target = targets
                     .get(target_index)
                     .ok_or(MonorailError::from("Target not found"))?;
-                let script_path = std::path::Path::new(&target_path).join(&target.run);
+                let script_path = std::path::Path::new(&target_path)
+                    .join(&target.run)
+                    .to_str()
+                    .ok_or(MonorailError::from("Run file not found"))?
+                    .to_owned();
                 // TODO: check file exists
-                tuples.push((
-                    target_path.to_owned(),
-                    script_path
-                        .to_str()
-                        .ok_or(MonorailError::from("Run file not found"))?
-                        .to_owned(),
-                    f.to_string(),
-                ));
+                run_data.push(RunData {
+                    work_dir: work_dir.to_owned(),
+                    target_path: target_path.to_owned(),
+                    script_path: script_path.to_owned(),
+                    function: f.to_string(),
+                    log_paths: LogPaths::new(&log_dir, f.as_str(), target_path),
+                });
             }
-
+            let run_data_len = run_data.len();
+            let run_data_arc = sync::Arc::new(run_data);
             let mut js = tokio::task::JoinSet::new();
-            for (target_path, script_path, func) in tuples {
+            for id in 0..run_data_len {
                 // TODO: check file type to pick command
-                let lp = LogPaths::new(&log_dir, func.as_str(), &target_path);
                 js.spawn(run_bash_command(
-                    work_dir.to_owned(),
-                    target_path.to_owned(),
-                    script_path,
-                    func.to_owned(),
-                    lp,
+                    id,
+                    run_data_arc.clone(),
+                    time::Instant::now(),
                 ));
             }
             let mut frr = FunctionRunResult {
@@ -365,13 +376,18 @@ async fn run<'a>(
             while let Some(join_res) = js.join_next().await {
                 let res = join_res?;
                 match res {
-                    Ok((status, target_path, lp)) => {
+                    Ok((id, status, duration)) => {
+                        let rd = &run_data_arc[id];
+                        let stdout_log_path = rd.log_paths.stdout_log_path.to_owned();
+                        let stderr_log_path = rd.log_paths.stderr_log_path.to_owned();
+                        let target_path = rd.target_path.to_owned();
                         if status.success() {
                             frr.successes.push(TargetRunSuccess::new(
                                 target_path,
                                 status.code(),
-                                lp.stdout_log_path,
-                                lp.stderr_log_path,
+                                stdout_log_path,
+                                stderr_log_path,
+                                duration,
                             ));
                         } else {
                             // TODO: --halt-on-first-failure
@@ -379,22 +395,24 @@ async fn run<'a>(
                             frr.failures.push(TargetRunFailure::new(
                                 target_path,
                                 status.code(),
-                                Some(lp.stdout_log_path),
-                                Some(lp.stderr_log_path),
+                                Some(stdout_log_path),
+                                Some(stderr_log_path),
                                 error.to_string(),
+                                duration,
                             ));
                         }
                     }
-                    Err((target_path, lp, e)) => {
+                    Err((id, duration, e)) => {
                         // TODO: --halt-on-first-failure
                         let error =
                             MonorailError::Generic(format!("Function could not execute: {}", e));
                         frr.failures.push(TargetRunFailure::new(
-                            target_path,
+                            run_data_arc[id].target_path.to_owned(),
                             None,
                             None,
                             None,
                             error.to_string(),
+                            duration,
                         ));
                     }
                 }
@@ -405,15 +423,99 @@ async fn run<'a>(
             o.results.push(frr);
         }
     }
-    // serialize and store the results of this run
+    // serialize and store the compressed results of this run
     let run_result_file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(&log_dir.join("run.json"))
+        .open(log_dir.join(RUN_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
-    serde_json::to_writer(&run_result_file, &o)?;
+    let bw = BufWriter::new(run_result_file);
+    let mut encoder = flate2::write::GzEncoder::new(bw, flate2::Compression::default());
+    serde_json::to_writer(&mut encoder, &o)?;
+    encoder.finish()?;
     Ok(o)
+}
+
+struct RunData {
+    work_dir: path::PathBuf,
+    target_path: String,
+    script_path: String,
+    function: String,
+    log_paths: LogPaths,
+}
+
+async fn run_bash_command<'a>(
+    id: usize,
+    run_data: sync::Arc<Vec<RunData>>,
+    start_time: time::Instant,
+) -> Result<(usize, std::process::ExitStatus, time::Duration), (usize, time::Duration, MonorailError)>
+{
+    let rd = &run_data[id];
+    let work_dir = &rd.work_dir;
+    let mut child = tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            "source $(pwd)/{} && {}",
+            rd.script_path, rd.function
+        ))
+        .current_dir(work_dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        // parallel execution makes use of stdin impractical
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| (id, start_time.elapsed(), MonorailError::from(e)))?;
+
+    let (stdout_log_file, stderr_log_file) = rd
+        .log_paths
+        .get_writable_log_files()
+        .map_err(|e| (id, start_time.elapsed(), e))?;
+
+    let stdout_fut = {
+        if let Some(stdout) = child.stdout.take() {
+            tokio::spawn(async move { process_reader(stdout, stdout_log_file).await })
+        } else {
+            tokio::spawn(async { Ok(()) })
+        }
+    };
+    let stderr_fut = {
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move { process_reader(stderr, stderr_log_file).await })
+        } else {
+            tokio::spawn(async { Ok(()) })
+        }
+    };
+    let child_fut = tokio::spawn(async move { child.wait().await.map_err(MonorailError::from) });
+
+    let (stdout_result, stderr_result, child_result) =
+        tokio::try_join!(stdout_fut, stderr_fut, child_fut)
+            .map_err(|e| (id, start_time.elapsed(), MonorailError::from(e)))?;
+
+    stdout_result.map_err(|e| (id, start_time.elapsed(), e))?;
+    stderr_result.map_err(|e| (id, start_time.elapsed(), e))?;
+    let status = child_result.map_err(|e| (id, start_time.elapsed(), e))?;
+
+    Ok((id, status, start_time.elapsed()))
+}
+
+async fn process_reader<R>(mut reader: R, file: std::fs::File) -> Result<(), MonorailError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let bw = BufWriter::new(file);
+    let mut encoder = flate2::write::GzEncoder::new(bw, flate2::Compression::default());
+    let mut buffer = [0u8; 1024];
+    while let Ok(bytes_read) = reader.read(&mut buffer).await {
+        if bytes_read == 0 {
+            break;
+        }
+        encoder
+            .write_all(&buffer[..bytes_read])
+            .map_err(MonorailError::from)?;
+    }
+    encoder.finish().map_err(MonorailError::from)?;
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -425,15 +527,15 @@ pub struct LogPaths {
 impl LogPaths {
     fn new(log_dir: &path::Path, function: &str, target: &str) -> Self {
         let dir_path = log_dir.join(function).join(target);
-        let stdout_log_path = dir_path.clone().join("stdout");
-        let stderr_log_path = dir_path.clone().join("stderr");
+        let stdout_log_path = dir_path.clone().join(STDOUT_FILE);
+        let stderr_log_path = dir_path.clone().join(STDERR_FILE);
         Self {
             dir_path,
             stdout_log_path,
             stderr_log_path,
         }
     }
-    fn get_writable_log_files(&self) -> Result<(fs::File, fs::File), MonorailError> {
+    fn get_writable_log_files(&self) -> Result<(std::fs::File, std::fs::File), MonorailError> {
         std::fs::create_dir_all(&self.dir_path)?;
         let stdout_log_file = OpenOptions::new()
             .create(true)
@@ -442,7 +544,7 @@ impl LogPaths {
             .open(&self.stdout_log_path)
             .map_err(|e| MonorailError::Generic(e.to_string()))?;
 
-        let stderr_log_file = OpenOptions::new()
+        let stderr_log_file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
@@ -453,43 +555,12 @@ impl LogPaths {
     }
 }
 
-// TODO: LogPaths -> TargetPaths and include all paths in it
-// TODO: clean up this returning of the string target_path
-async fn run_bash_command(
-    work_dir: path::PathBuf,
-    target_path: String,
-    script: String,
-    function: String,
-    lp: LogPaths,
-) -> Result<(std::process::ExitStatus, String, LogPaths), (String, LogPaths, MonorailError)> {
-    let (stdout_log_file, stderr_log_file) = lp
-        .get_writable_log_files()
-        .map_err(|e| (target_path.clone(), lp.clone(), e))?;
-    let mut cmd = tokio::process::Command::new("bash")
-        .arg("-c")
-        .arg(format!("source $(pwd)/{} && {}", script, function))
-        .current_dir(work_dir)
-        .stdout(stdout_log_file)
-        .stderr(stderr_log_file)
-        // parallel execution makes use of stdin impractical
-        .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| (target_path.clone(), lp.clone(), MonorailError::from(e)))?;
-    Ok((
-        cmd.wait()
-            .await
-            .map_err(|e| (target_path.clone(), lp.clone(), MonorailError::from(e)))?,
-        target_path,
-        lp,
-    ))
-}
-
 #[derive(Debug)]
 pub struct HandleResultShowInput {}
 
 pub async fn handle_result_show<'a>(
     cfg: &'a Config,
-    input: &'a HandleResultShowInput,
+    _input: &'a HandleResultShowInput,
     work_dir: &'a path::Path,
 ) -> Result<RunOutput, MonorailError> {
     // open tracking and get log_info
@@ -497,14 +568,16 @@ pub async fn handle_result_show<'a>(
     // use log_info to get results.json file in id dir
     let log_info = tracking_table.open_log_info().await?;
     let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
-    let mut run_output_file = tokio::fs::OpenOptions::new()
+    let run_output_file = std::fs::OpenOptions::new()
         .read(true)
-        .open(&log_dir.join("run.json"))
-        .await
+        .open(log_dir.join(RUN_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
-    let mut data = vec![];
-    run_output_file.read_to_end(&mut data).await?;
-    Ok(serde_json::from_slice(&data)?)
+    let br = BufReader::new(run_output_file);
+    let mut decoder = flate2::read::GzDecoder::new(br);
+    // let mut data = vec![];
+    // run_output_file.read_to_end(&mut data).await?;
+    // bufreader to flate2::GzDecoder
+    Ok(serde_json::from_reader(&mut decoder)?)
 }
 
 #[derive(Debug)]
@@ -1147,8 +1220,8 @@ impl FromStr for VcsKind {
 pub struct Config {
     #[serde(default = "Config::default_output_path")]
     output_dir: String,
-    #[serde(default = "Config::default_max_retained_run_logs")]
-    max_retained_run_logs: usize,
+    #[serde(default = "Config::default_max_retained_run_results")]
+    max_retained_run_results: usize,
     #[serde(default)]
     vcs: Vcs,
     targets: Option<Vec<Target>>,
@@ -1178,7 +1251,7 @@ impl Config {
     fn default_output_path() -> String {
         "monorail-out".to_string()
     }
-    fn default_max_retained_run_logs() -> usize {
+    fn default_max_retained_run_results() -> usize {
         10
     }
 }

@@ -325,7 +325,7 @@ where
 
 impl TryFrom<&clap::ArgMatches> for core::HandleResultShowInput {
     type Error = MonorailError;
-    fn try_from(cmd: &clap::ArgMatches) -> Result<Self, Self::Error> {
+    fn try_from(_cmd: &clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {})
     }
 }
