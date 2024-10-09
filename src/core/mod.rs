@@ -48,61 +48,20 @@ pub struct RunOutput {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FunctionRunResult {
     function: String,
-    successes: Vec<TargetRunSuccess>,
-    failures: Vec<TargetRunFailure>,
+    successes: Vec<TargetRunResult>,
+    failures: Vec<TargetRunResult>,
+    unknowns: Vec<TargetRunResult>,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TargetRunSuccess {
+pub struct TargetRunResult {
     target: String,
     code: Option<i32>,
-    stdout_log_path: path::PathBuf,
-    stderr_log_path: path::PathBuf,
+    stdout_path: path::PathBuf,
+    stderr_path: path::PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
     runtime_secs: f32,
-}
-impl TargetRunSuccess {
-    fn new(
-        target: String,
-        code: Option<i32>,
-        stdout_log_path: path::PathBuf,
-        stderr_log_path: path::PathBuf,
-        execution_dur: time::Duration,
-    ) -> Self {
-        Self {
-            target,
-            code,
-            stdout_log_path,
-            stderr_log_path,
-            runtime_secs: execution_dur.as_secs_f32(),
-        }
-    }
-}
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TargetRunFailure {
-    target: String,
-    code: Option<i32>,
-    stdout_log_path: Option<path::PathBuf>,
-    stderr_log_path: Option<path::PathBuf>,
-    error: String,
-    runtime_secs: f32,
-}
-impl TargetRunFailure {
-    fn new(
-        target: String,
-        code: Option<i32>,
-        stdout_log_path: Option<path::PathBuf>,
-        stderr_log_path: Option<path::PathBuf>,
-        error: String,
-        execution_dur: time::Duration,
-    ) -> Self {
-        Self {
-            target,
-            code,
-            stdout_log_path,
-            stderr_log_path,
-            error,
-            runtime_secs: execution_dur.as_secs_f32(),
-        }
-    }
 }
 
 // Open a file from the provided path, and compute its checksum
@@ -240,6 +199,7 @@ pub async fn handle_run<'a>(
     input: &'a RunInput<'a>,
     work_dir: &'a path::Path,
 ) -> Result<RunOutput, MonorailError> {
+    // TODO: maybe have separate LOCKFILEs for tracking.json and log_info.json?
     let tracking_table = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
     let targets = cfg
         .targets
@@ -297,44 +257,52 @@ pub async fn handle_run<'a>(
     }
 }
 
-async fn run<'a>(
-    cfg: &'a Config,
-    tracking_table: &tracking::Table,
+struct RunData {
+    target_path: String,
+    script_path: String,
+    logs: Logs,
+}
+struct RunDataGroup {
+    function_index: usize,
+    datas: Vec<RunData>,
+}
+struct RunDataGroups {
+    work_dir: path::PathBuf,
+    groups: Vec<RunDataGroup>,
+}
+
+// Create an initial run output with unknowns, and build the RunData for each target group.
+fn get_run_data_groups<'a>(
     lookups: &Lookups<'_>,
-    work_dir: &path::Path,
     functions: &'a [&'a String],
-    targets: Vec<Target>,
-    target_groups: &Vec<Vec<String>>,
-) -> Result<RunOutput, MonorailError> {
-    let mut o = RunOutput {
-        failed: false,
-        results: vec![],
-    };
-    // obtain current log info counter and increment it before using
-    let mut log_info = match tracking_table.open_log_info().await {
-        Ok(log_info) => log_info,
-        Err(MonorailError::TrackingLogInfoNotFound(_)) => tracking_table.new_log_info(),
-        Err(e) => {
-            return Err(e);
-        }
-    };
-    if log_info.id >= cfg.max_retained_run_results {
-        log_info.id = 0;
-    }
-    log_info.id += 1;
-
-    log_info.save().await?;
-    let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
-    // remove the log_dir path if it exists
-    std::fs::remove_dir_all(&log_dir).unwrap_or(());
-
+    targets: &[Target],
+    target_groups: &[Vec<String>],
+    work_dir: &path::Path,
+    log_dir: &path::Path,
+) -> Result<(RunOutput, RunDataGroups), MonorailError> {
     // for converting potentially deep nested paths into a single directory string
     let mut path_hasher = sha2::Sha256::new();
 
-    for f in functions.iter() {
+    let mut groups = Vec::with_capacity(target_groups.len());
+    let mut frrs = Vec::with_capacity(target_groups.len());
+    for (i, f) in functions.iter().enumerate() {
         for group in target_groups {
-            let mut run_data = vec![];
+            let mut run_data = Vec::with_capacity(group.len());
+            let mut unknowns = Vec::with_capacity(group.len());
             for target_path in group {
+                let logs = Logs::open(
+                    log_dir,
+                    f.as_str(),
+                    &format!("{:x}", path_hasher.finalize_reset()),
+                )?;
+                unknowns.push(TargetRunResult {
+                    target: target_path.to_owned(),
+                    code: None,
+                    stdout_path: logs.stdout_path.to_owned(),
+                    stderr_path: logs.stderr_path.to_owned(),
+                    error: None,
+                    runtime_secs: 0.0,
+                });
                 let target_index = lookups
                     .dag
                     .label2node
@@ -351,87 +319,209 @@ async fn run<'a>(
                     .to_str()
                     .ok_or(MonorailError::from("Run file not found"))?
                     .to_owned();
-                // TODO: check file exists
                 path_hasher.update(target_path);
                 run_data.push(RunData {
-                    work_dir: work_dir.to_owned(),
                     target_path: target_path.to_owned(),
                     script_path: script_path.to_owned(),
-                    function: f.to_string(),
-                    log_paths: LogPaths::new(
-                        &log_dir,
-                        f.as_str(),
-                        &format!("{:x}", path_hasher.finalize_reset()),
-                    ),
+                    logs,
                 });
             }
-            let run_data_len = run_data.len();
-            let run_data_arc = sync::Arc::new(run_data);
-            let mut js = tokio::task::JoinSet::new();
-            for id in 0..run_data_len {
-                // TODO: check file type to pick command
-                js.spawn(run_bash_command(
-                    id,
-                    run_data_arc.clone(),
-                    time::Instant::now(),
-                ));
-            }
-            let mut frr = FunctionRunResult {
+            groups.push(RunDataGroup {
+                function_index: i,
+                datas: run_data,
+            });
+            let frr = FunctionRunResult {
                 function: f.to_string(),
                 successes: vec![],
                 failures: vec![],
+                unknowns,
             };
-            while let Some(join_res) = js.join_next().await {
-                let res = join_res?;
-                match res {
-                    Ok((id, status, duration)) => {
-                        let rd = &run_data_arc[id];
-                        let stdout_log_path = rd.log_paths.stdout_log_path.to_owned();
-                        let stderr_log_path = rd.log_paths.stderr_log_path.to_owned();
-                        let target_path = rd.target_path.to_owned();
-                        if status.success() {
-                            frr.successes.push(TargetRunSuccess::new(
-                                target_path,
-                                status.code(),
-                                stdout_log_path,
-                                stderr_log_path,
-                                duration,
-                            ));
-                        } else {
-                            // TODO: --halt-on-first-failure
-                            let error = MonorailError::from("Function returned an error");
-                            frr.failures.push(TargetRunFailure::new(
-                                target_path,
-                                status.code(),
-                                Some(stdout_log_path),
-                                Some(stderr_log_path),
-                                error.to_string(),
-                                duration,
-                            ));
+            frrs.push(frr);
+        }
+    }
+
+    Ok((
+        RunOutput {
+            failed: false,
+            results: frrs,
+        },
+        RunDataGroups {
+            work_dir: work_dir.to_path_buf(),
+            groups,
+        },
+    ))
+}
+
+async fn run<'a>(
+    cfg: &'a Config,
+    tracking_table: &tracking::Table,
+    lookups: &Lookups<'_>,
+    work_dir: &path::Path,
+    functions: &'a [&'a String],
+    targets: Vec<Target>,
+    target_groups: &[Vec<String>],
+) -> Result<RunOutput, MonorailError> {
+    let mut o = RunOutput {
+        failed: false,
+        results: vec![],
+    };
+    let log_dir = {
+        // obtain current log info counter and increment it before using
+        let mut log_info = match tracking_table.open_log_info().await {
+            Ok(log_info) => log_info,
+            Err(MonorailError::TrackingLogInfoNotFound(_)) => tracking_table.new_log_info(),
+            Err(e) => {
+                return Err(e);
+            }
+        };
+        if log_info.id >= cfg.max_retained_run_results {
+            log_info.id = 0;
+        }
+        log_info.id += 1;
+
+        log_info.save().await?;
+        let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
+        // remove the log_dir path if it exists, and create a new one
+        std::fs::remove_dir_all(&log_dir).unwrap_or(());
+        std::fs::create_dir_all(&log_dir)?;
+        log_dir
+    };
+
+    let (initial_run_output, run_data_groups) = get_run_data_groups(
+        lookups,
+        functions,
+        &targets,
+        target_groups,
+        work_dir,
+        &log_dir,
+    )?;
+
+    // Make initial run output available for use by other commands
+    store_run_output(&initial_run_output, &log_dir)?;
+
+    let work_dir_arc = sync::Arc::new(run_data_groups.work_dir);
+    let mut abort = false;
+
+    // Spawn concurrent tasks for each group of rundata
+    for run_data_group in run_data_groups.groups {
+        if abort {
+            o.results.push(FunctionRunResult {
+                function: functions[run_data_group.function_index].to_owned(),
+                successes: vec![],
+                failures: vec![],
+                unknowns: run_data_group
+                    .datas
+                    .iter()
+                    .map(|rd| TargetRunResult {
+                        target: rd.target_path.to_owned(),
+                        code: None,
+                        stdout_path: rd.logs.stdout_path.to_owned(),
+                        stderr_path: rd.logs.stderr_path.to_owned(),
+                        error: Some("Function task cancelled".to_string()),
+                        runtime_secs: 0.0,
+                    })
+                    .collect::<Vec<TargetRunResult>>(),
+            });
+            continue;
+        }
+        let function = functions[run_data_group.function_index].to_owned();
+        let mut frr = FunctionRunResult {
+            function: function.to_owned(),
+            successes: vec![],
+            failures: vec![],
+            unknowns: vec![],
+        };
+        let function_arc = sync::Arc::new(function);
+        let datas_len = run_data_group.datas.len();
+        let run_data_group_arc = sync::Arc::new(run_data_group);
+        let mut js = tokio::task::JoinSet::new();
+        let mut abort_table = HashMap::new();
+        for id in 0..datas_len {
+            // TODO: check file type to pick command
+            let handle = js.spawn(run_bash_command(
+                id,
+                function_arc.clone(),
+                work_dir_arc.clone(),
+                run_data_group_arc.clone(),
+                time::Instant::now(),
+            ));
+            // map this task for reference, in case it's aborted
+            abort_table.insert(handle.id(), id);
+        }
+        while let Some(join_res) = js.join_next().await {
+            match join_res {
+                Ok(task_res) => {
+                    match task_res {
+                        Ok((id, status, duration)) => {
+                            let rd = &run_data_group_arc.datas[id];
+                            let mut trr = TargetRunResult {
+                                target: rd.target_path.to_owned(),
+                                code: status.code(),
+                                stdout_path: rd.logs.stdout_path.to_owned(),
+                                stderr_path: rd.logs.stderr_path.to_owned(),
+                                error: None,
+                                runtime_secs: duration.as_secs_f32(),
+                            };
+                            if status.success() {
+                                frr.successes.push(trr);
+                            } else {
+                                // TODO: --abort-on-failure option
+                                js.abort_all();
+                                abort = true;
+
+                                trr.error = Some("Function returned an error".to_string());
+                                frr.failures.push(trr);
+                            }
+                        }
+                        Err((id, duration, e)) => {
+                            // TODO: --abort-on-failure option
+                            js.abort_all();
+                            abort = true;
+
+                            let rd = &run_data_group_arc.datas[id];
+                            frr.failures.push(TargetRunResult {
+                                target: rd.target_path.to_owned(),
+                                code: None,
+                                stdout_path: rd.logs.stdout_path.to_owned(),
+                                stderr_path: rd.logs.stderr_path.to_owned(),
+                                error: Some(format!("Function task failed: {}", e)),
+                                runtime_secs: duration.as_secs_f32(),
+                            });
                         }
                     }
-                    Err((id, duration, e)) => {
-                        // TODO: --halt-on-first-failure
-                        let error =
-                            MonorailError::Generic(format!("Function could not execute: {}", e));
-                        frr.failures.push(TargetRunFailure::new(
-                            run_data_arc[id].target_path.to_owned(),
-                            None,
-                            None,
-                            None,
-                            error.to_string(),
-                            duration,
-                        ));
+                }
+                Err(e) => {
+                    if e.is_cancelled() {
+                        let run_data_index = abort_table
+                            .get(&e.id())
+                            .ok_or(MonorailError::from("Task id missing from abort table"))?;
+                        let rd = &run_data_group_arc.datas[*run_data_index];
+                        frr.unknowns.push(TargetRunResult {
+                            target: rd.target_path.to_owned(),
+                            code: None,
+                            stdout_path: rd.logs.stdout_path.to_owned(),
+                            stderr_path: rd.logs.stderr_path.to_owned(),
+                            error: Some("Function task cancelled".to_string()),
+                            runtime_secs: 0.0,
+                        })
                     }
                 }
             }
-            if !frr.failures.is_empty() {
-                o.failed = true;
-            }
-            o.results.push(frr);
         }
+        if !frr.failures.is_empty() || !frr.unknowns.is_empty() {
+            o.failed = true;
+        }
+        o.results.push(frr);
     }
-    // serialize and store the compressed results of this run
+
+    // Update the run output with final results
+    store_run_output(&o, &log_dir)?;
+
+    Ok(o)
+}
+
+// Serialize and store the compressed results of the given RunOutput.
+fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), MonorailError> {
     let run_result_file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -440,34 +530,23 @@ async fn run<'a>(
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let bw = BufWriter::new(run_result_file);
     let mut encoder = flate2::write::GzEncoder::new(bw, flate2::Compression::default());
-    serde_json::to_writer(&mut encoder, &o)?;
-    encoder.finish()?;
-    Ok(o)
+    serde_json::to_writer(&mut encoder, run_output)?;
+    encoder.try_finish().map_err(MonorailError::from)
 }
 
-struct RunData {
-    work_dir: path::PathBuf,
-    target_path: String,
-    script_path: String,
-    function: String,
-    log_paths: LogPaths,
-}
-
-async fn run_bash_command<'a>(
+async fn run_bash_command(
     id: usize,
-    run_data: sync::Arc<Vec<RunData>>,
+    function: sync::Arc<String>,
+    work_dir: sync::Arc<path::PathBuf>,
+    run_data_group: sync::Arc<RunDataGroup>,
     start_time: time::Instant,
 ) -> Result<(usize, std::process::ExitStatus, time::Duration), (usize, time::Duration, MonorailError)>
 {
-    let rd = &run_data[id];
-    let work_dir = &rd.work_dir;
+    let rd = &run_data_group.datas[id];
     let mut child = tokio::process::Command::new("bash")
         .arg("-c")
-        .arg(format!(
-            "source $(pwd)/{} && {}",
-            rd.script_path, rd.function
-        ))
-        .current_dir(work_dir)
+        .arg(format!("source $(pwd)/{} && {}", rd.script_path, function))
+        .current_dir(work_dir.as_path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         // parallel execution makes use of stdin impractical
@@ -475,21 +554,18 @@ async fn run_bash_command<'a>(
         .spawn()
         .map_err(|e| (id, start_time.elapsed(), MonorailError::from(e)))?;
 
-    let (stdout_log_file, stderr_log_file) = rd
-        .log_paths
-        .get_writable_log_files()
-        .map_err(|e| (id, start_time.elapsed(), e))?;
-
+    let stdout_file_arc = rd.logs.stdout_file.clone();
     let stdout_fut = {
         if let Some(stdout) = child.stdout.take() {
-            tokio::spawn(async move { process_reader(stdout, stdout_log_file).await })
+            tokio::spawn(async move { process_reader(stdout, stdout_file_arc).await })
         } else {
             tokio::spawn(async { Ok(()) })
         }
     };
+    let stderr_file_arc = rd.logs.stderr_file.clone();
     let stderr_fut = {
         if let Some(stderr) = child.stderr.take() {
-            tokio::spawn(async move { process_reader(stderr, stderr_log_file).await })
+            tokio::spawn(async move { process_reader(stderr, stderr_file_arc).await })
         } else {
             tokio::spawn(async { Ok(()) })
         }
@@ -507,7 +583,10 @@ async fn run_bash_command<'a>(
     Ok((id, status, start_time.elapsed()))
 }
 
-async fn process_reader<R>(mut reader: R, file: std::fs::File) -> Result<(), MonorailError>
+async fn process_reader<R>(
+    mut reader: R,
+    file: sync::Arc<std::fs::File>,
+) -> Result<(), MonorailError>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -521,45 +600,43 @@ where
         encoder
             .write_all(&buffer[..bytes_read])
             .map_err(MonorailError::from)?;
+        encoder.flush()?;
     }
     encoder.finish().map_err(MonorailError::from)?;
     Ok(())
 }
 
-#[derive(Clone)]
-pub struct LogPaths {
-    dir_path: path::PathBuf,
-    stdout_log_path: path::PathBuf,
-    stderr_log_path: path::PathBuf,
+pub struct Logs {
+    stdout_path: path::PathBuf,
+    stderr_path: path::PathBuf,
+    stdout_file: sync::Arc<std::fs::File>,
+    stderr_file: sync::Arc<std::fs::File>,
 }
-impl LogPaths {
-    fn new(log_dir: &path::Path, function: &str, target: &str) -> Self {
+impl Logs {
+    fn open(log_dir: &path::Path, function: &str, target: &str) -> Result<Self, MonorailError> {
         let dir_path = log_dir.join(function).join(target);
-        let stdout_log_path = dir_path.clone().join(STDOUT_FILE);
-        let stderr_log_path = dir_path.clone().join(STDERR_FILE);
-        Self {
-            dir_path,
-            stdout_log_path,
-            stderr_log_path,
-        }
-    }
-    fn get_writable_log_files(&self) -> Result<(std::fs::File, std::fs::File), MonorailError> {
-        std::fs::create_dir_all(&self.dir_path)?;
-        let stdout_log_file = OpenOptions::new()
+        let stdout_path = dir_path.clone().join(STDOUT_FILE);
+        let stderr_path = dir_path.clone().join(STDERR_FILE);
+        std::fs::create_dir_all(&dir_path)?;
+        let stdout_file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
-            .open(&self.stdout_log_path)
+            .open(&stdout_path)
             .map_err(|e| MonorailError::Generic(e.to_string()))?;
 
-        let stderr_log_file = std::fs::OpenOptions::new()
+        let stderr_file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
-            .open(&self.stderr_log_path)
+            .open(&stderr_path)
             .map_err(|e| MonorailError::Generic(e.to_string()))?;
-
-        Ok((stdout_log_file, stderr_log_file))
+        Ok(Self {
+            stdout_path,
+            stderr_path,
+            stdout_file: sync::Arc::new(stdout_file),
+            stderr_file: sync::Arc::new(stderr_file),
+        })
     }
 }
 
@@ -582,9 +659,6 @@ pub async fn handle_result_show<'a>(
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let br = BufReader::new(run_output_file);
     let mut decoder = flate2::read::GzDecoder::new(br);
-    // let mut data = vec![];
-    // run_output_file.read_to_end(&mut data).await?;
-    // bufreader to flate2::GzDecoder
     Ok(serde_json::from_reader(&mut decoder)?)
 }
 
