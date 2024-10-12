@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use trie_rs::{Trie, TrieBuilder};
 
@@ -192,19 +193,64 @@ async fn get_git_all_changes<'a>(
     Ok(Some(filtered_changes))
 }
 
-// todo/ monorail-out/log not created automatically
+const OUTPUT_KIND_WORKFLOW: &str = "workflow";
+const OUTPUT_KIND_RESULT: &str = "result";
+const OUTPUT_KIND_ERROR: &str = "error";
+
+#[derive(Serialize)]
+pub(crate) struct Output<T: Serialize> {
+    timestamp: String,
+    kind: &'static str,
+    data: T,
+}
+impl<T: Serialize> Output<T> {
+    pub(crate) fn workflow(data: T) -> Self {
+        Self {
+            timestamp: Self::utc_now(),
+            kind: OUTPUT_KIND_WORKFLOW,
+            data,
+        }
+    }
+    pub(crate) fn result(data: T) -> Self {
+        Self {
+            timestamp: Self::utc_now(),
+            kind: OUTPUT_KIND_RESULT,
+            data,
+        }
+    }
+    pub(crate) fn error(data: T) -> Self {
+        Self {
+            timestamp: Self::utc_now(),
+            kind: OUTPUT_KIND_ERROR,
+            data,
+        }
+    }
+    fn utc_now() -> String {
+        chrono::Utc::now().to_rfc3339()
+    }
+}
+
+struct Workflow<W: Write> {
+    writer: W,
+}
+impl<W: Write> Workflow<W> {
+    pub fn log<T: Serialize>(&mut self, data: T) -> Result<(), MonorailError> {
+        serde_json::to_writer(&mut self.writer, &data).map_err(MonorailError::from)?;
+        writeln!(&mut self.writer).map_err(MonorailError::from)
+    }
+}
 
 pub async fn handle_run<'a>(
     cfg: &'a Config,
     input: &'a RunInput<'a>,
     work_dir: &'a path::Path,
 ) -> Result<RunOutput, MonorailError> {
-    // TODO: maybe have separate LOCKFILEs for tracking.json and log_info.json?
-    let tracking_table = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
+    let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
     let targets = cfg
         .targets
         .as_ref()
         .ok_or(MonorailError::from("No configured targets"))?;
+
     match input.targets.len() {
         0 => {
             let ths = cfg.get_target_path_set();
@@ -290,11 +336,7 @@ fn get_run_data_groups<'a>(
             let mut run_data = Vec::with_capacity(group.len());
             let mut unknowns = Vec::with_capacity(group.len());
             for target_path in group {
-                let logs = Logs::open(
-                    log_dir,
-                    f.as_str(),
-                    &format!("{:x}", path_hasher.finalize_reset()),
-                )?;
+                let logs = Logs::open(log_dir, f.as_str(), &target_path, &mut path_hasher)?;
                 unknowns.push(TargetRunResult {
                     target: target_path.to_owned(),
                     code: None,
@@ -319,7 +361,6 @@ fn get_run_data_groups<'a>(
                     .to_str()
                     .ok_or(MonorailError::from("Run file not found"))?
                     .to_owned();
-                path_hasher.update(target_path);
                 run_data.push(RunData {
                     target_path: target_path.to_owned(),
                     script_path: script_path.to_owned(),
@@ -352,6 +393,67 @@ fn get_run_data_groups<'a>(
     ))
 }
 
+struct FunctionTask {
+    id: usize,
+    function: sync::Arc<String>,
+    work_dir: sync::Arc<path::PathBuf>,
+    script_path: String,
+    stdout_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+    stderr_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+    start_time: time::Instant,
+}
+impl FunctionTask {
+    async fn run_bash_task(
+        &mut self,
+    ) -> Result<
+        (usize, std::process::ExitStatus, time::Duration),
+        (usize, time::Duration, MonorailError),
+    > {
+        let mut child = tokio::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "source $(pwd)/{} && {}",
+                self.script_path, self.function
+            ))
+            .current_dir(self.work_dir.as_path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            // parallel execution makes use of stdin impractical
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| (self.id, self.start_time.elapsed(), MonorailError::from(e)))?;
+
+        let stdout_fut = process_reader2(child.stdout.take().unwrap(), &mut self.stdout_encoder);
+        let stderr_fut = process_reader2(child.stderr.take().unwrap(), &mut self.stderr_encoder);
+
+        let (stdout_result, stderr_result, child_result) =
+            tokio::try_join!(stdout_fut, stderr_fut, child_wrapper(child))
+                .map_err(|e| (self.id, self.start_time.elapsed(), MonorailError::from(e)))?;
+
+        Ok((self.id, child_result, self.start_time.elapsed()))
+    }
+}
+
+async fn child_wrapper(
+    mut child: tokio::process::Child,
+) -> Result<std::process::ExitStatus, MonorailError> {
+    child.wait().await.map_err(MonorailError::from)
+}
+
+impl Drop for FunctionTask {
+    fn drop(&mut self) {
+        finalize_log(&mut self.stdout_encoder).unwrap();
+        finalize_log(&mut self.stderr_encoder).unwrap();
+    }
+}
+
+#[derive(Serialize)]
+struct FunctionRunWorkflow<'a> {
+    status: &'a str,
+    function: &'a str,
+    target: &'a str,
+}
+
 async fn run<'a>(
     cfg: &'a Config,
     tracking_table: &tracking::Table,
@@ -361,6 +463,10 @@ async fn run<'a>(
     targets: Vec<Target>,
     target_groups: &[Vec<String>],
 ) -> Result<RunOutput, MonorailError> {
+    let stdout = std::io::stdout();
+    let writer = stdout.lock();
+    let mut workflow = Workflow { writer };
+
     let mut o = RunOutput {
         failed: false,
         results: vec![],
@@ -403,24 +509,49 @@ async fn run<'a>(
     let mut abort = false;
 
     // Spawn concurrent tasks for each group of rundata
-    for run_data_group in run_data_groups.groups {
+    for mut run_data_group in run_data_groups.groups {
         if abort {
+            let mut unknowns = vec![];
+            let function = functions[run_data_group.function_index].to_owned();
+            for rd in run_data_group.datas.iter_mut() {
+                let mut stdout_encoder =
+                    rd.logs
+                        .stdout_encoder
+                        .take()
+                        .ok_or(MonorailError::Generic(format!(
+                            "Failed to acquire encoder for {}",
+                            &rd.logs.stdout_path.display().to_string()
+                        )))?;
+                let mut stderr_encoder =
+                    rd.logs
+                        .stderr_encoder
+                        .take()
+                        .ok_or(MonorailError::Generic(format!(
+                            "Failed to acquire encoder for {}",
+                            &rd.logs.stderr_path.display().to_string()
+                        )))?;
+                finalize_log(&mut stdout_encoder)?;
+                finalize_log(&mut stderr_encoder)?;
+                let target = rd.target_path.to_owned();
+                workflow.log(Output::workflow(FunctionRunWorkflow {
+                    status: "aborted",
+                    function: &function,
+                    target: &rd.target_path,
+                }))?;
+                unknowns.push(TargetRunResult {
+                    target,
+                    code: None,
+                    stdout_path: rd.logs.stdout_path.to_owned(),
+                    stderr_path: rd.logs.stderr_path.to_owned(),
+                    error: Some("Function task cancelled".to_string()),
+                    runtime_secs: 0.0,
+                });
+            }
             o.results.push(FunctionRunResult {
-                function: functions[run_data_group.function_index].to_owned(),
+                function,
                 successes: vec![],
                 failures: vec![],
-                unknowns: run_data_group
-                    .datas
-                    .iter()
-                    .map(|rd| TargetRunResult {
-                        target: rd.target_path.to_owned(),
-                        code: None,
-                        stdout_path: rd.logs.stdout_path.to_owned(),
-                        stderr_path: rd.logs.stderr_path.to_owned(),
-                        error: Some("Function task cancelled".to_string()),
-                        runtime_secs: 0.0,
-                    })
-                    .collect::<Vec<TargetRunResult>>(),
+                unknowns,
             });
             continue;
         }
@@ -432,19 +563,39 @@ async fn run<'a>(
             unknowns: vec![],
         };
         let function_arc = sync::Arc::new(function);
-        let datas_len = run_data_group.datas.len();
-        let run_data_group_arc = sync::Arc::new(run_data_group);
         let mut js = tokio::task::JoinSet::new();
         let mut abort_table = HashMap::new();
-        for id in 0..datas_len {
-            // TODO: check file type to pick command
-            let handle = js.spawn(run_bash_command(
+        for id in 0..run_data_group.datas.len() {
+            let rd = &mut run_data_group.datas[id];
+            let stdout_encoder =
+                rd.logs
+                    .stdout_encoder
+                    .take()
+                    .ok_or(MonorailError::Generic(format!(
+                        "Failed to acquire encoder for {}",
+                        &rd.logs.stdout_path.display().to_string()
+                    )))?;
+            let stderr_encoder =
+                rd.logs
+                    .stderr_encoder
+                    .take()
+                    .ok_or(MonorailError::Generic(format!(
+                        "Failed to acquire encoder for {}",
+                        &rd.logs.stderr_path.display().to_string()
+                    )))?;
+            let mut ft = FunctionTask {
                 id,
-                function_arc.clone(),
-                work_dir_arc.clone(),
-                run_data_group_arc.clone(),
-                time::Instant::now(),
-            ));
+                function: function_arc.clone(),
+                work_dir: work_dir_arc.clone(),
+                script_path: rd.script_path.clone(),
+                stdout_encoder,
+                stderr_encoder,
+                start_time: time::Instant::now(),
+            };
+            let handle = js.spawn(async move {
+                // TODO: check file type to pick command
+                ft.run_bash_task().await
+            });
             // map this task for reference, in case it's aborted
             abort_table.insert(handle.id(), id);
         }
@@ -453,7 +604,7 @@ async fn run<'a>(
                 Ok(task_res) => {
                     match task_res {
                         Ok((id, status, duration)) => {
-                            let rd = &run_data_group_arc.datas[id];
+                            let rd = &run_data_group.datas[id];
                             let mut trr = TargetRunResult {
                                 target: rd.target_path.to_owned(),
                                 code: status.code(),
@@ -463,11 +614,21 @@ async fn run<'a>(
                                 runtime_secs: duration.as_secs_f32(),
                             };
                             if status.success() {
+                                workflow.log(Output::workflow(FunctionRunWorkflow {
+                                    status: "success",
+                                    function: &function_arc,
+                                    target: &rd.target_path,
+                                }))?;
                                 frr.successes.push(trr);
                             } else {
                                 // TODO: --abort-on-failure option
                                 js.abort_all();
                                 abort = true;
+                                workflow.log(Output::workflow(FunctionRunWorkflow {
+                                    status: "failure",
+                                    function: &function_arc,
+                                    target: &rd.target_path,
+                                }))?;
 
                                 trr.error = Some("Function returned an error".to_string());
                                 frr.failures.push(trr);
@@ -478,7 +639,12 @@ async fn run<'a>(
                             js.abort_all();
                             abort = true;
 
-                            let rd = &run_data_group_arc.datas[id];
+                            let rd = &run_data_group.datas[id];
+                            workflow.log(Output::workflow(FunctionRunWorkflow {
+                                status: "failure",
+                                function: &function_arc,
+                                target: &rd.target_path,
+                            }))?;
                             frr.failures.push(TargetRunResult {
                                 target: rd.target_path.to_owned(),
                                 code: None,
@@ -495,7 +661,12 @@ async fn run<'a>(
                         let run_data_index = abort_table
                             .get(&e.id())
                             .ok_or(MonorailError::from("Task id missing from abort table"))?;
-                        let rd = &run_data_group_arc.datas[*run_data_index];
+                        let rd = &mut run_data_group.datas[*run_data_index];
+                        workflow.log(Output::workflow(FunctionRunWorkflow {
+                            status: "aborted",
+                            function: &function_arc,
+                            target: &rd.target_path,
+                        }))?;
                         frr.unknowns.push(TargetRunResult {
                             target: rd.target_path.to_owned(),
                             code: None,
@@ -534,18 +705,19 @@ fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), 
     encoder.try_finish().map_err(MonorailError::from)
 }
 
-async fn run_bash_command(
+async fn run_bash_task(
     id: usize,
     function: sync::Arc<String>,
     work_dir: sync::Arc<path::PathBuf>,
-    run_data_group: sync::Arc<RunDataGroup>,
+    script_path: String,
+    stdout_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+    stderr_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
     start_time: time::Instant,
 ) -> Result<(usize, std::process::ExitStatus, time::Duration), (usize, time::Duration, MonorailError)>
 {
-    let rd = &run_data_group.datas[id];
     let mut child = tokio::process::Command::new("bash")
         .arg("-c")
-        .arg(format!("source $(pwd)/{} && {}", rd.script_path, function))
+        .arg(format!("source $(pwd)/{} && {}", script_path, function))
         .current_dir(work_dir.as_path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -554,18 +726,17 @@ async fn run_bash_command(
         .spawn()
         .map_err(|e| (id, start_time.elapsed(), MonorailError::from(e)))?;
 
-    let stdout_file_arc = rd.logs.stdout_file.clone();
     let stdout_fut = {
         if let Some(stdout) = child.stdout.take() {
-            tokio::spawn(async move { process_reader(stdout, stdout_file_arc).await })
+            tokio::spawn(async move { process_reader(stdout, stdout_encoder).await })
         } else {
             tokio::spawn(async { Ok(()) })
         }
     };
-    let stderr_file_arc = rd.logs.stderr_file.clone();
+
     let stderr_fut = {
         if let Some(stderr) = child.stderr.take() {
-            tokio::spawn(async move { process_reader(stderr, stderr_file_arc).await })
+            tokio::spawn(async move { process_reader(stderr, stderr_encoder).await })
         } else {
             tokio::spawn(async { Ok(()) })
         }
@@ -583,15 +754,13 @@ async fn run_bash_command(
     Ok((id, status, start_time.elapsed()))
 }
 
-async fn process_reader<R>(
+async fn process_reader2<R>(
     mut reader: R,
-    file: sync::Arc<std::fs::File>,
+    encoder: &mut flate2::write::GzEncoder<BufWriter<std::fs::File>>,
 ) -> Result<(), MonorailError>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let bw = BufWriter::new(file);
-    let mut encoder = flate2::write::GzEncoder::new(bw, flate2::Compression::default());
     let mut buffer = [0u8; 1024];
     while let Ok(bytes_read) = reader.read(&mut buffer).await {
         if bytes_read == 0 {
@@ -602,19 +771,59 @@ where
             .map_err(MonorailError::from)?;
         encoder.flush()?;
     }
-    encoder.finish().map_err(MonorailError::from)?;
+
+    Ok(())
+}
+
+async fn process_reader<R>(
+    mut reader: R,
+    mut encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+) -> Result<(), MonorailError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut buffer = [0u8; 1024];
+    while let Ok(bytes_read) = reader.read(&mut buffer).await {
+        if bytes_read == 0 {
+            break;
+        }
+        encoder
+            .write_all(&buffer[..bytes_read])
+            .map_err(MonorailError::from)?;
+        encoder.flush()?;
+    }
+
+    Ok(())
+}
+
+fn finalize_log(
+    encoder: &mut flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+) -> Result<(), MonorailError> {
+    encoder
+        .write_all("[monorail] Log ends\n".as_bytes())
+        .map_err(MonorailError::from)?;
+    encoder.try_finish()?;
     Ok(())
 }
 
 pub struct Logs {
     stdout_path: path::PathBuf,
     stderr_path: path::PathBuf,
-    stdout_file: sync::Arc<std::fs::File>,
-    stderr_file: sync::Arc<std::fs::File>,
+    stdout_encoder: Option<flate2::write::GzEncoder<BufWriter<std::fs::File>>>,
+    stderr_encoder: Option<flate2::write::GzEncoder<BufWriter<std::fs::File>>>,
 }
 impl Logs {
-    fn open(log_dir: &path::Path, function: &str, target: &str) -> Result<Self, MonorailError> {
-        let dir_path = log_dir.join(function).join(target);
+    fn open(
+        log_dir: &path::Path,
+        function: &str,
+        target_path: &str,
+        hasher: &mut sha2::Sha256,
+    ) -> Result<Self, MonorailError> {
+        let log_preamble = format!("[monorail] Log begins - {}: {}\n", target_path, function);
+        hasher.update(target_path);
+        let dir_path = log_dir
+            .join(function)
+            .join(&format!("{:x}", hasher.finalize_reset()));
         let stdout_path = dir_path.clone().join(STDOUT_FILE);
         let stderr_path = dir_path.clone().join(STDERR_FILE);
         std::fs::create_dir_all(&dir_path)?;
@@ -624,18 +833,31 @@ impl Logs {
             .truncate(true)
             .open(&stdout_path)
             .map_err(|e| MonorailError::Generic(e.to_string()))?;
-
+        let stdout_bw = BufWriter::new(stdout_file);
+        let mut stdout_encoder =
+            flate2::write::GzEncoder::new(stdout_bw, flate2::Compression::default());
+        stdout_encoder
+            .write_all(log_preamble.as_bytes())
+            .map_err(MonorailError::from)?;
+        stdout_encoder.flush()?;
         let stderr_file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(&stderr_path)
             .map_err(|e| MonorailError::Generic(e.to_string()))?;
+        let stderr_bw = BufWriter::new(stderr_file);
+        let mut stderr_encoder =
+            flate2::write::GzEncoder::new(stderr_bw, flate2::Compression::default());
+        stderr_encoder
+            .write_all(log_preamble.as_bytes())
+            .map_err(MonorailError::from)?;
+        stderr_encoder.flush()?;
         Ok(Self {
             stdout_path,
             stderr_path,
-            stdout_file: sync::Arc::new(stdout_file),
-            stderr_file: sync::Arc::new(stderr_file),
+            stdout_encoder: Some(stdout_encoder),
+            stderr_encoder: Some(stderr_encoder),
         })
     }
 }
@@ -649,7 +871,7 @@ pub async fn handle_result_show<'a>(
     work_dir: &'a path::Path,
 ) -> Result<RunOutput, MonorailError> {
     // open tracking and get log_info
-    let tracking_table = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
+    let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
     // use log_info to get results.json file in id dir
     let log_info = tracking_table.open_log_info().await?;
     let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
@@ -727,8 +949,7 @@ pub async fn handle_analyze_show<'a>(
             let changes = match cfg.vcs.r#use {
                 VcsKind::Git => match cfg.vcs.r#use {
                     VcsKind::Git => {
-                        let tracking =
-                            tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
+                        let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
                         let checkpoint = match tracking.open_checkpoint().await {
                             Ok(checkpoint) => Some(checkpoint),
                             Err(MonorailError::TrackingCheckpointNotFound(_)) => None,
@@ -951,7 +1172,7 @@ pub async fn handle_checkpoint_delete(
     cfg: &Config,
     work_dir: &path::Path,
 ) -> Result<CheckpointDeleteOutput, MonorailError> {
-    let tracking = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
+    let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
     let mut checkpoint = tracking.open_checkpoint().await?;
     checkpoint.commit = "".to_string();
     checkpoint.pending = None;
@@ -970,7 +1191,7 @@ pub async fn handle_checkpoint_show(
     cfg: &Config,
     work_dir: &path::Path,
 ) -> Result<CheckpointShowOutput, MonorailError> {
-    let tracking = tracking::Table::open(&cfg.get_tracking_path(work_dir)).await?;
+    let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
     Ok(CheckpointShowOutput {
         checkpoint: tracking.open_checkpoint().await?,
     })
@@ -1011,7 +1232,7 @@ async fn checkpoint_update_git<'a>(
     work_dir: &path::Path,
     tracking_path: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
-    let tracking = tracking::Table::open(tracking_path).await?;
+    let tracking = tracking::Table::new(tracking_path)?;
     let mut checkpoint = match tracking.open_checkpoint().await {
         Ok(cp) => cp,
         Err(MonorailError::TrackingCheckpointNotFound(_)) => tracking.new_checkpoint(),

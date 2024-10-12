@@ -4,9 +4,11 @@ use crate::core;
 use clap::builder::ArgPredicate;
 use clap::{Arg, ArgAction, Command};
 use serde::Serialize;
+use std::cell::RefCell;
 use std::env;
 use std::io::Write;
 use std::path;
+use std::rc::Rc;
 use std::result::Result;
 
 pub const CMD_MONORAIL: &str = "monorail";
@@ -33,6 +35,7 @@ pub const ARG_CHANGES: &str = "changes";
 pub const ARG_CHANGE_TARGETS: &str = "change-targets";
 pub const ARG_TARGET_GROUPS: &str = "target-groups";
 pub const ARG_ALL: &str = "all";
+pub const ARG_VERBOSE: &str = "verbose";
 
 pub const VAL_JSON: &str = "json";
 
@@ -82,6 +85,13 @@ pub fn get_app() -> clap::Command {
             .value_parser([VAL_JSON])
             .default_value(VAL_JSON)
             .num_args(1),
+    )
+    .arg(
+        Arg::new(ARG_VERBOSE)
+            .short('v')
+            .long(ARG_VERBOSE)
+            .help("Emit of workflow information in addition to results and errors")
+            .action(ArgAction::SetTrue),
     )
     .subcommand(Command::new(CMD_CONFIG).subcommand(Command::new(CMD_SHOW).about("Show configuration, including runtime default values")))
     .subcommand(Command::new(CMD_CHECKPOINT)

@@ -95,25 +95,14 @@ impl Checkpoint {
 pub(crate) struct Table {
     log_info_path: path::PathBuf,
     checkpoint_path: path::PathBuf,
-    lock_path: path::PathBuf,
-    // privately held for the lifetime of the Table
-    _lock_file: tokio::fs::File,
 }
 impl<'a> Table {
-    // Open a lockfile and return the table ready for use.
-    pub(crate) async fn open(dir_path: &'a path::Path) -> Result<Self, MonorailError> {
+    // Prepare the tracking directory and return the table ready for use.
+    pub(crate) fn new(dir_path: &'a path::Path) -> Result<Self, MonorailError> {
         std::fs::create_dir_all(dir_path)?;
-        let lock_path = dir_path.join("LOCKFILE");
-        let lock_file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-            .await?;
         Ok(Self {
             log_info_path: dir_path.join("log_info.json"),
             checkpoint_path: dir_path.join("checkpoint.json"),
-            lock_path,
-            _lock_file: lock_file,
         })
     }
     pub(crate) fn new_checkpoint(&'a self) -> Checkpoint {
@@ -127,11 +116,5 @@ impl<'a> Table {
     }
     pub(crate) async fn open_log_info(&'a self) -> Result<LogInfo, MonorailError> {
         LogInfo::open(&self.log_info_path).await
-    }
-}
-impl Drop for Table {
-    fn drop(&mut self) {
-        std::fs::remove_file(&self.lock_path)
-            .unwrap_or_else(|_| panic!("Error removing lockfile {}", self.lock_path.display()));
     }
 }

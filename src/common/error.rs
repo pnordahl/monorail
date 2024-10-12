@@ -120,6 +120,7 @@ impl Serialize for MonorailError {
     {
         // Serialize the error as an object with "type" and "message" fields
         let mut state = serializer.serialize_struct("MonorailError", 2)?;
+        state.serialize_field("kind", "error")?;
 
         match self {
             MonorailError::Generic(_) => {
