@@ -16,7 +16,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use trie_rs::{Trie, TrieBuilder};
@@ -192,6 +192,145 @@ async fn get_git_all_changes<'a>(
     filtered_changes.sort();
     Ok(Some(filtered_changes))
 }
+
+#[derive(Serialize)]
+pub(crate) struct LogShowInput<'a> {
+    pub(crate) should_tail: bool,
+    pub(crate) id: Option<&'a usize>,
+    pub(crate) functions: HashSet<&'a str>,
+    pub(crate) targets: HashSet<&'a str>,
+    pub(crate) include_stdout: bool,
+    pub(crate) include_stderr: bool,
+}
+// Probably nothing in here, but maybe some analytics about the logs?
+#[derive(Serialize)]
+pub(crate) struct LogShowOutput {}
+
+pub async fn handle_log_show<'a>(
+    cfg: &'a Config,
+    input: &'a LogShowInput<'a>,
+    work_dir: &'a path::Path,
+) -> Result<(), MonorailError> {
+    let log_id = match input.id {
+        Some(id) => *id,
+        None => {
+            let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
+            let mut log_info = tracking_table.open_log_info().await?;
+            log_info.id
+        }
+    };
+
+    let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_id));
+    if !log_dir.try_exists()? {
+        return Err(MonorailError::Generic(format!(
+            "Log path {} does not exist",
+            &log_dir.display().to_string()
+        )));
+    }
+
+    // map all targets to their shas for filtering and prefixing log lines
+    let targets = cfg.targets.as_ref().ok_or(MonorailError::from(
+        "No configured targets, cannot tail logs",
+    ))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut hash2target = HashMap::new();
+    for target in targets {
+        hasher.update(&target.path);
+        hash2target.insert(format!("{:x}", hasher.finalize_reset()), &target.path);
+    }
+
+    let stdout = tokio::io::stdout();
+    let stdout_mutex = tokio::sync::Mutex::new(stdout);
+    let stdout_arc = sync::Arc::new(stdout_mutex);
+
+    // open directory at log_dir
+    let mut js = tokio::task::JoinSet::new();
+    let filter_functions = !input.functions.is_empty();
+    let filter_targets = !input.targets.is_empty();
+    for fn_entry in log_dir.read_dir()? {
+        let fn_path = fn_entry?.path();
+        if fn_path.is_dir() {
+            let function = fn_path.file_name().unwrap().to_str().unwrap();
+            if !filter_functions || input.functions.contains(&function) {
+                for t_entry in fn_path.read_dir()? {
+                    let t_path = t_entry?.path();
+                    if t_path.is_dir() {
+                        let target_hash = t_path.file_name().unwrap().to_str().unwrap();
+                        if !filter_targets || input.targets.contains(&target_hash) {
+                            for gz in t_path.read_dir()? {
+                                let target =
+                                    hash2target.get(target_hash).ok_or(MonorailError::Generic(
+                                        format!("Target not found for {}", &target_hash),
+                                    ))?;
+                                let gz_path = gz?.path();
+                                let stdout_arc2 = stdout_arc.clone();
+                                let function2 = function.to_owned();
+                                let target2 = target.to_string();
+                                // todo; color requires --ansi-256
+                                let color = format!("\x1b[38;5;{}m", target_hash.as_bytes()[0]);
+                                // todo; stderr/stdout filter
+                                js.spawn(async move {
+                                    stream_gzip_file_to_stdout(
+                                        target2,
+                                        function2,
+                                        color,
+                                        gz_path.to_path_buf(),
+                                        stdout_arc2,
+                                    )
+                                    .await
+                                    .unwrap();
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    while let Some(join_res) = js.join_next().await {
+        match join_res {
+            Ok(task_res) => {
+                // dbg!(task_res);
+            }
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn stream_gzip_file_to_stdout(
+    target: String,
+    function: String,
+    color: String,
+    path: path::PathBuf,
+    stdout_mutex: sync::Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
+) -> tokio::io::Result<()> {
+    let filename = path.file_name().unwrap().to_str().unwrap(); // todo; MonorailError
+    let file = tokio::fs::File::open(&path).await?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut decoder = async_compression::tokio::bufread::GzipDecoder::new(reader);
+    let mut line_reader = tokio::io::BufReader::new(decoder);
+    let mut line: Vec<u8> = Vec::new();
+    let reset = "\x1b[0m";
+    let prefix = format!(
+        "{}[monorail | {} | {} | {}]{} ",
+        color, filename, target, function, reset
+    );
+    let prefix_bytes = prefix.as_bytes();
+    while line_reader.read_until(b'\n', &mut line).await? > 0 {
+        let mut stdout = stdout_mutex.lock().await;
+        stdout.write_all(prefix_bytes).await?;
+        stdout.write_all(&line).await?;
+        line.clear();
+    }
+
+    Ok(())
+}
+
+// want an async task that can open a path as a tokio file to read, and pipe the file as it gets data to a writer
 
 const OUTPUT_KIND_WORKFLOW: &str = "workflow";
 const OUTPUT_KIND_RESULT: &str = "result";

@@ -10,6 +10,7 @@ use std::io::Write;
 use std::path;
 use std::rc::Rc;
 use std::result::Result;
+use std::str::FromStr;
 
 pub const CMD_MONORAIL: &str = "monorail";
 pub const CMD_CONFIG: &str = "config";
@@ -21,6 +22,7 @@ pub const CMD_TARGET: &str = "target";
 pub const CMD_RUN: &str = "run";
 pub const CMD_ANALYSIS: &str = "analysis";
 pub const CMD_RESULT: &str = "result";
+pub const CMD_LOG: &str = "log";
 
 pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_START: &str = "start";
@@ -36,6 +38,10 @@ pub const ARG_CHANGE_TARGETS: &str = "change-targets";
 pub const ARG_TARGET_GROUPS: &str = "target-groups";
 pub const ARG_ALL: &str = "all";
 pub const ARG_VERBOSE: &str = "verbose";
+pub const ARG_TAIL: &str = "tail";
+pub const ARG_STDERR: &str = "stderr";
+pub const ARG_STDOUT: &str = "stdout";
+pub const ARG_ID: &str = "id";
 
 pub const VAL_JSON: &str = "json";
 
@@ -144,6 +150,8 @@ pub fn get_app() -> clap::Command {
                 .short('f')
                 .long(ARG_FUNCTION)
                 .required(true)
+                .num_args(1..)
+                .value_delimiter(' ')
                 .action(ArgAction::Append)
                 .help("A list functions that will be executed, in the order specified.")
         )
@@ -151,14 +159,69 @@ pub fn get_app() -> clap::Command {
             Arg::new(ARG_TARGET)
                 .short('t')
                 .long(ARG_TARGET)
+                .num_args(1..)
+                .value_delimiter(' ')
                 .required(false)
                 .action(ArgAction::Append)
                 .help("A list of targets for which functions will be executed.")
         )
     )
     .subcommand(Command::new(CMD_RESULT).subcommand(Command::new(CMD_SHOW).about("Show results from `run` invocations")))
+    /*
 
-    // TODO: monorail change analyze?
+    log --tail --result (-r) <id> --function (-f) [f1 f2 ... fN] --target (-t) [t1 t2 ... tN] --stdout --stderr
+
+    */
+    // TODO: monorail log delete [--all] --result [r1 r2 r3 ... rN]
+    .subcommand(
+        Command::new(CMD_LOG).subcommand(Command::new(CMD_SHOW).about("Display run logs")
+            .after_help(r#"This command shows logs for current or historical run invocations."#)
+            .arg(
+                Arg::new(ARG_TAIL)
+                    .long(ARG_TAIL)
+                    .help("Follow log files as they are written, ending when all files have been read")
+                    .action(ArgAction::SetTrue)
+            )
+            .arg(
+                Arg::new(ARG_ID)
+                    .long(ARG_ID)
+                    .short('i')
+                    .required(false)
+                    .value_parser(clap::value_parser!(usize))
+                    .num_args(1)
+                    .help("Result id to query; if not provided, the most recent will be used")
+            )
+            .arg(
+                Arg::new(ARG_FUNCTION)
+                    .short('f')
+                    .long(ARG_FUNCTION)
+                    .required(false)
+                    .num_args(1..)
+                    .value_delimiter(' ')
+                    .action(ArgAction::Append)
+                    .help("A list functions for which to include logs")
+            )
+            .arg(
+                Arg::new(ARG_TARGET)
+                    .short('t')
+                    .long(ARG_TARGET)
+                    .num_args(1..)
+                    .value_delimiter(' ')
+                    .required(false)
+                    .action(ArgAction::Append)
+                    .help("A list of targets for which to include logs")
+            )
+            .arg(
+                Arg::new(ARG_STDERR)
+                    .long(ARG_STDERR)
+                    .help("Include stderr logs")
+                    .action(ArgAction::SetTrue))
+            .arg(
+                Arg::new(ARG_STDOUT)
+                    .long(ARG_STDOUT)
+                    .help("Include stdout logs")
+                    .action(ArgAction::SetTrue)),
+    ))
     .subcommand(
         Command::new(CMD_ANALYSIS).subcommand(Command::new(CMD_SHOW).about("Display an analysis of repository changes and targets")
             .after_help(r#"This command shows an analysis of staged, unpushed, and pushed changes between two checkpoints in version control history, as well as unstaged changes present only in your local filesystem. By default, only outputs a list of affected targets."#)
@@ -198,6 +261,8 @@ pub fn get_app() -> clap::Command {
                 .short('t')
                 .long(ARG_TARGET)
                 .required(false)
+                .num_args(1..)
+                .value_delimiter(' ')
                 .action(ArgAction::Append)
                 .help("Scope analysis to only the provided targets."))))
 }
@@ -294,6 +359,18 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                     }
                     Err(e) => {
                         return Err(e);
+                    }
+                }
+            }
+            if let Some(log) = matches.subcommand_matches(CMD_LOG) {
+                if let Some(show) = log.subcommand_matches(CMD_SHOW) {
+                    let i = core::LogShowInput::try_from(show)?;
+                    match core::handle_log_show(&cfg, &i, &work_dir).await {
+                        Err(e) => {
+                            write_result(&Err::<(), MonorailError>(e), output_format)?;
+                            return Ok(HANDLE_ERR);
+                        }
+                        Ok(_) => return Ok(HANDLE_OK),
                     }
                 }
             }
@@ -402,5 +479,29 @@ impl<'a> From<&'a clap::ArgMatches> for core::AnalysisShowInput<'a> {
                 .flatten()
                 .collect(),
         }
+    }
+}
+
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogShowInput<'a> {
+    type Error = MonorailError;
+    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
+        Ok(Self {
+            should_tail: cmd.get_flag(ARG_TAIL),
+            id: cmd.get_one::<usize>(ARG_ID),
+            include_stdout: cmd.get_flag(ARG_STDOUT),
+            include_stderr: cmd.get_flag(ARG_STDERR),
+            functions: cmd
+                .get_many::<String>(ARG_FUNCTION)
+                .into_iter()
+                .flatten()
+                .map(|x| x.as_str())
+                .collect(),
+            targets: cmd
+                .get_many::<String>(ARG_TARGET)
+                .into_iter()
+                .flatten()
+                .map(|x| x.as_str())
+                .collect(),
+        })
     }
 }
