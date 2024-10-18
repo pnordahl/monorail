@@ -4,13 +4,10 @@ use crate::core;
 use clap::builder::ArgPredicate;
 use clap::{Arg, ArgAction, Command};
 use serde::Serialize;
-use std::cell::RefCell;
 use std::env;
 use std::io::Write;
 use std::path;
-use std::rc::Rc;
 use std::result::Result;
-use std::str::FromStr;
 
 pub const CMD_MONORAIL: &str = "monorail";
 pub const CMD_CONFIG: &str = "config";

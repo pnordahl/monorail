@@ -58,8 +58,8 @@ pub struct FunctionRunResult {
 pub struct TargetRunResult {
     target: String,
     code: Option<i32>,
-    stdout_path: path::PathBuf,
-    stderr_path: path::PathBuf,
+    stdout_path: Option<path::PathBuf>,
+    stderr_path: Option<path::PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     runtime_secs: f32,
@@ -194,17 +194,14 @@ async fn get_git_all_changes<'a>(
 }
 
 #[derive(Serialize)]
-pub(crate) struct LogShowInput<'a> {
-    pub(crate) should_tail: bool,
-    pub(crate) id: Option<&'a usize>,
-    pub(crate) functions: HashSet<&'a str>,
-    pub(crate) targets: HashSet<&'a str>,
-    pub(crate) include_stdout: bool,
-    pub(crate) include_stderr: bool,
+pub struct LogShowInput<'a> {
+    pub should_tail: bool,
+    pub id: Option<&'a usize>,
+    pub functions: HashSet<&'a str>,
+    pub targets: HashSet<&'a str>,
+    pub include_stdout: bool,
+    pub include_stderr: bool,
 }
-// Probably nothing in here, but maybe some analytics about the logs?
-#[derive(Serialize)]
-pub(crate) struct LogShowOutput {}
 
 pub async fn handle_log_show<'a>(
     cfg: &'a Config,
@@ -215,7 +212,7 @@ pub async fn handle_log_show<'a>(
         Some(id) => *id,
         None => {
             let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
-            let mut log_info = tracking_table.open_log_info().await?;
+            let log_info = tracking_table.open_log_info().await?;
             log_info.id
         }
     };
@@ -311,7 +308,7 @@ async fn stream_gzip_file_to_stdout(
     let filename = path.file_name().unwrap().to_str().unwrap(); // todo; MonorailError
     let file = tokio::fs::File::open(&path).await?;
     let reader = tokio::io::BufReader::new(file);
-    let mut decoder = async_compression::tokio::bufread::GzipDecoder::new(reader);
+    let decoder = async_compression::tokio::bufread::GzipDecoder::new(reader);
     let mut line_reader = tokio::io::BufReader::new(decoder);
     let mut line: Vec<u8> = Vec::new();
     let reset = "\x1b[0m";
@@ -475,12 +472,12 @@ fn get_run_data_groups<'a>(
             let mut run_data = Vec::with_capacity(group.len());
             let mut unknowns = Vec::with_capacity(group.len());
             for target_path in group {
-                let logs = Logs::open(log_dir, f.as_str(), &target_path, &mut path_hasher)?;
+                let logs = Logs::new(log_dir, f.as_str(), target_path, &mut path_hasher)?;
                 unknowns.push(TargetRunResult {
                     target: target_path.to_owned(),
                     code: None,
-                    stdout_path: logs.stdout_path.to_owned(),
-                    stderr_path: logs.stderr_path.to_owned(),
+                    stdout_path: Some(logs.stdout_path.to_owned()),
+                    stderr_path: Some(logs.stderr_path.to_owned()),
                     error: None,
                     runtime_secs: 0.0,
                 });
@@ -551,8 +548,6 @@ pub fn spawn_bash_task(
 
 struct FunctionTask {
     id: usize,
-    // stdout_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
-    // stderr_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
     start_time: time::Instant,
 }
 impl FunctionTask {
@@ -560,29 +555,34 @@ impl FunctionTask {
         &mut self,
         mut child: tokio::process::Child,
         token: sync::Arc<tokio_util::sync::CancellationToken>,
-        stdout_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
-        stderr_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+        stdout_encoder: async_compression::tokio::write::GzipEncoder<
+            tokio::io::BufWriter<tokio::fs::File>,
+        >,
+        stderr_encoder: async_compression::tokio::write::GzipEncoder<
+            tokio::io::BufWriter<tokio::fs::File>,
+        >,
     ) -> Result<
         (usize, std::process::ExitStatus, time::Duration),
         (usize, time::Duration, MonorailError),
     > {
         let stdout_fut =
-            process_reader3(child.stdout.take().unwrap(), stdout_encoder, token.clone());
+            process_reader(child.stdout.take().unwrap(), stdout_encoder, token.clone());
         let stderr_fut =
-            process_reader3(child.stderr.take().unwrap(), stderr_encoder, token.clone());
+            process_reader(child.stderr.take().unwrap(), stderr_encoder, token.clone());
         let child_fut = async { child.wait().await.map_err(MonorailError::from) };
 
-        let (stdout_result, stderr_result, child_result) =
+        let (_stdout_result, _stderr_result, child_result) =
             tokio::try_join!(stdout_fut, stderr_fut, child_fut)
-                .map_err(|e| (self.id, self.start_time.elapsed(), MonorailError::from(e)))?;
-
+                .map_err(|e| (self.id, self.start_time.elapsed(), e))?;
         Ok((self.id, child_result, self.start_time.elapsed()))
     }
 }
 
-async fn process_reader3<R>(
+async fn process_reader<R>(
     mut reader: R,
-    mut encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+    mut encoder: async_compression::tokio::write::GzipEncoder<
+        tokio::io::BufWriter<tokio::fs::File>,
+    >,
     token: sync::Arc<tokio_util::sync::CancellationToken>,
 ) -> Result<(), MonorailError>
 where
@@ -592,8 +592,7 @@ where
     loop {
         tokio::select! {
             _ = token.cancelled() => {
-                dbg!("shutdown log encoder");
-                encoder.try_finish()?;
+                encoder.shutdown().await?;
                 return Err(MonorailError::TaskCancelled);
             }
             res = reader.read(&mut buffer) => {
@@ -602,8 +601,9 @@ where
                     Ok(n) => {
                         encoder
                         .write_all(&buffer[..n])
+                        .await
                         .map_err(MonorailError::from)?;
-                        encoder.flush()?;
+                        encoder.flush().await?;
                     }
                     Err(e) => return Err(MonorailError::from(e))
                 }
@@ -611,7 +611,7 @@ where
         }
     }
 
-    encoder.try_finish()?;
+    encoder.shutdown().await?;
 
     Ok(())
 }
@@ -674,33 +674,33 @@ async fn run<'a>(
     // Make initial run output available for use by other commands
     store_run_output(&initial_run_output, &log_dir)?;
 
-    // let work_dir_arc = sync::Arc::new(run_data_groups.work_dir);
-    let mut abort = false;
+    let mut cancelled = false;
 
     // Spawn concurrent tasks for each group of rundata
     for mut run_data_group in run_data_groups.groups {
-        if abort {
+        if cancelled {
             let mut unknowns = vec![];
             let function = functions[run_data_group.function_index].to_owned();
             for rd in run_data_group.datas.iter_mut() {
-                let mut stdout_encoder =
-                    rd.logs
-                        .stdout_encoder
-                        .take()
-                        .ok_or(MonorailError::Generic(format!(
-                            "Failed to acquire encoder for {}",
-                            &rd.logs.stdout_path.display().to_string()
-                        )))?;
-                let mut stderr_encoder =
-                    rd.logs
-                        .stderr_encoder
-                        .take()
-                        .ok_or(MonorailError::Generic(format!(
-                            "Failed to acquire encoder for {}",
-                            &rd.logs.stderr_path.display().to_string()
-                        )))?;
-                stdout_encoder.try_finish()?;
-                stderr_encoder.try_finish()?;
+                // let mut stdout_encoder =
+                //     rd.logs
+                //         .stdout_encoder
+                //         .take()
+                //         .ok_or(MonorailError::Generic(format!(
+                //             "Failed to acquire encoder for {}",
+                //             &rd.logs.stdout_path.display().to_string()
+                //         )))?;
+                // let mut stderr_encoder =
+                //     rd.logs
+                //         .stderr_encoder
+                //         .take()
+                //         .ok_or(MonorailError::Generic(format!(
+                //             "Failed to acquire encoder for {}",
+                //             &rd.logs.stderr_path.display().to_string()
+                //         )))?;
+                // let mut stdout_encoder = rd.logs.open_stdout_encoder().await?;
+                // stdout_encoder.try_finish()?;
+                // stderr_encoder.try_finish()?;
                 let target = rd.target_path.to_owned();
                 workflow.log(Output::workflow(FunctionRunWorkflow {
                     status: "aborted",
@@ -710,8 +710,8 @@ async fn run<'a>(
                 unknowns.push(TargetRunResult {
                     target,
                     code: None,
-                    stdout_path: rd.logs.stdout_path.to_owned(),
-                    stderr_path: rd.logs.stderr_path.to_owned(),
+                    stdout_path: None,
+                    stderr_path: None,
                     error: Some("Function task cancelled".to_string()),
                     runtime_secs: 0.0,
                 });
@@ -737,32 +737,17 @@ async fn run<'a>(
         let mut abort_table = HashMap::new();
         for id in 0..run_data_group.datas.len() {
             let rd = &mut run_data_group.datas[id];
-            let stdout_encoder =
-                rd.logs
-                    .stdout_encoder
-                    .take()
-                    .ok_or(MonorailError::Generic(format!(
-                        "Failed to acquire encoder for {}",
-                        &rd.logs.stdout_path.display().to_string()
-                    )))?;
-            let stderr_encoder =
-                rd.logs
-                    .stderr_encoder
-                    .take()
-                    .ok_or(MonorailError::Generic(format!(
-                        "Failed to acquire encoder for {}",
-                        &rd.logs.stderr_path.display().to_string()
-                    )))?;
+            let stdout_encoder = rd.logs.open_stdout_encoder().await?;
+            let stderr_encoder = rd.logs.open_stderr_encoder().await?;
             let mut ft = FunctionTask {
                 id,
                 start_time: time::Instant::now(),
             };
             // TODO: check file type to pick command
-            let mut child = spawn_bash_task(&function, &run_data_groups.work_dir, &rd.script_path)?;
+            let child = spawn_bash_task(&function, &run_data_groups.work_dir, &rd.script_path)?;
             let token2 = token.clone();
             let handle = js
                 .spawn(async move { ft.run(child, token2, stdout_encoder, stderr_encoder).await });
-            // map this task for reference, in case it's aborted
             abort_table.insert(handle.id(), id);
         }
         while let Some(join_res) = js.join_next().await {
@@ -774,8 +759,8 @@ async fn run<'a>(
                             let mut trr = TargetRunResult {
                                 target: rd.target_path.to_owned(),
                                 code: status.code(),
-                                stdout_path: rd.logs.stdout_path.to_owned(),
-                                stderr_path: rd.logs.stderr_path.to_owned(),
+                                stdout_path: Some(rd.logs.stdout_path.to_owned()),
+                                stderr_path: Some(rd.logs.stderr_path.to_owned()),
                                 error: None,
                                 runtime_secs: duration.as_secs_f32(),
                             };
@@ -787,10 +772,9 @@ async fn run<'a>(
                                 }))?;
                                 frr.successes.push(trr);
                             } else {
-                                // TODO: --abort-on-failure option
+                                // TODO: --cancel-on-error option
                                 token.cancel();
-                                // js.abort_all();
-                                abort = true;
+                                cancelled = true;
                                 workflow.log(Output::workflow(FunctionRunWorkflow {
                                     status: "error",
                                     function: &function,
@@ -802,10 +786,9 @@ async fn run<'a>(
                             }
                         }
                         Err((id, duration, e)) => {
-                            // TODO: --abort-on-failure option
+                            // TODO: --cancel-on-error option
                             token.cancel();
-                            // js.abort_all();
-                            abort = true;
+                            cancelled = true;
 
                             let (status, message) = match e {
                                 MonorailError::TaskCancelled => {
@@ -823,8 +806,8 @@ async fn run<'a>(
                             frr.failures.push(TargetRunResult {
                                 target: rd.target_path.to_owned(),
                                 code: None,
-                                stdout_path: rd.logs.stdout_path.to_owned(),
-                                stderr_path: rd.logs.stderr_path.to_owned(),
+                                stdout_path: Some(rd.logs.stdout_path.to_owned()),
+                                stderr_path: Some(rd.logs.stderr_path.to_owned()),
                                 error: Some(message),
                                 runtime_secs: duration.as_secs_f32(),
                             });
@@ -845,8 +828,8 @@ async fn run<'a>(
                         frr.unknowns.push(TargetRunResult {
                             target: rd.target_path.to_owned(),
                             code: None,
-                            stdout_path: rd.logs.stdout_path.to_owned(),
-                            stderr_path: rd.logs.stderr_path.to_owned(),
+                            stdout_path: None,
+                            stderr_path: None,
                             error: Some("Function task cancelled".to_string()),
                             runtime_secs: 0.0,
                         })
@@ -880,160 +863,58 @@ fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), 
     encoder.try_finish().map_err(MonorailError::from)
 }
 
-async fn run_bash_task(
-    id: usize,
-    function: sync::Arc<String>,
-    work_dir: sync::Arc<path::PathBuf>,
-    script_path: String,
-    stdout_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
-    stderr_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
-    start_time: time::Instant,
-) -> Result<(usize, std::process::ExitStatus, time::Duration), (usize, time::Duration, MonorailError)>
-{
-    let mut child = tokio::process::Command::new("bash")
-        .arg("-c")
-        .arg(format!("source $(pwd)/{} && {}", script_path, function))
-        .current_dir(work_dir.as_path())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        // parallel execution makes use of stdin impractical
-        .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| (id, start_time.elapsed(), MonorailError::from(e)))?;
-
-    let stdout_fut = {
-        if let Some(stdout) = child.stdout.take() {
-            tokio::spawn(async move { process_reader(stdout, stdout_encoder).await })
-        } else {
-            tokio::spawn(async { Ok(()) })
-        }
-    };
-
-    let stderr_fut = {
-        if let Some(stderr) = child.stderr.take() {
-            tokio::spawn(async move { process_reader(stderr, stderr_encoder).await })
-        } else {
-            tokio::spawn(async { Ok(()) })
-        }
-    };
-    let child_fut = tokio::spawn(async move { child.wait().await.map_err(MonorailError::from) });
-
-    let (stdout_result, stderr_result, child_result) =
-        tokio::try_join!(stdout_fut, stderr_fut, child_fut)
-            .map_err(|e| (id, start_time.elapsed(), MonorailError::from(e)))?;
-
-    stdout_result.map_err(|e| (id, start_time.elapsed(), e))?;
-    stderr_result.map_err(|e| (id, start_time.elapsed(), e))?;
-    let status = child_result.map_err(|e| (id, start_time.elapsed(), e))?;
-
-    Ok((id, status, start_time.elapsed()))
-}
-
-async fn process_reader2<R>(
-    mut reader: R,
-    encoder: &mut flate2::write::GzEncoder<BufWriter<std::fs::File>>,
-) -> Result<(), MonorailError>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut buffer = [0u8; 1024];
-    while let Ok(bytes_read) = reader.read(&mut buffer).await {
-        if bytes_read == 0 {
-            break;
-        }
-        encoder
-            .write_all(&buffer[..bytes_read])
-            .map_err(MonorailError::from)?;
-        encoder.flush()?;
-    }
-
-    Ok(())
-}
-
-async fn process_reader<R>(
-    mut reader: R,
-    mut encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
-) -> Result<(), MonorailError>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut buffer = [0u8; 1024];
-    while let Ok(bytes_read) = reader.read(&mut buffer).await {
-        if bytes_read == 0 {
-            break;
-        }
-        encoder
-            .write_all(&buffer[..bytes_read])
-            .map_err(MonorailError::from)?;
-        encoder.flush()?;
-    }
-
-    Ok(())
-}
-
-fn finalize_log(
-    encoder: &mut flate2::write::GzEncoder<BufWriter<std::fs::File>>,
-) -> Result<(), MonorailError> {
-    encoder
-        .write_all("[monorail] Log ends\n".as_bytes())
-        .map_err(MonorailError::from)?;
-    encoder.try_finish()?;
-    Ok(())
-}
-
 pub struct Logs {
     stdout_path: path::PathBuf,
     stderr_path: path::PathBuf,
-    stdout_encoder: Option<flate2::write::GzEncoder<BufWriter<std::fs::File>>>,
-    stderr_encoder: Option<flate2::write::GzEncoder<BufWriter<std::fs::File>>>,
 }
 impl Logs {
-    fn open(
+    fn new(
         log_dir: &path::Path,
         function: &str,
         target_path: &str,
         hasher: &mut sha2::Sha256,
     ) -> Result<Self, MonorailError> {
-        let log_preamble = format!("[monorail] Log begins - {}: {}\n", target_path, function);
         hasher.update(target_path);
         let dir_path = log_dir
             .join(function)
-            .join(&format!("{:x}", hasher.finalize_reset()));
-        let stdout_path = dir_path.clone().join(STDOUT_FILE);
-        let stderr_path = dir_path.clone().join(STDERR_FILE);
+            .join(format!("{:x}", hasher.finalize_reset()));
         std::fs::create_dir_all(&dir_path)?;
-        let stdout_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&stdout_path)
-            .map_err(|e| MonorailError::Generic(e.to_string()))?;
-        let stdout_bw = BufWriter::new(stdout_file);
-        let mut stdout_encoder =
-            flate2::write::GzEncoder::new(stdout_bw, flate2::Compression::default());
-        stdout_encoder
-            .write_all(log_preamble.as_bytes())
-            .map_err(MonorailError::from)?;
-        stdout_encoder.flush()?;
-        let stderr_file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&stderr_path)
-            .map_err(|e| MonorailError::Generic(e.to_string()))?;
-        let stderr_bw = BufWriter::new(stderr_file);
-        let mut stderr_encoder =
-            flate2::write::GzEncoder::new(stderr_bw, flate2::Compression::default());
-        stderr_encoder
-            .write_all(log_preamble.as_bytes())
-            .map_err(MonorailError::from)?;
-        stderr_encoder.flush()?;
         Ok(Self {
-            stdout_path,
-            stderr_path,
-            stdout_encoder: Some(stdout_encoder),
-            stderr_encoder: Some(stderr_encoder),
+            stdout_path: dir_path.clone().join(STDOUT_FILE),
+            stderr_path: dir_path.clone().join(STDERR_FILE),
         })
+    }
+    async fn open_stdout_encoder(
+        &self,
+    ) -> Result<
+        async_compression::tokio::write::GzipEncoder<tokio::io::BufWriter<tokio::fs::File>>,
+        MonorailError,
+    > {
+        Self::open_encoder(&self.stdout_path).await
+    }
+    async fn open_stderr_encoder(
+        &self,
+    ) -> Result<
+        async_compression::tokio::write::GzipEncoder<tokio::io::BufWriter<tokio::fs::File>>,
+        MonorailError,
+    > {
+        Self::open_encoder(&self.stderr_path).await
+    }
+    async fn open_encoder(
+        p: &path::Path,
+    ) -> Result<
+        async_compression::tokio::write::GzipEncoder<tokio::io::BufWriter<tokio::fs::File>>,
+        MonorailError,
+    > {
+        let f = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(p)
+            .await
+            .map_err(|e| MonorailError::Generic(e.to_string()))?;
+        let bw = tokio::io::BufWriter::new(f);
+        Ok(async_compression::tokio::write::GzipEncoder::new(bw))
     }
 }
 
