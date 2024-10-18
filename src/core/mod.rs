@@ -532,58 +532,88 @@ fn get_run_data_groups<'a>(
     ))
 }
 
+pub fn spawn_bash_task(
+    function: &str,
+    work_dir: &path::Path,
+    script_path: &str,
+) -> Result<tokio::process::Child, MonorailError> {
+    tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(format!("source $(pwd)/{} && {}", script_path, function))
+        .current_dir(work_dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        // parallel execution makes use of stdin impractical
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(MonorailError::from)
+}
+
 struct FunctionTask {
     id: usize,
-    function: sync::Arc<String>,
-    work_dir: sync::Arc<path::PathBuf>,
-    script_path: String,
-    stdout_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
-    stderr_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+    // stdout_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+    // stderr_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
     start_time: time::Instant,
 }
 impl FunctionTask {
-    async fn run_bash_task(
+    async fn run(
         &mut self,
+        mut child: tokio::process::Child,
+        token: sync::Arc<tokio_util::sync::CancellationToken>,
+        stdout_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+        stderr_encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
     ) -> Result<
         (usize, std::process::ExitStatus, time::Duration),
         (usize, time::Duration, MonorailError),
     > {
-        let mut child = tokio::process::Command::new("bash")
-            .arg("-c")
-            .arg(format!(
-                "source $(pwd)/{} && {}",
-                self.script_path, self.function
-            ))
-            .current_dir(self.work_dir.as_path())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            // parallel execution makes use of stdin impractical
-            .stdin(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| (self.id, self.start_time.elapsed(), MonorailError::from(e)))?;
-
-        let stdout_fut = process_reader2(child.stdout.take().unwrap(), &mut self.stdout_encoder);
-        let stderr_fut = process_reader2(child.stderr.take().unwrap(), &mut self.stderr_encoder);
+        let stdout_fut =
+            process_reader3(child.stdout.take().unwrap(), stdout_encoder, token.clone());
+        let stderr_fut =
+            process_reader3(child.stderr.take().unwrap(), stderr_encoder, token.clone());
+        let child_fut = async { child.wait().await.map_err(MonorailError::from) };
 
         let (stdout_result, stderr_result, child_result) =
-            tokio::try_join!(stdout_fut, stderr_fut, child_wrapper(child))
+            tokio::try_join!(stdout_fut, stderr_fut, child_fut)
                 .map_err(|e| (self.id, self.start_time.elapsed(), MonorailError::from(e)))?;
 
         Ok((self.id, child_result, self.start_time.elapsed()))
     }
 }
 
-async fn child_wrapper(
-    mut child: tokio::process::Child,
-) -> Result<std::process::ExitStatus, MonorailError> {
-    child.wait().await.map_err(MonorailError::from)
-}
-
-impl Drop for FunctionTask {
-    fn drop(&mut self) {
-        finalize_log(&mut self.stdout_encoder).unwrap();
-        finalize_log(&mut self.stderr_encoder).unwrap();
+async fn process_reader3<R>(
+    mut reader: R,
+    mut encoder: flate2::write::GzEncoder<BufWriter<std::fs::File>>,
+    token: sync::Arc<tokio_util::sync::CancellationToken>,
+) -> Result<(), MonorailError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut buffer = [0u8; 1024];
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                dbg!("shutdown log encoder");
+                encoder.try_finish()?;
+                return Err(MonorailError::TaskCancelled);
+            }
+            res = reader.read(&mut buffer) => {
+                match res {
+                    Ok(0) => { break; },
+                    Ok(n) => {
+                        encoder
+                        .write_all(&buffer[..n])
+                        .map_err(MonorailError::from)?;
+                        encoder.flush()?;
+                    }
+                    Err(e) => return Err(MonorailError::from(e))
+                }
+            }
+        }
     }
+
+    encoder.try_finish()?;
+
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -644,7 +674,7 @@ async fn run<'a>(
     // Make initial run output available for use by other commands
     store_run_output(&initial_run_output, &log_dir)?;
 
-    let work_dir_arc = sync::Arc::new(run_data_groups.work_dir);
+    // let work_dir_arc = sync::Arc::new(run_data_groups.work_dir);
     let mut abort = false;
 
     // Spawn concurrent tasks for each group of rundata
@@ -669,8 +699,8 @@ async fn run<'a>(
                             "Failed to acquire encoder for {}",
                             &rd.logs.stderr_path.display().to_string()
                         )))?;
-                finalize_log(&mut stdout_encoder)?;
-                finalize_log(&mut stderr_encoder)?;
+                stdout_encoder.try_finish()?;
+                stderr_encoder.try_finish()?;
                 let target = rd.target_path.to_owned();
                 workflow.log(Output::workflow(FunctionRunWorkflow {
                     status: "aborted",
@@ -701,8 +731,9 @@ async fn run<'a>(
             failures: vec![],
             unknowns: vec![],
         };
-        let function_arc = sync::Arc::new(function);
+        // let function_arc = sync::Arc::new(function);
         let mut js = tokio::task::JoinSet::new();
+        let token = sync::Arc::new(tokio_util::sync::CancellationToken::new());
         let mut abort_table = HashMap::new();
         for id in 0..run_data_group.datas.len() {
             let rd = &mut run_data_group.datas[id];
@@ -724,17 +755,13 @@ async fn run<'a>(
                     )))?;
             let mut ft = FunctionTask {
                 id,
-                function: function_arc.clone(),
-                work_dir: work_dir_arc.clone(),
-                script_path: rd.script_path.clone(),
-                stdout_encoder,
-                stderr_encoder,
                 start_time: time::Instant::now(),
             };
-            let handle = js.spawn(async move {
-                // TODO: check file type to pick command
-                ft.run_bash_task().await
-            });
+            // TODO: check file type to pick command
+            let mut child = spawn_bash_task(&function, &run_data_groups.work_dir, &rd.script_path)?;
+            let token2 = token.clone();
+            let handle = js
+                .spawn(async move { ft.run(child, token2, stdout_encoder, stderr_encoder).await });
             // map this task for reference, in case it's aborted
             abort_table.insert(handle.id(), id);
         }
@@ -755,17 +782,18 @@ async fn run<'a>(
                             if status.success() {
                                 workflow.log(Output::workflow(FunctionRunWorkflow {
                                     status: "success",
-                                    function: &function_arc,
+                                    function: &function,
                                     target: &rd.target_path,
                                 }))?;
                                 frr.successes.push(trr);
                             } else {
                                 // TODO: --abort-on-failure option
-                                js.abort_all();
+                                token.cancel();
+                                // js.abort_all();
                                 abort = true;
                                 workflow.log(Output::workflow(FunctionRunWorkflow {
-                                    status: "failure",
-                                    function: &function_arc,
+                                    status: "error",
+                                    function: &function,
                                     target: &rd.target_path,
                                 }))?;
 
@@ -775,13 +803,21 @@ async fn run<'a>(
                         }
                         Err((id, duration, e)) => {
                             // TODO: --abort-on-failure option
-                            js.abort_all();
+                            token.cancel();
+                            // js.abort_all();
                             abort = true;
+
+                            let (status, message) = match e {
+                                MonorailError::TaskCancelled => {
+                                    ("cancelled", "Function task cancelled".to_string())
+                                }
+                                _ => ("error", format!("Function task failed: {}", e)),
+                            };
 
                             let rd = &run_data_group.datas[id];
                             workflow.log(Output::workflow(FunctionRunWorkflow {
-                                status: "failure",
-                                function: &function_arc,
+                                status,
+                                function: &function,
                                 target: &rd.target_path,
                             }))?;
                             frr.failures.push(TargetRunResult {
@@ -789,7 +825,7 @@ async fn run<'a>(
                                 code: None,
                                 stdout_path: rd.logs.stdout_path.to_owned(),
                                 stderr_path: rd.logs.stderr_path.to_owned(),
-                                error: Some(format!("Function task failed: {}", e)),
+                                error: Some(message),
                                 runtime_secs: duration.as_secs_f32(),
                             });
                         }
@@ -803,7 +839,7 @@ async fn run<'a>(
                         let rd = &mut run_data_group.datas[*run_data_index];
                         workflow.log(Output::workflow(FunctionRunWorkflow {
                             status: "aborted",
-                            function: &function_arc,
+                            function: &function,
                             target: &rd.target_path,
                         }))?;
                         frr.unknowns.push(TargetRunResult {

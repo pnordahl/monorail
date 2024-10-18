@@ -43,6 +43,7 @@ pub enum MonorailError {
     TrackingCheckpointNotFound(io::Error),
     TrackingLogInfoNotFound(io::Error),
     MissingArg(String),
+    TaskCancelled,
 }
 impl From<String> for MonorailError {
     fn from(error: String) -> Self {
@@ -109,6 +110,9 @@ impl fmt::Display for MonorailError {
             MonorailError::TrackingLogInfoNotFound(error) => {
                 write!(f, "Tracking log info open error; {}", error)
             }
+            MonorailError::TaskCancelled => {
+                write!(f, "Task cancelled")
+            }
         }
     }
 }
@@ -173,6 +177,10 @@ impl Serialize for MonorailError {
             }
             MonorailError::MissingArg(_) => {
                 state.serialize_field("type", "missing_arg")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::TaskCancelled => {
+                state.serialize_field("type", "task_cancelled")?;
                 state.serialize_field("message", &self.to_string())?;
             }
         }
