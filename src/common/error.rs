@@ -45,16 +45,16 @@ pub enum MonorailError {
     MissingArg(String),
     TaskCancelled,
     ChannelSend(String),
-    ChannelRecv(std::sync::mpsc::RecvError),
+    ChannelRecv(flume::RecvError),
 }
 
-impl From<std::sync::mpsc::RecvError> for MonorailError {
-    fn from(error: std::sync::mpsc::RecvError) -> Self {
+impl From<flume::RecvError> for MonorailError {
+    fn from(error: flume::RecvError) -> Self {
         MonorailError::ChannelRecv(error)
     }
 }
-impl<T> From<std::sync::mpsc::SendError<T>> for MonorailError {
-    fn from(error: std::sync::mpsc::SendError<T>) -> Self {
+impl<T> From<flume::SendError<T>> for MonorailError {
+    fn from(error: flume::SendError<T>) -> Self {
         MonorailError::ChannelSend(error.to_string())
     }
 }

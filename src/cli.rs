@@ -362,7 +362,7 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
             if let Some(log) = matches.subcommand_matches(CMD_LOG) {
                 if let Some(show) = log.subcommand_matches(CMD_SHOW) {
                     let i = core::LogShowInput::try_from(show)?;
-                    match core::handle_log_show_sync(&cfg, &i, &work_dir) {
+                    match core::handle_log_show(&cfg, &i, &work_dir) {
                         Err(e) => {
                             write_result(&Err::<(), MonorailError>(e), output_format)?;
                             return Ok(HANDLE_ERR);

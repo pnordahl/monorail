@@ -202,7 +202,7 @@ pub struct LogShowInput<'a> {
     pub include_stderr: bool,
 }
 
-pub fn handle_log_show_sync<'a>(
+pub fn handle_log_show<'a>(
     cfg: &'a Config,
     input: &'a LogShowInput<'a>,
     work_dir: &'a path::Path,
@@ -283,7 +283,14 @@ fn stream_archive_file_to_stdout(
     path: &path::Path,
     stdout: &mut std::io::Stdout,
 ) -> Result<(), MonorailError> {
-    let filename = path.file_name().unwrap().to_str().unwrap(); // todo; ok_or MonorailError
+    let filename = path
+        .file_name()
+        .ok_or(MonorailError::Generic(format!(
+            "Bad path file name: {:?}",
+            path
+        )))?
+        .to_str()
+        .ok_or(MonorailError::from("Bad file name string"))?;
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     let decoder = zstd::stream::read::Decoder::new(reader)?;
@@ -303,8 +310,6 @@ fn stream_archive_file_to_stdout(
 
     Ok(())
 }
-
-// want an async task that can open a path as a tokio file to read, and pipe the file as it gets data to a writer
 
 const OUTPUT_KIND_WORKFLOW: &str = "workflow";
 const OUTPUT_KIND_RESULT: &str = "result";
@@ -561,7 +566,7 @@ where
         let mut buf = Vec::new();
         tokio::select! {
             _ = token.cancelled() => {
-                compressor_client.end()?;
+                compressor_client.end().await?;
                 return Err(MonorailError::TaskCancelled);
             }
             res = reader.read_to_end(&mut buf) => {
@@ -570,17 +575,17 @@ where
                         break;
                     },
                     Ok(_n) => {
-                        compressor_client.data(buf)?;
+                        compressor_client.data(buf).await?;
                     }
                     Err(e) => {
-                        compressor_client.end()?;
+                        compressor_client.end().await?;
                         return Err(MonorailError::from(e));
                     }
                 }
             }
         }
     }
-    compressor_client.end()
+    compressor_client.end().await
 }
 
 #[derive(Debug)]
@@ -594,8 +599,8 @@ struct Compressor {
     index: usize,
     num_threads: usize,
     req_channels: Vec<(
-        sync::mpsc::Sender<CompressRequest>,
-        Option<sync::mpsc::Receiver<CompressRequest>>,
+        flume::Sender<CompressRequest>,
+        Option<flume::Receiver<CompressRequest>>,
     )>,
     registrations: Vec<Vec<path::PathBuf>>,
     shutdown: sync::Arc<sync::atomic::AtomicBool>,
@@ -603,17 +608,19 @@ struct Compressor {
 #[derive(Clone)]
 struct CompressorClient {
     encoder_index: usize,
-    req_tx: sync::mpsc::Sender<CompressRequest>,
+    req_tx: flume::Sender<CompressRequest>,
 }
 impl CompressorClient {
-    fn data(&self, data: Vec<u8>) -> Result<(), MonorailError> {
+    async fn data(&self, data: Vec<u8>) -> Result<(), MonorailError> {
         self.req_tx
-            .send(CompressRequest::Data(self.encoder_index, data))
+            .send_async(CompressRequest::Data(self.encoder_index, data))
+            .await
             .map_err(MonorailError::from)
     }
-    fn end(&self) -> Result<(), MonorailError> {
+    async fn end(&self) -> Result<(), MonorailError> {
         self.req_tx
-            .send(CompressRequest::End(self.encoder_index))
+            .send_async(CompressRequest::End(self.encoder_index))
+            .await
             .map_err(MonorailError::from)
     }
     fn shutdown(&self) -> Result<(), MonorailError> {
@@ -628,7 +635,7 @@ impl Compressor {
         let mut req_channels = vec![];
         let mut registrations = vec![];
         for _ in 0..num_threads {
-            let (req_tx, req_rx) = sync::mpsc::channel();
+            let (req_tx, req_rx) = flume::bounded(1000);
             req_channels.push((req_tx, Some(req_rx)));
             registrations.push(vec![]);
         }
@@ -645,7 +652,7 @@ impl Compressor {
     // fn register(
     //     &mut self,
     //     p: &path::Path,
-    // ) -> Result<(usize, sync::mpsc::Sender<CompressRequest>), MonorailError> {
+    // ) -> Result<(usize, flume::Sender<CompressRequest>), MonorailError> {
     //     // todo; check path not already seen
     //     let thread_index = self.index % self.num_threads;
     //     let reg_index = self.registrations[thread_index].len();
