@@ -20,6 +20,5 @@ tokio-util = { version = "0.7" }
 tokio-stream = "0.1.16"
 sha2 = "0.10"
 hex = "0.4"
-flate2 = "1.0"
 chrono = "0.4"
-async-compression = { version = "0.4", features = ["tokio", "zstd", "gzip"] }
+zstd = "0.13.2"

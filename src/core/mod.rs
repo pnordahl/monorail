@@ -16,16 +16,15 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio_stream::StreamExt;
 use trie_rs::{Trie, TrieBuilder};
 
 use crate::common::error::{GraphError, MonorailError};
 
-const RUN_OUTPUT_FILE_NAME: &str = "run.json.gz";
-const STDOUT_FILE: &str = "stdout.gz";
-const STDERR_FILE: &str = "stderr.gz";
+const RUN_OUTPUT_FILE_NAME: &str = "run.json.zst";
+const STDOUT_FILE: &str = "stdout.zst";
+const STDERR_FILE: &str = "stderr.zst";
 
 #[derive(Debug)]
 pub struct GitOptions<'a> {
@@ -203,7 +202,7 @@ pub struct LogShowInput<'a> {
     pub include_stderr: bool,
 }
 
-pub async fn handle_log_show<'a>(
+pub fn handle_log_show_sync<'a>(
     cfg: &'a Config,
     input: &'a LogShowInput<'a>,
     work_dir: &'a path::Path,
@@ -212,7 +211,7 @@ pub async fn handle_log_show<'a>(
         Some(id) => *id,
         None => {
             let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
-            let log_info = tracking_table.open_log_info().await?;
+            let log_info = tracking_table.open_log_info_sync()?;
             log_info.id
         }
     };
@@ -236,12 +235,8 @@ pub async fn handle_log_show<'a>(
         hash2target.insert(format!("{:x}", hasher.finalize_reset()), &target.path);
     }
 
-    let stdout = tokio::io::stdout();
-    let stdout_mutex = tokio::sync::Mutex::new(stdout);
-    let stdout_arc = sync::Arc::new(stdout_mutex);
-
+    let mut stdout = std::io::stdout();
     // open directory at log_dir
-    let mut js = tokio::task::JoinSet::new();
     let filter_functions = !input.functions.is_empty();
     let filter_targets = !input.targets.is_empty();
     for fn_entry in log_dir.read_dir()? {
@@ -254,29 +249,22 @@ pub async fn handle_log_show<'a>(
                     if t_path.is_dir() {
                         let target_hash = t_path.file_name().unwrap().to_str().unwrap();
                         if !filter_targets || input.targets.contains(&target_hash) {
-                            for gz in t_path.read_dir()? {
+                            for e in t_path.read_dir()? {
                                 let target =
                                     hash2target.get(target_hash).ok_or(MonorailError::Generic(
                                         format!("Target not found for {}", &target_hash),
                                     ))?;
-                                let gz_path = gz?.path();
-                                let stdout_arc2 = stdout_arc.clone();
-                                let function2 = function.to_owned();
-                                let target2 = target.to_string();
+
                                 // todo; color requires --ansi-256
                                 let color = format!("\x1b[38;5;{}m", target_hash.as_bytes()[0]);
+                                stream_archive_file_to_stdout(
+                                    target,
+                                    function,
+                                    &color,
+                                    &e?.path(),
+                                    &mut stdout,
+                                )?;
                                 // todo; stderr/stdout filter
-                                js.spawn(async move {
-                                    stream_gzip_file_to_stdout(
-                                        target2,
-                                        function2,
-                                        color,
-                                        gz_path.to_path_buf(),
-                                        stdout_arc2,
-                                    )
-                                    .await
-                                    .unwrap();
-                                });
                             }
                         }
                     }
@@ -284,32 +272,22 @@ pub async fn handle_log_show<'a>(
             }
         }
     }
-    while let Some(join_res) = js.join_next().await {
-        match join_res {
-            Ok(task_res) => {
-                // dbg!(task_res);
-            }
-            Err(e) => {
-                dbg!(e);
-            }
-        }
-    }
 
     Ok(())
 }
 
-async fn stream_gzip_file_to_stdout(
-    target: String,
-    function: String,
-    color: String,
-    path: path::PathBuf,
-    stdout_mutex: sync::Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
-) -> tokio::io::Result<()> {
-    let filename = path.file_name().unwrap().to_str().unwrap(); // todo; MonorailError
-    let file = tokio::fs::File::open(&path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let decoder = async_compression::tokio::bufread::GzipDecoder::new(reader);
-    let mut line_reader = tokio::io::BufReader::new(decoder);
+fn stream_archive_file_to_stdout(
+    target: &str,
+    function: &str,
+    color: &str,
+    path: &path::Path,
+    stdout: &mut std::io::Stdout,
+) -> Result<(), MonorailError> {
+    let filename = path.file_name().unwrap().to_str().unwrap(); // todo; ok_or MonorailError
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let decoder = zstd::stream::read::Decoder::new(reader)?;
+    let mut line_reader = std::io::BufReader::new(decoder);
     let mut line: Vec<u8> = Vec::new();
     let reset = "\x1b[0m";
     let prefix = format!(
@@ -317,10 +295,9 @@ async fn stream_gzip_file_to_stdout(
         color, filename, target, function, reset
     );
     let prefix_bytes = prefix.as_bytes();
-    while line_reader.read_until(b'\n', &mut line).await? > 0 {
-        let mut stdout = stdout_mutex.lock().await;
-        stdout.write_all(prefix_bytes).await?;
-        stdout.write_all(&line).await?;
+    while line_reader.read_until(b'\n', &mut line)? > 0 {
+        stdout.write_all(prefix_bytes)?;
+        stdout.write_all(&line)?;
         line.clear();
     }
 
@@ -555,20 +532,14 @@ impl FunctionTask {
         &mut self,
         mut child: tokio::process::Child,
         token: sync::Arc<tokio_util::sync::CancellationToken>,
-        stdout_encoder: async_compression::tokio::write::GzipEncoder<
-            tokio::io::BufWriter<tokio::fs::File>,
-        >,
-        stderr_encoder: async_compression::tokio::write::GzipEncoder<
-            tokio::io::BufWriter<tokio::fs::File>,
-        >,
+        stdout_client: CompressorClient,
+        stderr_client: CompressorClient,
     ) -> Result<
         (usize, std::process::ExitStatus, time::Duration),
         (usize, time::Duration, MonorailError),
     > {
-        let stdout_fut =
-            process_reader(child.stdout.take().unwrap(), stdout_encoder, token.clone());
-        let stderr_fut =
-            process_reader(child.stderr.take().unwrap(), stderr_encoder, token.clone());
+        let stdout_fut = process_reader(child.stdout.take().unwrap(), stdout_client, token.clone());
+        let stderr_fut = process_reader(child.stderr.take().unwrap(), stderr_client, token.clone());
         let child_fut = async { child.wait().await.map_err(MonorailError::from) };
 
         let (_stdout_result, _stderr_result, child_result) =
@@ -580,40 +551,175 @@ impl FunctionTask {
 
 async fn process_reader<R>(
     mut reader: R,
-    mut encoder: async_compression::tokio::write::GzipEncoder<
-        tokio::io::BufWriter<tokio::fs::File>,
-    >,
+    compressor_client: CompressorClient,
     token: sync::Arc<tokio_util::sync::CancellationToken>,
 ) -> Result<(), MonorailError>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let mut buffer = [0u8; 1024];
     loop {
+        let mut buf = Vec::new();
         tokio::select! {
             _ = token.cancelled() => {
-                encoder.shutdown().await?;
+                compressor_client.end()?;
                 return Err(MonorailError::TaskCancelled);
             }
-            res = reader.read(&mut buffer) => {
+            res = reader.read_to_end(&mut buf) => {
                 match res {
-                    Ok(0) => { break; },
-                    Ok(n) => {
-                        encoder
-                        .write_all(&buffer[..n])
-                        .await
-                        .map_err(MonorailError::from)?;
-                        encoder.flush().await?;
+                    Ok(0) => {
+                        break;
+                    },
+                    Ok(_n) => {
+                        compressor_client.data(buf)?;
                     }
-                    Err(e) => return Err(MonorailError::from(e))
+                    Err(e) => {
+                        compressor_client.end()?;
+                        return Err(MonorailError::from(e));
+                    }
                 }
             }
         }
     }
+    compressor_client.end()
+}
 
-    encoder.shutdown().await?;
+#[derive(Debug)]
+enum CompressRequest {
+    Data(usize, Vec<u8>),
+    End(usize),
+    Shutdown,
+}
+#[derive(Debug)]
+struct Compressor {
+    index: usize,
+    num_threads: usize,
+    req_channels: Vec<(
+        sync::mpsc::Sender<CompressRequest>,
+        Option<sync::mpsc::Receiver<CompressRequest>>,
+    )>,
+    registrations: Vec<Vec<path::PathBuf>>,
+    shutdown: sync::Arc<sync::atomic::AtomicBool>,
+}
+#[derive(Clone)]
+struct CompressorClient {
+    encoder_index: usize,
+    req_tx: sync::mpsc::Sender<CompressRequest>,
+}
+impl CompressorClient {
+    fn data(&self, data: Vec<u8>) -> Result<(), MonorailError> {
+        self.req_tx
+            .send(CompressRequest::Data(self.encoder_index, data))
+            .map_err(MonorailError::from)
+    }
+    fn end(&self) -> Result<(), MonorailError> {
+        self.req_tx
+            .send(CompressRequest::End(self.encoder_index))
+            .map_err(MonorailError::from)
+    }
+    fn shutdown(&self) -> Result<(), MonorailError> {
+        self.req_tx
+            .send(CompressRequest::Shutdown)
+            .map_err(MonorailError::from)
+    }
+}
 
-    Ok(())
+impl Compressor {
+    fn new(num_threads: usize, shutdown: sync::Arc<sync::atomic::AtomicBool>) -> Self {
+        let mut req_channels = vec![];
+        let mut registrations = vec![];
+        for _ in 0..num_threads {
+            let (req_tx, req_rx) = sync::mpsc::channel();
+            req_channels.push((req_tx, Some(req_rx)));
+            registrations.push(vec![]);
+        }
+        Self {
+            index: 0,
+            num_threads,
+            req_channels,
+            registrations,
+            shutdown,
+        }
+    }
+    // Register the provided path and assign it an id, returning that
+    // id to the caller for use when Sending a CompressRequest
+    // fn register(
+    //     &mut self,
+    //     p: &path::Path,
+    // ) -> Result<(usize, sync::mpsc::Sender<CompressRequest>), MonorailError> {
+    //     // todo; check path not already seen
+    //     let thread_index = self.index % self.num_threads;
+    //     let reg_index = self.registrations[thread_index].len();
+    //     self.registrations[thread_index].push(p.to_path_buf());
+    //     let req_tx = self.req_channels[thread_index].0.clone();
+
+    //     self.index += 1;
+
+    //     Ok((reg_index, req_tx))
+    // }
+    // Register the provided path and return a CompressorClient
+    // that can be used to schedule operations on the underlying encoder.
+    fn register(&mut self, p: &path::Path) -> Result<CompressorClient, MonorailError> {
+        // todo; check path not already seen
+        let thread_index = self.index % self.num_threads;
+        let encoder_index = self.registrations[thread_index].len();
+        self.registrations[thread_index].push(p.to_path_buf());
+        self.index += 1;
+
+        Ok(CompressorClient {
+            encoder_index,
+            req_tx: self.req_channels[thread_index].0.clone(),
+        })
+    }
+    fn run(&mut self) -> Result<(), MonorailError> {
+        std::thread::scope(|s| {
+            for x in 0..self.num_threads {
+                let regs = &self.registrations[x];
+                let req_rx =
+                    self.req_channels[x]
+                        .1
+                        .take()
+                        .ok_or(MonorailError::Generic(format!(
+                            "Missing channel for index {}",
+                            x
+                        )))?;
+                let shutdown = &self.shutdown;
+                s.spawn(move || {
+                    let mut encoders = vec![];
+                    for r in regs.iter() {
+                        let f = std::fs::OpenOptions::new()
+                            .create(true)
+                            .write(true)
+                            .truncate(true)
+                            .open(r)
+                            .map_err(|e| MonorailError::Generic(e.to_string()))?;
+                        let bw = std::io::BufWriter::new(f);
+                        encoders.push(zstd::stream::write::Encoder::new(bw, 3)?);
+                    }
+                    loop {
+                        if shutdown.load(sync::atomic::Ordering::Relaxed) {
+                            break;
+                        };
+                        match req_rx.recv()? {
+                            CompressRequest::End(encoder_index) => {
+                                encoders[encoder_index].do_finish()?;
+                            }
+                            CompressRequest::Shutdown => {
+                                break;
+                            }
+                            CompressRequest::Data(encoder_index, bytes) => {
+                                encoders[encoder_index].write_all(&bytes)?;
+                            }
+                        }
+                    }
+                    for mut enc in encoders {
+                        enc.do_finish()?;
+                    }
+                    Ok::<(), MonorailError>(())
+                });
+            }
+            Ok(())
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -682,25 +788,6 @@ async fn run<'a>(
             let mut unknowns = vec![];
             let function = functions[run_data_group.function_index].to_owned();
             for rd in run_data_group.datas.iter_mut() {
-                // let mut stdout_encoder =
-                //     rd.logs
-                //         .stdout_encoder
-                //         .take()
-                //         .ok_or(MonorailError::Generic(format!(
-                //             "Failed to acquire encoder for {}",
-                //             &rd.logs.stdout_path.display().to_string()
-                //         )))?;
-                // let mut stderr_encoder =
-                //     rd.logs
-                //         .stderr_encoder
-                //         .take()
-                //         .ok_or(MonorailError::Generic(format!(
-                //             "Failed to acquire encoder for {}",
-                //             &rd.logs.stderr_path.display().to_string()
-                //         )))?;
-                // let mut stdout_encoder = rd.logs.open_stdout_encoder().await?;
-                // stdout_encoder.try_finish()?;
-                // stderr_encoder.try_finish()?;
                 let target = rd.target_path.to_owned();
                 workflow.log(Output::workflow(FunctionRunWorkflow {
                     status: "aborted",
@@ -735,10 +822,15 @@ async fn run<'a>(
         let mut js = tokio::task::JoinSet::new();
         let token = sync::Arc::new(tokio_util::sync::CancellationToken::new());
         let mut abort_table = HashMap::new();
+        let compressor_shutdown = sync::Arc::new(sync::atomic::AtomicBool::new(false));
+        let mut compressor = Compressor::new(2, compressor_shutdown.clone());
+        let mut compressor_clients = vec![];
         for id in 0..run_data_group.datas.len() {
             let rd = &mut run_data_group.datas[id];
-            let stdout_encoder = rd.logs.open_stdout_encoder().await?;
-            let stderr_encoder = rd.logs.open_stderr_encoder().await?;
+            let stdout_client = compressor.register(&rd.logs.stdout_path)?;
+            let stderr_client = compressor.register(&rd.logs.stderr_path)?;
+            compressor_clients.push(stdout_client.clone());
+            compressor_clients.push(stderr_client.clone());
             let mut ft = FunctionTask {
                 id,
                 start_time: time::Instant::now(),
@@ -746,10 +838,13 @@ async fn run<'a>(
             // TODO: check file type to pick command
             let child = spawn_bash_task(&function, &run_data_groups.work_dir, &rd.script_path)?;
             let token2 = token.clone();
-            let handle = js
-                .spawn(async move { ft.run(child, token2, stdout_encoder, stderr_encoder).await });
+            let handle =
+                js.spawn(async move { ft.run(child, token2, stdout_client, stderr_client).await });
             abort_table.insert(handle.id(), id);
         }
+        let compressor_handle = std::thread::spawn(move || {
+            compressor.run().unwrap(); // todo unwrap
+        });
         while let Some(join_res) = js.join_next().await {
             match join_res {
                 Ok(task_res) => {
@@ -837,6 +932,12 @@ async fn run<'a>(
                 }
             }
         }
+        for client in compressor_clients.iter() {
+            client.shutdown()?;
+        }
+        // todo; need to send shutdown message to req_tx for eahc file before this; this jut here to exit at all rn
+        // compressor_shutdown.store(true, sync::atomic::Ordering::Relaxed);
+        compressor_handle.join().unwrap(); // todo unwrap
         if !frr.failures.is_empty() || !frr.unknowns.is_empty() {
             o.failed = true;
         }
@@ -858,9 +959,10 @@ fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), 
         .open(log_dir.join(RUN_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let bw = BufWriter::new(run_result_file);
-    let mut encoder = flate2::write::GzEncoder::new(bw, flate2::Compression::default());
+    let mut encoder = zstd::stream::write::Encoder::new(bw, 3).unwrap(); // todo unwrap
     serde_json::to_writer(&mut encoder, run_output)?;
-    encoder.try_finish().map_err(MonorailError::from)
+    encoder.finish().unwrap(); // todo unwrap
+    Ok(())
 }
 
 pub struct Logs {
@@ -884,38 +986,6 @@ impl Logs {
             stderr_path: dir_path.clone().join(STDERR_FILE),
         })
     }
-    async fn open_stdout_encoder(
-        &self,
-    ) -> Result<
-        async_compression::tokio::write::GzipEncoder<tokio::io::BufWriter<tokio::fs::File>>,
-        MonorailError,
-    > {
-        Self::open_encoder(&self.stdout_path).await
-    }
-    async fn open_stderr_encoder(
-        &self,
-    ) -> Result<
-        async_compression::tokio::write::GzipEncoder<tokio::io::BufWriter<tokio::fs::File>>,
-        MonorailError,
-    > {
-        Self::open_encoder(&self.stderr_path).await
-    }
-    async fn open_encoder(
-        p: &path::Path,
-    ) -> Result<
-        async_compression::tokio::write::GzipEncoder<tokio::io::BufWriter<tokio::fs::File>>,
-        MonorailError,
-    > {
-        let f = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(p)
-            .await
-            .map_err(|e| MonorailError::Generic(e.to_string()))?;
-        let bw = tokio::io::BufWriter::new(f);
-        Ok(async_compression::tokio::write::GzipEncoder::new(bw))
-    }
 }
 
 #[derive(Debug)]
@@ -936,7 +1006,8 @@ pub async fn handle_result_show<'a>(
         .open(log_dir.join(RUN_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let br = BufReader::new(run_output_file);
-    let mut decoder = flate2::read::GzDecoder::new(br);
+    let mut decoder = zstd::stream::read::Decoder::new(br)?;
+
     Ok(serde_json::from_reader(&mut decoder)?)
 }
 

@@ -44,6 +44,19 @@ pub enum MonorailError {
     TrackingLogInfoNotFound(io::Error),
     MissingArg(String),
     TaskCancelled,
+    ChannelSend(String),
+    ChannelRecv(std::sync::mpsc::RecvError),
+}
+
+impl From<std::sync::mpsc::RecvError> for MonorailError {
+    fn from(error: std::sync::mpsc::RecvError) -> Self {
+        MonorailError::ChannelRecv(error)
+    }
+}
+impl<T> From<std::sync::mpsc::SendError<T>> for MonorailError {
+    fn from(error: std::sync::mpsc::SendError<T>) -> Self {
+        MonorailError::ChannelSend(error.to_string())
+    }
 }
 impl From<String> for MonorailError {
     fn from(error: String) -> Self {
@@ -113,6 +126,12 @@ impl fmt::Display for MonorailError {
             MonorailError::TaskCancelled => {
                 write!(f, "Task cancelled")
             }
+            MonorailError::ChannelSend(error) => {
+                write!(f, "Channel send error; {}", error)
+            }
+            MonorailError::ChannelRecv(error) => {
+                write!(f, "Channel recv error; {}", error)
+            }
         }
     }
 }
@@ -181,6 +200,14 @@ impl Serialize for MonorailError {
             }
             MonorailError::TaskCancelled => {
                 state.serialize_field("type", "task_cancelled")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::ChannelSend(_) => {
+                state.serialize_field("type", "channel_send")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::ChannelRecv(_) => {
+                state.serialize_field("type", "channel_recv")?;
                 state.serialize_field("message", &self.to_string())?;
             }
         }

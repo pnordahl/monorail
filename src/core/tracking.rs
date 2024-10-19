@@ -2,6 +2,7 @@ use crate::common::error::MonorailError;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path;
 use std::result::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -28,6 +29,19 @@ impl LogInfo {
             .map_err(MonorailError::TrackingLogInfoNotFound)?;
         let mut data = vec![];
         file.read_to_end(&mut data).await?;
+        let mut cp: Self = serde_json::from_slice(&data)?;
+        cp.path = file_path.to_path_buf();
+        Ok(cp)
+    }
+
+    // Open the internal file and read its contents.
+    pub(crate) fn open_sync(file_path: &path::Path) -> Result<Self, MonorailError> {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(file_path)
+            .map_err(MonorailError::TrackingLogInfoNotFound)?;
+        let mut data = vec![];
+        file.read_to_end(&mut data)?;
         let mut cp: Self = serde_json::from_slice(&data)?;
         cp.path = file_path.to_path_buf();
         Ok(cp)
@@ -116,5 +130,8 @@ impl<'a> Table {
     }
     pub(crate) async fn open_log_info(&'a self) -> Result<LogInfo, MonorailError> {
         LogInfo::open(&self.log_info_path).await
+    }
+    pub(crate) fn open_log_info_sync(&'a self) -> Result<LogInfo, MonorailError> {
+        LogInfo::open_sync(&self.log_info_path)
     }
 }
