@@ -16,7 +16,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio_stream::StreamExt;
 use trie_rs::{Trie, TrieBuilder};
 
@@ -25,6 +25,7 @@ use crate::common::error::{GraphError, MonorailError};
 const RUN_OUTPUT_FILE_NAME: &str = "run.json.zst";
 const STDOUT_FILE: &str = "stdout.zst";
 const STDERR_FILE: &str = "stderr.zst";
+const RESET_COLOR: &str = "\x1b[0m";
 
 #[derive(Debug)]
 pub struct GitOptions<'a> {
@@ -194,12 +195,16 @@ async fn get_git_all_changes<'a>(
 
 #[derive(Serialize)]
 pub struct LogShowInput<'a> {
-    pub should_tail: bool,
     pub id: Option<&'a usize>,
-    pub functions: HashSet<&'a str>,
-    pub targets: HashSet<&'a str>,
-    pub include_stdout: bool,
-    pub include_stderr: bool,
+    pub args: LogStreamArgs,
+}
+
+pub async fn handle_log_show_tail<'a>(
+    cfg: &'a Config,
+    args: &'a LogStreamArgs,
+) -> Result<(), MonorailError> {
+    let mut log_stream_server = LogStreamServer::new("127.0.0.1:9201", args);
+    log_stream_server.listen().await
 }
 
 pub fn handle_log_show<'a>(
@@ -237,18 +242,18 @@ pub fn handle_log_show<'a>(
 
     let mut stdout = std::io::stdout();
     // open directory at log_dir
-    let filter_functions = !input.functions.is_empty();
-    let filter_targets = !input.targets.is_empty();
+    let filter_functions = !input.args.functions.is_empty();
+    let filter_targets = !input.args.targets.is_empty();
     for fn_entry in log_dir.read_dir()? {
         let fn_path = fn_entry?.path();
         if fn_path.is_dir() {
             let function = fn_path.file_name().unwrap().to_str().unwrap();
-            if !filter_functions || input.functions.contains(&function) {
+            if !filter_functions || input.args.functions.contains(function) {
                 for t_entry in fn_path.read_dir()? {
                     let t_path = t_entry?.path();
                     if t_path.is_dir() {
                         let target_hash = t_path.file_name().unwrap().to_str().unwrap();
-                        if !filter_targets || input.targets.contains(&target_hash) {
+                        if !filter_targets || input.args.targets.contains(target_hash) {
                             for e in t_path.read_dir()? {
                                 let target =
                                     hash2target.get(target_hash).ok_or(MonorailError::Generic(
@@ -256,11 +261,9 @@ pub fn handle_log_show<'a>(
                                     ))?;
 
                                 // todo; color requires --ansi-256
-                                let color = format!("\x1b[38;5;{}m", target_hash.as_bytes()[0]);
                                 stream_archive_file_to_stdout(
                                     target,
                                     function,
-                                    &color,
                                     &e?.path(),
                                     &mut stdout,
                                 )?;
@@ -276,10 +279,22 @@ pub fn handle_log_show<'a>(
     Ok(())
 }
 
+fn get_log_header(filename: &str, target: &str, function: &str, color: bool) -> String {
+    if color {
+        let filename_color = match filename {
+            STDOUT_FILE => "\x1b[38;5;81m",
+            STDERR_FILE => "\x1b[38;5;214m",
+            _ => "",
+        };
+        format!("[monorail | {filename_color}{filename}{RESET_COLOR} | {target} | {function}]\n")
+    } else {
+        format!("[monorail | {filename} | {target} | {function}]\n")
+    }
+}
+
 fn stream_archive_file_to_stdout(
     target: &str,
     function: &str,
-    color: &str,
     path: &path::Path,
     stdout: &mut std::io::Stdout,
 ) -> Result<(), MonorailError> {
@@ -296,14 +311,14 @@ fn stream_archive_file_to_stdout(
     let decoder = zstd::stream::read::Decoder::new(reader)?;
     let mut line_reader = std::io::BufReader::new(decoder);
     let mut line: Vec<u8> = Vec::new();
-    let reset = "\x1b[0m";
-    let prefix = format!(
-        "{}[monorail | {} | {} | {}]{} ",
-        color, filename, target, function, reset
-    );
-    let prefix_bytes = prefix.as_bytes();
+    let header = get_log_header(filename, target, function, true);
+    let header_bytes = header.as_bytes();
+    let mut wrote_header = false;
     while line_reader.read_until(b'\n', &mut line)? > 0 {
-        stdout.write_all(prefix_bytes)?;
+        if !wrote_header {
+            stdout.write_all(header_bytes)?;
+            wrote_header = true;
+        }
         stdout.write_all(&line)?;
         line.clear();
     }
@@ -420,16 +435,20 @@ pub async fn handle_run<'a>(
         }
     }
 }
-
+#[derive(Serialize)]
 struct RunData {
     target_path: String,
     script_path: String,
+    #[serde(skip)]
     logs: Logs,
 }
+#[derive(Serialize)]
 struct RunDataGroup {
+    #[serde(skip)]
     function_index: usize,
     datas: Vec<RunData>,
 }
+#[derive(Serialize)]
 struct RunDataGroups {
     work_dir: path::PathBuf,
     groups: Vec<RunDataGroup>,
@@ -537,14 +556,53 @@ impl FunctionTask {
         &mut self,
         mut child: tokio::process::Child,
         token: sync::Arc<tokio_util::sync::CancellationToken>,
+        target: String,
+        function: String,
         stdout_client: CompressorClient,
         stderr_client: CompressorClient,
+        log_stream_client: Option<LogStreamClient>,
     ) -> Result<
         (usize, std::process::ExitStatus, time::Duration),
         (usize, time::Duration, MonorailError),
     > {
-        let stdout_fut = process_reader(child.stdout.take().unwrap(), stdout_client, token.clone());
-        let stderr_fut = process_reader(child.stderr.take().unwrap(), stderr_client, token.clone());
+        let (stdout_log_stream_client, stderr_log_stream_client) = match log_stream_client {
+            Some(lsc) => {
+                let target_allowed =
+                    lsc.args.targets.is_empty() || lsc.args.targets.contains(&target);
+                let function_allowed =
+                    lsc.args.functions.is_empty() || lsc.args.functions.contains(&function);
+                let allowed = target_allowed && function_allowed;
+
+                let stdout_lsc = if allowed && lsc.args.include_stdout {
+                    Some(lsc.clone())
+                } else {
+                    None
+                };
+                let stderr_lsc = if allowed && lsc.args.include_stderr {
+                    Some(lsc.clone())
+                } else {
+                    None
+                };
+                (stdout_lsc, stderr_lsc)
+            }
+            None => (None, None),
+        };
+        let stdout_header = get_log_header(&stdout_client.file_name, &target, &function, true);
+        let stdout_fut = process_reader(
+            tokio::io::BufReader::new(child.stdout.take().unwrap()),
+            stdout_client,
+            stdout_header,
+            stdout_log_stream_client,
+            token.clone(),
+        );
+        let stderr_header = get_log_header(&stderr_client.file_name, &target, &function, true);
+        let stderr_fut = process_reader(
+            tokio::io::BufReader::new(child.stderr.take().unwrap()),
+            stderr_client,
+            stderr_header,
+            stderr_log_stream_client,
+            token.clone(),
+        );
         let child_fut = async { child.wait().await.map_err(MonorailError::from) };
 
         let (_stdout_result, _stderr_result, child_result) =
@@ -554,43 +612,152 @@ impl FunctionTask {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LogStreamArgs {
+    pub functions: HashSet<String>,
+    pub targets: HashSet<String>,
+    pub include_stdout: bool,
+    pub include_stderr: bool,
+}
+
+struct LogStreamServer<'a> {
+    address: &'a str,
+    args: &'a LogStreamArgs,
+}
+impl<'a> LogStreamServer<'a> {
+    fn new(address: &'a str, args: &'a LogStreamArgs) -> Self {
+        Self { address, args }
+    }
+    async fn listen(&mut self) -> Result<(), MonorailError> {
+        let mut listener = tokio::net::TcpListener::bind(self.address).await?;
+        let args_data = serde_json::to_vec(&self.args)?;
+        loop {
+            let (mut socket, _) = listener.accept().await?;
+            // first, write to the client what we're interested in receiving
+            socket.write_all(&args_data).await?;
+            socket.write(&[b'\n']).await?;
+            Self::process(socket).await?;
+        }
+    }
+    async fn process(socket: tokio::net::TcpStream) -> Result<(), MonorailError> {
+        let br = tokio::io::BufReader::new(socket);
+        let mut lines = br.lines();
+        let mut stdout = tokio::io::stdout();
+        while let Some(line) = lines.next_line().await? {
+            stdout.write_all(line.as_bytes()).await?;
+            stdout.write(&[b'\n']).await?;
+            stdout.flush().await?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct LogStreamClient {
+    stream: sync::Arc<tokio::sync::Mutex<tokio::net::TcpStream>>,
+    args: LogStreamArgs,
+}
+impl LogStreamClient {
+    async fn data(
+        &mut self,
+        data: sync::Arc<Vec<Vec<u8>>>,
+        header: &[u8],
+    ) -> Result<(), MonorailError> {
+        let mut guard = self.stream.lock().await;
+        guard.write_all(header).await.map_err(MonorailError::from)?;
+        for v in data.iter() {
+            guard.write_all(v).await.map_err(MonorailError::from)?;
+        }
+        Ok(())
+    }
+    async fn connect(addr: &str) -> Result<Self, MonorailError> {
+        let mut stream = tokio::net::TcpStream::connect(addr).await?;
+        let mut args_data = Vec::new();
+        // pull arg preferences from the server on connect
+        let mut br = tokio::io::BufReader::new(&mut stream);
+        br.read_until(b'\n', &mut args_data).await?;
+        let args = serde_json::from_slice(args_data.as_slice())?;
+        Ok(Self {
+            stream: sync::Arc::new(tokio::sync::Mutex::new(stream)),
+            args,
+        })
+    }
+}
+
 async fn process_reader<R>(
-    mut reader: R,
+    mut reader: tokio::io::BufReader<R>,
     compressor_client: CompressorClient,
+    header: String,
+    mut log_stream_client: Option<LogStreamClient>,
     token: sync::Arc<tokio_util::sync::CancellationToken>,
 ) -> Result<(), MonorailError>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
     loop {
-        let mut buf = Vec::new();
-        tokio::select! {
-            _ = token.cancelled() => {
-                compressor_client.end().await?;
-                return Err(MonorailError::TaskCancelled);
-            }
-            res = reader.read_to_end(&mut buf) => {
-                match res {
-                    Ok(0) => {
-                        break;
-                    },
-                    Ok(_n) => {
-                        compressor_client.data(buf).await?;
+        let mut bufs = Vec::new();
+        loop {
+            let mut buf = Vec::new();
+            tokio::select! {
+                _ = token.cancelled() => {
+                    process_bufs(&header, bufs, &compressor_client, &mut log_stream_client, true).await?;
+                    return Err(MonorailError::TaskCancelled);
+                }
+                res = reader.read_until(b'\n', &mut buf) => {
+                    match res {
+                        Ok(0) => {
+                            process_bufs(&header, bufs, &compressor_client, &mut log_stream_client, true).await?;
+                            return Ok(());
+                        },
+                        Ok(_n) => {
+                            bufs.push(buf);
+                        }
+                        Err(e) => {
+                            process_bufs(&header, bufs, &compressor_client, &mut log_stream_client, true).await?;
+                            return Err(MonorailError::from(e));
+                        }
                     }
-                    Err(e) => {
-                        compressor_client.end().await?;
-                        return Err(MonorailError::from(e));
-                    }
+                }
+                _ = interval.tick() => {
+                    process_bufs(&header, bufs, &compressor_client, &mut log_stream_client, false).await?;
+                    break;
                 }
             }
         }
     }
-    compressor_client.end().await
+}
+
+async fn process_bufs(
+    header: &str,
+    bufs: Vec<Vec<u8>>,
+    compressor_client: &CompressorClient,
+    log_stream_client: &mut Option<LogStreamClient>,
+    should_end: bool,
+) -> Result<(), MonorailError> {
+    if !bufs.is_empty() {
+        let bufs_arc = sync::Arc::new(bufs);
+        let bufs_arc2 = bufs_arc.clone();
+        let lsc_fut = async {
+            if let Some(ref mut lsc) = log_stream_client {
+                lsc.data(bufs_arc2, header.as_bytes()).await
+            } else {
+                Ok(())
+            }
+        };
+        let cc_fut = async { compressor_client.data(bufs_arc).await };
+        let (res1, res2) = tokio::try_join!(lsc_fut, cc_fut)?;
+    }
+    if should_end {
+        compressor_client.end().await?;
+    }
+
+    Ok(())
 }
 
 #[derive(Debug)]
 enum CompressRequest {
-    Data(usize, Vec<u8>),
+    Data(usize, sync::Arc<Vec<Vec<u8>>>),
     End(usize),
     Shutdown,
 }
@@ -607,11 +774,12 @@ struct Compressor {
 }
 #[derive(Clone)]
 struct CompressorClient {
+    file_name: String,
     encoder_index: usize,
     req_tx: flume::Sender<CompressRequest>,
 }
 impl CompressorClient {
-    async fn data(&self, data: Vec<u8>) -> Result<(), MonorailError> {
+    async fn data(&self, data: sync::Arc<Vec<Vec<u8>>>) -> Result<(), MonorailError> {
         self.req_tx
             .send_async(CompressRequest::Data(self.encoder_index, data))
             .await
@@ -647,22 +815,6 @@ impl Compressor {
             shutdown,
         }
     }
-    // Register the provided path and assign it an id, returning that
-    // id to the caller for use when Sending a CompressRequest
-    // fn register(
-    //     &mut self,
-    //     p: &path::Path,
-    // ) -> Result<(usize, flume::Sender<CompressRequest>), MonorailError> {
-    //     // todo; check path not already seen
-    //     let thread_index = self.index % self.num_threads;
-    //     let reg_index = self.registrations[thread_index].len();
-    //     self.registrations[thread_index].push(p.to_path_buf());
-    //     let req_tx = self.req_channels[thread_index].0.clone();
-
-    //     self.index += 1;
-
-    //     Ok((reg_index, req_tx))
-    // }
     // Register the provided path and return a CompressorClient
     // that can be used to schedule operations on the underlying encoder.
     fn register(&mut self, p: &path::Path) -> Result<CompressorClient, MonorailError> {
@@ -672,7 +824,10 @@ impl Compressor {
         self.registrations[thread_index].push(p.to_path_buf());
         self.index += 1;
 
+        let file_name = p.file_name().unwrap().to_str().unwrap().to_string(); // todo; monorailerror
+
         Ok(CompressorClient {
+            file_name,
             encoder_index,
             req_tx: self.req_channels[thread_index].0.clone(),
         })
@@ -713,8 +868,10 @@ impl Compressor {
                             CompressRequest::Shutdown => {
                                 break;
                             }
-                            CompressRequest::Data(encoder_index, bytes) => {
-                                encoders[encoder_index].write_all(&bytes)?;
+                            CompressRequest::Data(encoder_index, data) => {
+                                for v in data.iter() {
+                                    encoders[encoder_index].write_all(&v)?;
+                                }
                             }
                         }
                     }
@@ -745,6 +902,10 @@ async fn run<'a>(
     targets: Vec<Target>,
     target_groups: &[Vec<String>],
 ) -> Result<RunOutput, MonorailError> {
+    let log_stream_client = match LogStreamClient::connect("127.0.0.1:9201").await {
+        Ok(lsc) => Some(lsc),
+        Err(e) => None,
+    };
     let stdout = std::io::stdout();
     let writer = stdout.lock();
     let mut workflow = Workflow { writer };
@@ -791,12 +952,13 @@ async fn run<'a>(
 
     // Spawn concurrent tasks for each group of rundata
     for mut run_data_group in run_data_groups.groups {
+        workflow.log(Output::workflow(&run_data_group))?;
         if cancelled {
             let mut unknowns = vec![];
             let function = functions[run_data_group.function_index].to_owned();
             for rd in run_data_group.datas.iter_mut() {
                 let target = rd.target_path.to_owned();
-                workflow.log(Output::workflow(FunctionRunWorkflow {
+                workflow.log(Output::error(FunctionRunWorkflow {
                     status: "aborted",
                     function: &function,
                     target: &rd.target_path,
@@ -843,15 +1005,31 @@ async fn run<'a>(
                 start_time: time::Instant::now(),
             };
             // TODO: check file type to pick command
+            let target2 = rd.target_path.clone();
+            let function2 = function.clone();
+            workflow.log(Output::workflow(FunctionRunWorkflow {
+                status: "scheduled",
+                function: &function,
+                target: &rd.target_path,
+            }))?;
             let child = spawn_bash_task(&function, &run_data_groups.work_dir, &rd.script_path)?;
             let token2 = token.clone();
-            let handle =
-                js.spawn(async move { ft.run(child, token2, stdout_client, stderr_client).await });
+            let log_stream_client2 = log_stream_client.clone();
+            let handle = js.spawn(async move {
+                ft.run(
+                    child,
+                    token2,
+                    target2,
+                    function2,
+                    stdout_client,
+                    stderr_client,
+                    log_stream_client2,
+                )
+                .await
+            });
             abort_table.insert(handle.id(), id);
         }
-        let compressor_handle = std::thread::spawn(move || {
-            compressor.run().unwrap(); // todo unwrap
-        });
+        let compressor_handle = std::thread::spawn(move || compressor.run());
         while let Some(join_res) = js.join_next().await {
             match join_res {
                 Ok(task_res) => {
@@ -877,7 +1055,7 @@ async fn run<'a>(
                                 // TODO: --cancel-on-error option
                                 token.cancel();
                                 cancelled = true;
-                                workflow.log(Output::workflow(FunctionRunWorkflow {
+                                workflow.log(Output::error(FunctionRunWorkflow {
                                     status: "error",
                                     function: &function,
                                     target: &rd.target_path,
@@ -900,7 +1078,7 @@ async fn run<'a>(
                             };
 
                             let rd = &run_data_group.datas[id];
-                            workflow.log(Output::workflow(FunctionRunWorkflow {
+                            workflow.log(Output::error(FunctionRunWorkflow {
                                 status,
                                 function: &function,
                                 target: &rd.target_path,
@@ -922,7 +1100,7 @@ async fn run<'a>(
                             .get(&e.id())
                             .ok_or(MonorailError::from("Task id missing from abort table"))?;
                         let rd = &mut run_data_group.datas[*run_data_index];
-                        workflow.log(Output::workflow(FunctionRunWorkflow {
+                        workflow.log(Output::error(FunctionRunWorkflow {
                             status: "aborted",
                             function: &function,
                             target: &rd.target_path,
@@ -942,9 +1120,11 @@ async fn run<'a>(
         for client in compressor_clients.iter() {
             client.shutdown()?;
         }
-        // todo; need to send shutdown message to req_tx for eahc file before this; this jut here to exit at all rn
-        // compressor_shutdown.store(true, sync::atomic::Ordering::Relaxed);
-        compressor_handle.join().unwrap(); // todo unwrap
+
+        // Unwrap for thread dyn Any panic contents, which isn't easily mapped to a MonorailError
+        // because it doesn't impl Error; however, the internals of this handle do, so they
+        // will get propagated.
+        compressor_handle.join().unwrap()?;
         if !frr.failures.is_empty() || !frr.unknowns.is_empty() {
             o.failed = true;
         }
@@ -972,6 +1152,7 @@ fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), 
     Ok(())
 }
 
+#[derive(Serialize)]
 pub struct Logs {
     stdout_path: path::PathBuf,
     stderr_path: path::PathBuf,

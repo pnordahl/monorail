@@ -362,6 +362,16 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
             if let Some(log) = matches.subcommand_matches(CMD_LOG) {
                 if let Some(show) = log.subcommand_matches(CMD_SHOW) {
                     let i = core::LogShowInput::try_from(show)?;
+                    if show.get_flag(ARG_TAIL) {
+                        match core::handle_log_show_tail(&cfg, &i.args).await {
+                            Err(e) => {
+                                write_result(&Err::<(), MonorailError>(e), output_format)?;
+                                return Ok(HANDLE_ERR);
+                            }
+                            Ok(_) => return Ok(HANDLE_OK),
+                        }
+                    }
+
                     match core::handle_log_show(&cfg, &i, &work_dir) {
                         Err(e) => {
                             write_result(&Err::<(), MonorailError>(e), output_format)?;
@@ -483,22 +493,23 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogShowInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            should_tail: cmd.get_flag(ARG_TAIL),
+            args: core::LogStreamArgs {
+                include_stdout: cmd.get_flag(ARG_STDOUT),
+                include_stderr: cmd.get_flag(ARG_STDERR),
+                functions: cmd
+                    .get_many::<String>(ARG_FUNCTION)
+                    .into_iter()
+                    .flatten()
+                    .map(|x| x.to_owned())
+                    .collect(),
+                targets: cmd
+                    .get_many::<String>(ARG_TARGET)
+                    .into_iter()
+                    .flatten()
+                    .map(|x| x.to_owned())
+                    .collect(),
+            },
             id: cmd.get_one::<usize>(ARG_ID),
-            include_stdout: cmd.get_flag(ARG_STDOUT),
-            include_stderr: cmd.get_flag(ARG_STDERR),
-            functions: cmd
-                .get_many::<String>(ARG_FUNCTION)
-                .into_iter()
-                .flatten()
-                .map(|x| x.as_str())
-                .collect(),
-            targets: cmd
-                .get_many::<String>(ARG_TARGET)
-                .into_iter()
-                .flatten()
-                .map(|x| x.as_str())
-                .collect(),
         })
     }
 }
