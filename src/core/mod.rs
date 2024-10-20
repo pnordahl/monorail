@@ -242,32 +242,43 @@ pub fn handle_log_show<'a>(
 
     let mut stdout = std::io::stdout();
     // open directory at log_dir
-    let filter_functions = !input.args.functions.is_empty();
-    let filter_targets = !input.args.targets.is_empty();
     for fn_entry in log_dir.read_dir()? {
         let fn_path = fn_entry?.path();
         if fn_path.is_dir() {
             let function = fn_path.file_name().unwrap().to_str().unwrap();
-            if !filter_functions || input.args.functions.contains(function) {
-                for t_entry in fn_path.read_dir()? {
-                    let t_path = t_entry?.path();
-                    if t_path.is_dir() {
-                        let target_hash = t_path.file_name().unwrap().to_str().unwrap();
-                        if !filter_targets || input.args.targets.contains(target_hash) {
-                            for e in t_path.read_dir()? {
-                                let target =
-                                    hash2target.get(target_hash).ok_or(MonorailError::Generic(
-                                        format!("Target not found for {}", &target_hash),
-                                    ))?;
-
-                                // todo; color requires --ansi-256
-                                stream_archive_file_to_stdout(
-                                    target,
-                                    function,
-                                    &e?.path(),
-                                    &mut stdout,
-                                )?;
-                                // todo; stderr/stdout filter
+            for t_entry in fn_path.read_dir()? {
+                let t_path = t_entry?.path();
+                if t_path.is_dir() {
+                    let target_hash = t_path.file_name().unwrap().to_str().unwrap();
+                    for e in t_path.read_dir()? {
+                        let target =
+                            hash2target
+                                .get(target_hash)
+                                .ok_or(MonorailError::Generic(format!(
+                                    "Target not found for {}",
+                                    &target_hash
+                                )))?;
+                        let p = e?.path();
+                        let filename = p
+                            .file_name()
+                            .ok_or(MonorailError::Generic(format!(
+                                "Bad path file name: {:?}",
+                                &p
+                            )))?
+                            .to_str()
+                            .ok_or(MonorailError::from("Bad file name string"))?;
+                        if is_log_allowed(
+                            &input.args.targets,
+                            &input.args.functions,
+                            &target,
+                            &function,
+                        ) {
+                            if filename == STDOUT_FILE && input.args.include_stdout
+                                || filename == STDERR_FILE && input.args.include_stderr
+                            {
+                                let header = get_log_header(filename, target, function, true);
+                                let header_bytes = header.as_bytes();
+                                stream_archive_file_to_stdout(header_bytes, &p, &mut stdout)?;
                             }
                         }
                     }
@@ -293,30 +304,19 @@ fn get_log_header(filename: &str, target: &str, function: &str, color: bool) -> 
 }
 
 fn stream_archive_file_to_stdout(
-    target: &str,
-    function: &str,
+    header: &[u8],
     path: &path::Path,
     stdout: &mut std::io::Stdout,
 ) -> Result<(), MonorailError> {
-    let filename = path
-        .file_name()
-        .ok_or(MonorailError::Generic(format!(
-            "Bad path file name: {:?}",
-            path
-        )))?
-        .to_str()
-        .ok_or(MonorailError::from("Bad file name string"))?;
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     let decoder = zstd::stream::read::Decoder::new(reader)?;
     let mut line_reader = std::io::BufReader::new(decoder);
     let mut line: Vec<u8> = Vec::new();
-    let header = get_log_header(filename, target, function, true);
-    let header_bytes = header.as_bytes();
     let mut wrote_header = false;
     while line_reader.read_until(b'\n', &mut line)? > 0 {
         if !wrote_header {
-            stdout.write_all(header_bytes)?;
+            stdout.write_all(header)?;
             wrote_header = true;
         }
         stdout.write_all(&line)?;
@@ -547,6 +547,17 @@ pub fn spawn_bash_task(
         .map_err(MonorailError::from)
 }
 
+fn is_log_allowed(
+    targets: &HashSet<String>,
+    functions: &HashSet<String>,
+    target: &str,
+    function: &str,
+) -> bool {
+    let target_allowed = targets.is_empty() || targets.contains(target);
+    let function_allowed = functions.is_empty() || functions.contains(function);
+    target_allowed && function_allowed
+}
+
 struct FunctionTask {
     id: usize,
     start_time: time::Instant,
@@ -567,12 +578,8 @@ impl FunctionTask {
     > {
         let (stdout_log_stream_client, stderr_log_stream_client) = match log_stream_client {
             Some(lsc) => {
-                let target_allowed =
-                    lsc.args.targets.is_empty() || lsc.args.targets.contains(&target);
-                let function_allowed =
-                    lsc.args.functions.is_empty() || lsc.args.functions.contains(&function);
-                let allowed = target_allowed && function_allowed;
-
+                let allowed =
+                    is_log_allowed(&lsc.args.targets, &lsc.args.functions, &target, &function);
                 let stdout_lsc = if allowed && lsc.args.include_stdout {
                     Some(lsc.clone())
                 } else {
