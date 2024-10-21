@@ -20,6 +20,7 @@ pub const CMD_RUN: &str = "run";
 pub const CMD_ANALYSIS: &str = "analysis";
 pub const CMD_RESULT: &str = "result";
 pub const CMD_LOG: &str = "log";
+pub const CMD_TAIL: &str = "tail";
 
 pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_START: &str = "start";
@@ -35,7 +36,6 @@ pub const ARG_CHANGE_TARGETS: &str = "change-targets";
 pub const ARG_TARGET_GROUPS: &str = "target-groups";
 pub const ARG_ALL: &str = "all";
 pub const ARG_VERBOSE: &str = "verbose";
-pub const ARG_TAIL: &str = "tail";
 pub const ARG_STDERR: &str = "stderr";
 pub const ARG_STDOUT: &str = "stdout";
 pub const ARG_ID: &str = "id";
@@ -45,21 +45,55 @@ pub const VAL_JSON: &str = "json";
 pub fn get_app() -> clap::Command {
     let arg_git_path = Arg::new(ARG_GIT_PATH)
         .long(ARG_GIT_PATH)
-        .help("Absolute path to a `git` binary to use for certain operations. Defaults to `git` on PATH")
+        .help("Absolute path to a `git` binary to use for certain operations. If unspecified, default value uses PATH to resolve.")
         .num_args(1)
         .default_value("git");
     let arg_start = Arg::new(ARG_START)
-                .short('s')
-                .long(ARG_START)
-                .help("Start of the interval to consider for changes; if not provided, the latest tag (or first commit, if no tags have been made) is used")
-                .num_args(1)
-                .required(false);
+        .short('s')
+        .long(ARG_START)
+        .help("Start of the interval to consider for changes; if not provided, the latest tag (or first commit, if no tags have been made) is used")
+        .num_args(1)
+        .required(false);
     let arg_end = Arg::new(ARG_END)
         .short('e')
         .long(ARG_END)
         .help("End of the interval to consider for changes; if not provided HEAD is used")
         .num_args(1)
         .required(false);
+
+    let arg_log_id = Arg::new(ARG_ID)
+        .long(ARG_ID)
+        .short('i')
+        .required(false)
+        .value_parser(clap::value_parser!(usize))
+        .num_args(1)
+        .help("Result id to query; if not provided, the most recent will be used");
+    let arg_log_function = Arg::new(ARG_FUNCTION)
+        .short('f')
+        .long(ARG_FUNCTION)
+        .required(false)
+        .num_args(1..)
+        .value_delimiter(' ')
+        .action(ArgAction::Append)
+        .help("A list functions for which to include logs");
+    let arg_log_target = Arg::new(ARG_TARGET)
+        .short('t')
+        .long(ARG_TARGET)
+        .num_args(1..)
+        .value_delimiter(' ')
+        .required(false)
+        .action(ArgAction::Append)
+        .help("A list of targets for which to include logs");
+
+    let arg_log_stderr = Arg::new(ARG_STDERR)
+        .long(ARG_STDERR)
+        .help("Include stderr logs")
+        .action(ArgAction::SetTrue);
+
+    let arg_log_stdout = Arg::new(ARG_STDOUT)
+        .long(ARG_STDOUT)
+        .help("Include stdout logs")
+        .action(ArgAction::SetTrue);
 
     Command::new(CMD_MONORAIL)
     .version(env!("CARGO_PKG_VERSION"))
@@ -93,8 +127,8 @@ pub fn get_app() -> clap::Command {
         Arg::new(ARG_VERBOSE)
             .short('v')
             .long(ARG_VERBOSE)
-            .help("Emit of workflow information in addition to results and errors")
-            .action(ArgAction::SetTrue),
+            .help("Emit additional workflow, result, and error logging. Specifying this flag multiple times (up to 3) increases the verbosity.")
+            .action(ArgAction::Count),
     )
     .subcommand(Command::new(CMD_CONFIG).subcommand(Command::new(CMD_SHOW).about("Show configuration, including runtime default values")))
     .subcommand(Command::new(CMD_CHECKPOINT)
@@ -138,7 +172,7 @@ pub fn get_app() -> clap::Command {
 
     .subcommand(Command::new(CMD_RUN)
         .about("Run target-defined functions.")
-        .after_help(r#"This command analyzes the target graph and performs parallel or serial execution of the provided function names."#)
+        .after_help(r#"Execute the provided functions for a graph traversal rooted at the targets specified (optional), or inferred target groups via change detection and graph analysis."#)
         .arg(arg_git_path.clone())
         .arg(arg_start.clone())
         .arg(arg_end.clone())
@@ -160,7 +194,7 @@ pub fn get_app() -> clap::Command {
                 .value_delimiter(' ')
                 .required(false)
                 .action(ArgAction::Append)
-                .help("A list of targets for which functions will be executed.")
+                .help("A list of targets for which functions will be executed. If not provided, target groups will be inferred from the target graph.")
         )
     )
     .subcommand(Command::new(CMD_RESULT).subcommand(Command::new(CMD_SHOW).about("Show results from `run` invocations")))
@@ -171,54 +205,23 @@ pub fn get_app() -> clap::Command {
     */
     // TODO: monorail log delete [--all] --result [r1 r2 r3 ... rN]
     .subcommand(
-        Command::new(CMD_LOG).subcommand(Command::new(CMD_SHOW).about("Display run logs")
-            .after_help(r#"This command shows logs for current or historical run invocations."#)
-            .arg(
-                Arg::new(ARG_TAIL)
-                    .long(ARG_TAIL)
-                    .help("Follow log files as they are written, ending when all files have been read")
-                    .action(ArgAction::SetTrue)
-            )
-            .arg(
-                Arg::new(ARG_ID)
-                    .long(ARG_ID)
-                    .short('i')
-                    .required(false)
-                    .value_parser(clap::value_parser!(usize))
-                    .num_args(1)
-                    .help("Result id to query; if not provided, the most recent will be used")
-            )
-            .arg(
-                Arg::new(ARG_FUNCTION)
-                    .short('f')
-                    .long(ARG_FUNCTION)
-                    .required(false)
-                    .num_args(1..)
-                    .value_delimiter(' ')
-                    .action(ArgAction::Append)
-                    .help("A list functions for which to include logs")
-            )
-            .arg(
-                Arg::new(ARG_TARGET)
-                    .short('t')
-                    .long(ARG_TARGET)
-                    .num_args(1..)
-                    .value_delimiter(' ')
-                    .required(false)
-                    .action(ArgAction::Append)
-                    .help("A list of targets for which to include logs")
-            )
-            .arg(
-                Arg::new(ARG_STDERR)
-                    .long(ARG_STDERR)
-                    .help("Include stderr logs")
-                    .action(ArgAction::SetTrue))
-            .arg(
-                Arg::new(ARG_STDOUT)
-                    .long(ARG_STDOUT)
-                    .help("Include stdout logs")
-                    .action(ArgAction::SetTrue)),
-    ))
+        Command::new(CMD_LOG)
+        .subcommand(
+            Command::new(CMD_SHOW).about("Display run logs")
+                .after_help(r#"This command shows logs for current or historical run invocations."#)
+                .arg(arg_log_id.clone())
+                .arg(arg_log_function.clone())
+                .arg(arg_log_target.clone())
+                .arg(arg_log_stderr.clone())
+                .arg(arg_log_stdout.clone()))
+        .subcommand(
+            Command::new(CMD_TAIL).about("Receive a stream of logs from executed functions")
+                .arg(arg_log_id)
+                .arg(arg_log_function)
+                .arg(arg_log_target)
+                .arg(arg_log_stderr)
+                .arg(arg_log_stdout))
+    )
     .subcommand(
         Command::new(CMD_ANALYSIS).subcommand(Command::new(CMD_SHOW).about("Display an analysis of repository changes and targets")
             .after_help(r#"This command shows an analysis of staged, unpushed, and pushed changes between two checkpoints in version control history, as well as unstaged changes present only in your local filesystem. By default, only outputs a list of affected targets."#)
@@ -276,6 +279,7 @@ fn get_code(is_err: bool) -> i32 {
     HANDLE_OK
 }
 
+#[tracing::instrument]
 pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i32, MonorailError> {
     let work_dir: path::PathBuf = match matches.get_one::<String>(ARG_WORKING_DIRECTORY) {
         Some(wd) => path::Path::new(wd).to_path_buf(),
@@ -285,7 +289,6 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
         Some(cfg_path) => {
             let cfg = core::Config::new(&work_dir.join(cfg_path))?;
-
             if let Some(config) = matches.subcommand_matches(CMD_CONFIG) {
                 if config.subcommand_matches(CMD_SHOW).is_some() {
                     write_result(&Ok(cfg), output_format)?;
@@ -360,18 +363,18 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                 }
             }
             if let Some(log) = matches.subcommand_matches(CMD_LOG) {
+                if let Some(tail) = log.subcommand_matches(CMD_TAIL) {
+                    let i = core::LogStreamArgs::try_from(tail)?;
+                    match core::handle_log_tail(&cfg, &i).await {
+                        Err(e) => {
+                            write_result(&Err::<(), MonorailError>(e), output_format)?;
+                            return Ok(HANDLE_ERR);
+                        }
+                        Ok(_) => return Ok(HANDLE_OK),
+                    }
+                }
                 if let Some(show) = log.subcommand_matches(CMD_SHOW) {
                     let i = core::LogShowInput::try_from(show)?;
-                    if show.get_flag(ARG_TAIL) {
-                        match core::handle_log_show_tail(&cfg, &i.args).await {
-                            Err(e) => {
-                                write_result(&Err::<(), MonorailError>(e), output_format)?;
-                                return Ok(HANDLE_ERR);
-                            }
-                            Ok(_) => return Ok(HANDLE_OK),
-                        }
-                    }
-
                     match core::handle_log_show(&cfg, &i, &work_dir) {
                         Err(e) => {
                             write_result(&Err::<(), MonorailError>(e), output_format)?;
@@ -489,26 +492,33 @@ impl<'a> From<&'a clap::ArgMatches> for core::AnalysisShowInput<'a> {
     }
 }
 
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogStreamArgs {
+    type Error = MonorailError;
+    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
+        Ok(Self {
+            include_stdout: cmd.get_flag(ARG_STDOUT),
+            include_stderr: cmd.get_flag(ARG_STDERR),
+            functions: cmd
+                .get_many::<String>(ARG_FUNCTION)
+                .into_iter()
+                .flatten()
+                .map(|x| x.to_owned())
+                .collect(),
+            targets: cmd
+                .get_many::<String>(ARG_TARGET)
+                .into_iter()
+                .flatten()
+                .map(|x| x.to_owned())
+                .collect(),
+        })
+    }
+}
+
 impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogShowInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            args: core::LogStreamArgs {
-                include_stdout: cmd.get_flag(ARG_STDOUT),
-                include_stderr: cmd.get_flag(ARG_STDERR),
-                functions: cmd
-                    .get_many::<String>(ARG_FUNCTION)
-                    .into_iter()
-                    .flatten()
-                    .map(|x| x.to_owned())
-                    .collect(),
-                targets: cmd
-                    .get_many::<String>(ARG_TARGET)
-                    .into_iter()
-                    .flatten()
-                    .map(|x| x.to_owned())
-                    .collect(),
-            },
+            args: core::LogStreamArgs::try_from(cmd)?,
             id: cmd.get_one::<usize>(ARG_ID),
         })
     }

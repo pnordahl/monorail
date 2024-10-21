@@ -4,7 +4,7 @@ description = "An overlay for effective monorepo development."
 license = "MIT"
 homepage = "https://github.com/pnordahl/monorail"
 repository = "https://github.com/pnordahl/monorail"
-version = "2.3.1"
+version = "3.0.0"
 authors = ["Patrick Nordahl <plnordahl@gmail.com>"]
 edition = "2021"
 keywords = ["monorail", "monorepo"]
@@ -20,6 +20,7 @@ tokio-util = { version = "0.7" }
 tokio-stream = "0.1.16"
 sha2 = "0.10"
 hex = "0.4"
-chrono = "0.4"
 zstd = "0.13.2"
 flume = "0.11.1"
+tracing = { version = "0.1.40", features = ["attributes"] }
+tracing-subscriber = { version = "0.3.18", features = ["std", "registry", "json", "env-filter"] }

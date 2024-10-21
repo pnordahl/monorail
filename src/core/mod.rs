@@ -18,6 +18,7 @@ use sha2::Digest;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio_stream::StreamExt;
+use tracing::{debug, error, info, instrument, trace};
 use trie_rs::{Trie, TrieBuilder};
 
 use crate::common::error::{GraphError, MonorailError};
@@ -199,8 +200,8 @@ pub struct LogShowInput<'a> {
     pub args: LogStreamArgs,
 }
 
-pub async fn handle_log_show_tail<'a>(
-    cfg: &'a Config,
+pub async fn handle_log_tail<'a>(
+    _cfg: &'a Config,
     args: &'a LogStreamArgs,
 ) -> Result<(), MonorailError> {
     let mut log_stream_server = LogStreamServer::new("127.0.0.1:9201", args);
@@ -326,53 +327,7 @@ fn stream_archive_file_to_stdout(
     Ok(())
 }
 
-const OUTPUT_KIND_WORKFLOW: &str = "workflow";
-const OUTPUT_KIND_RESULT: &str = "result";
-const OUTPUT_KIND_ERROR: &str = "error";
-
-#[derive(Serialize)]
-pub(crate) struct Output<T: Serialize> {
-    timestamp: String,
-    kind: &'static str,
-    data: T,
-}
-impl<T: Serialize> Output<T> {
-    pub(crate) fn workflow(data: T) -> Self {
-        Self {
-            timestamp: Self::utc_now(),
-            kind: OUTPUT_KIND_WORKFLOW,
-            data,
-        }
-    }
-    pub(crate) fn result(data: T) -> Self {
-        Self {
-            timestamp: Self::utc_now(),
-            kind: OUTPUT_KIND_RESULT,
-            data,
-        }
-    }
-    pub(crate) fn error(data: T) -> Self {
-        Self {
-            timestamp: Self::utc_now(),
-            kind: OUTPUT_KIND_ERROR,
-            data,
-        }
-    }
-    fn utc_now() -> String {
-        chrono::Utc::now().to_rfc3339()
-    }
-}
-
-struct Workflow<W: Write> {
-    writer: W,
-}
-impl<W: Write> Workflow<W> {
-    pub fn log<T: Serialize>(&mut self, data: T) -> Result<(), MonorailError> {
-        serde_json::to_writer(&mut self.writer, &data).map_err(MonorailError::from)?;
-        writeln!(&mut self.writer).map_err(MonorailError::from)
-    }
-}
-
+#[instrument]
 pub async fn handle_run<'a>(
     cfg: &'a Config,
     input: &'a RunInput<'a>,
@@ -558,11 +513,13 @@ fn is_log_allowed(
     target_allowed && function_allowed
 }
 
+#[derive(Debug)]
 struct FunctionTask {
     id: usize,
     start_time: time::Instant,
 }
 impl FunctionTask {
+    #[instrument]
     async fn run(
         &mut self,
         mut child: tokio::process::Child,
@@ -636,16 +593,20 @@ impl<'a> LogStreamServer<'a> {
         Self { address, args }
     }
     async fn listen(&mut self) -> Result<(), MonorailError> {
-        let mut listener = tokio::net::TcpListener::bind(self.address).await?;
+        let listener = tokio::net::TcpListener::bind(self.address).await?;
         let args_data = serde_json::to_vec(&self.args)?;
+        debug!("Log stream server listening");
         loop {
             let (mut socket, _) = listener.accept().await?;
+            debug!("Client connected");
             // first, write to the client what we're interested in receiving
             socket.write_all(&args_data).await?;
             socket.write(&[b'\n']).await?;
+            debug!("Sent log stream arguments");
             Self::process(socket).await?;
         }
     }
+    #[instrument]
     async fn process(socket: tokio::net::TcpStream) -> Result<(), MonorailError> {
         let br = tokio::io::BufReader::new(socket);
         let mut lines = br.lines();
@@ -659,12 +620,13 @@ impl<'a> LogStreamServer<'a> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct LogStreamClient {
     stream: sync::Arc<tokio::sync::Mutex<tokio::net::TcpStream>>,
     args: LogStreamArgs,
 }
 impl LogStreamClient {
+    #[instrument]
     async fn data(
         &mut self,
         data: sync::Arc<Vec<Vec<u8>>>,
@@ -677,13 +639,46 @@ impl LogStreamClient {
         }
         Ok(())
     }
+    #[instrument]
     async fn connect(addr: &str) -> Result<Self, MonorailError> {
         let mut stream = tokio::net::TcpStream::connect(addr).await?;
+        info!(address = addr, "Connected to log stream server");
         let mut args_data = Vec::new();
         // pull arg preferences from the server on connect
         let mut br = tokio::io::BufReader::new(&mut stream);
         br.read_until(b'\n', &mut args_data).await?;
-        let args = serde_json::from_slice(args_data.as_slice())?;
+        let args: LogStreamArgs = serde_json::from_slice(args_data.as_slice())?;
+        debug!("Received log stream arguments");
+        if args.include_stdout || args.include_stderr {
+            let targets = if args.targets.is_empty() {
+                String::from("(any target)")
+            } else {
+                args.targets.iter().cloned().collect::<Vec<_>>().join(", ")
+            };
+            let functions = if args.functions.is_empty() {
+                String::from("(any function)")
+            } else {
+                args.functions
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let mut files = vec![];
+            if args.include_stdout {
+                files.push(STDOUT_FILE);
+            }
+            if args.include_stderr {
+                files.push(STDERR_FILE);
+            }
+            stream
+                .write_all(
+                    get_log_header(&files.join(", "), &targets, &functions, false).as_bytes(),
+                )
+                .await
+                .map_err(MonorailError::from)?;
+        }
+
         Ok(Self {
             stream: sync::Arc::new(tokio::sync::Mutex::new(stream)),
             args,
@@ -735,6 +730,7 @@ where
     }
 }
 
+#[instrument]
 async fn process_bufs(
     header: &str,
     bufs: Vec<Vec<u8>>,
@@ -753,7 +749,7 @@ async fn process_bufs(
             }
         };
         let cc_fut = async { compressor_client.data(bufs_arc).await };
-        let (res1, res2) = tokio::try_join!(lsc_fut, cc_fut)?;
+        let (_, _) = tokio::try_join!(lsc_fut, cc_fut)?;
     }
     if should_end {
         compressor_client.end().await?;
@@ -779,7 +775,7 @@ struct Compressor {
     registrations: Vec<Vec<path::PathBuf>>,
     shutdown: sync::Arc<sync::atomic::AtomicBool>,
 }
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct CompressorClient {
     file_name: String,
     encoder_index: usize,
@@ -870,12 +866,19 @@ impl Compressor {
                         };
                         match req_rx.recv()? {
                             CompressRequest::End(encoder_index) => {
+                                trace!(
+                                    encoder_index = encoder_index,
+                                    thread_id = x,
+                                    "encoder finish"
+                                );
                                 encoders[encoder_index].do_finish()?;
                             }
                             CompressRequest::Shutdown => {
+                                trace!("compressor shutdown");
                                 break;
                             }
                             CompressRequest::Data(encoder_index, data) => {
+                                trace!(lines = data.len(), thread_id = x, "encoder write");
                                 for v in data.iter() {
                                     encoders[encoder_index].write_all(&v)?;
                                 }
@@ -883,6 +886,7 @@ impl Compressor {
                         }
                     }
                     for mut enc in encoders {
+                        trace!(thread_id = x, "encoder finish");
                         enc.do_finish()?;
                     }
                     Ok::<(), MonorailError>(())
@@ -893,13 +897,7 @@ impl Compressor {
     }
 }
 
-#[derive(Serialize)]
-struct FunctionRunWorkflow<'a> {
-    status: &'a str,
-    function: &'a str,
-    target: &'a str,
-}
-
+#[instrument]
 async fn run<'a>(
     cfg: &'a Config,
     tracking_table: &tracking::Table,
@@ -911,11 +909,11 @@ async fn run<'a>(
 ) -> Result<RunOutput, MonorailError> {
     let log_stream_client = match LogStreamClient::connect("127.0.0.1:9201").await {
         Ok(lsc) => Some(lsc),
-        Err(e) => None,
+        Err(e) => {
+            debug!(error = e.to_string(), "Log streaming disabled");
+            None
+        }
     };
-    let stdout = std::io::stdout();
-    let writer = stdout.lock();
-    let mut workflow = Workflow { writer };
 
     let mut o = RunOutput {
         failed: false,
@@ -957,19 +955,25 @@ async fn run<'a>(
 
     let mut cancelled = false;
 
+    info!(num = run_data_groups.groups.len(), "processing groups");
+
     // Spawn concurrent tasks for each group of rundata
     for mut run_data_group in run_data_groups.groups {
-        workflow.log(Output::workflow(&run_data_group))?;
+        let function = &functions[run_data_group.function_index];
+        info!(
+            num = run_data_group.datas.len(),
+            function = function,
+            "processing targets",
+        );
         if cancelled {
             let mut unknowns = vec![];
-            let function = functions[run_data_group.function_index].to_owned();
             for rd in run_data_group.datas.iter_mut() {
                 let target = rd.target_path.to_owned();
-                workflow.log(Output::error(FunctionRunWorkflow {
-                    status: "aborted",
-                    function: &function,
-                    target: &rd.target_path,
-                }))?;
+                error!(
+                    status = "aborted",
+                    function = function,
+                    target = &rd.target_path
+                );
                 unknowns.push(TargetRunResult {
                     target,
                     code: None,
@@ -980,21 +984,20 @@ async fn run<'a>(
                 });
             }
             o.results.push(FunctionRunResult {
-                function,
+                function: function.to_string(),
                 successes: vec![],
                 failures: vec![],
                 unknowns,
             });
             continue;
         }
-        let function = functions[run_data_group.function_index].to_owned();
+
         let mut frr = FunctionRunResult {
-            function: function.to_owned(),
+            function: function.to_string(),
             successes: vec![],
             failures: vec![],
             unknowns: vec![],
         };
-        // let function_arc = sync::Arc::new(function);
         let mut js = tokio::task::JoinSet::new();
         let token = sync::Arc::new(tokio_util::sync::CancellationToken::new());
         let mut abort_table = HashMap::new();
@@ -1011,15 +1014,17 @@ async fn run<'a>(
                 id,
                 start_time: time::Instant::now(),
             };
-            // TODO: check file type to pick command
             let target2 = rd.target_path.clone();
-            let function2 = function.clone();
-            workflow.log(Output::workflow(FunctionRunWorkflow {
-                status: "scheduled",
-                function: &function,
-                target: &rd.target_path,
-            }))?;
-            let child = spawn_bash_task(&function, &run_data_groups.work_dir, &rd.script_path)?;
+            let function2 = function.to_string();
+            info!(
+                status = "scheduled",
+                function = function,
+                target = &rd.target_path,
+                "task"
+            );
+
+            // TODO: check file type to pick command
+            let child = spawn_bash_task(function, &run_data_groups.work_dir, &rd.script_path)?;
             let token2 = token.clone();
             let log_stream_client2 = log_stream_client.clone();
             let handle = js.spawn(async move {
@@ -1052,21 +1057,24 @@ async fn run<'a>(
                                 runtime_secs: duration.as_secs_f32(),
                             };
                             if status.success() {
-                                workflow.log(Output::workflow(FunctionRunWorkflow {
-                                    status: "success",
-                                    function: &function,
-                                    target: &rd.target_path,
-                                }))?;
+                                info!(
+                                    status = "success",
+                                    function = function,
+                                    target = &rd.target_path,
+                                    "task"
+                                );
+
                                 frr.successes.push(trr);
                             } else {
                                 // TODO: --cancel-on-error option
                                 token.cancel();
                                 cancelled = true;
-                                workflow.log(Output::error(FunctionRunWorkflow {
-                                    status: "error",
-                                    function: &function,
-                                    target: &rd.target_path,
-                                }))?;
+                                error!(
+                                    status = "failed",
+                                    function = function,
+                                    target = &rd.target_path,
+                                    "task"
+                                );
 
                                 trr.error = Some("Function returned an error".to_string());
                                 frr.failures.push(trr);
@@ -1085,11 +1093,13 @@ async fn run<'a>(
                             };
 
                             let rd = &run_data_group.datas[id];
-                            workflow.log(Output::error(FunctionRunWorkflow {
-                                status,
-                                function: &function,
-                                target: &rd.target_path,
-                            }))?;
+                            error!(
+                                status = status,
+                                function = function,
+                                target = &rd.target_path,
+                                "task"
+                            );
+
                             frr.failures.push(TargetRunResult {
                                 target: rd.target_path.to_owned(),
                                 code: None,
@@ -1107,11 +1117,13 @@ async fn run<'a>(
                             .get(&e.id())
                             .ok_or(MonorailError::from("Task id missing from abort table"))?;
                         let rd = &mut run_data_group.datas[*run_data_index];
-                        workflow.log(Output::error(FunctionRunWorkflow {
-                            status: "aborted",
-                            function: &function,
-                            target: &rd.target_path,
-                        }))?;
+                        error!(
+                            status = "aborted",
+                            function = function,
+                            target = &rd.target_path,
+                            "task"
+                        );
+
                         frr.unknowns.push(TargetRunResult {
                             target: rd.target_path.to_owned(),
                             code: None,
@@ -1691,7 +1703,7 @@ fn require_existence(work_dir: &path::Path, path: &str) -> Result<(), MonorailEr
 
     Err(MonorailError::PathDNE(path.to_owned()))
 }
-
+#[derive(Debug)]
 pub struct Lookups<'a> {
     targets: Vec<String>,
     targets_trie: Trie<u8>,
