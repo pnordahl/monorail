@@ -968,7 +968,7 @@ async fn run<'a>(
                 return Err(e);
             }
         };
-        if log_info.id >= cfg.max_retained_run_results {
+        if log_info.id >= cfg.max_retained_runs {
             log_info.id = 0;
         }
         log_info.id += 1;
@@ -1966,8 +1966,8 @@ impl FromStr for ChangeProvider {
 pub struct Config {
     #[serde(default = "Config::default_output_path")]
     output_dir: String,
-    #[serde(default = "Config::default_max_retained_run_results")]
-    max_retained_run_results: usize,
+    #[serde(default = "Config::default_max_retained_runs")]
+    max_retained_runs: usize,
     #[serde(default)]
     change_provider: ChangeProvider,
     targets: Option<Vec<Target>>,
@@ -1997,7 +1997,7 @@ impl Config {
     fn default_output_path() -> String {
         "monorail-out".to_string()
     }
-    fn default_max_retained_run_results() -> usize {
+    fn default_max_retained_runs() -> usize {
         10
     }
 }
