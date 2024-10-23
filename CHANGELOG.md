@@ -34,7 +34,7 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 
 ### Added
 
-- Replaced `monorail-bash` for running user-defined functions (UDFs) with `monorail run`
+- Replaced `monorail-bash` for running user-defined commands with `monorail run`
 - Generate a target DAG from target `uses` definitions
 - Parallel execution of UDFs guided by the target DAG
 - Tracking table for storing the change detection checkpoint and for future internal use

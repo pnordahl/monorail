@@ -1,12 +1,10 @@
 # monorail
-> An overlay for effective monorepo development.
+> A fast and composable build tool optimized for monorepos.
 
 ![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=main)
 [![Cargo](https://img.shields.io/crates/v/monorail.svg)](https://crates.io/crates/monorail)
 
 `monorail` is a tool for describing a repository as a trunk-based development monorepo. It uses a file describing the various directory paths and relationship between those paths, integrates with your version control tool, and outputs data about how the changes affect your defined targets. Striving to embrace the UNIX-philosophy, `monorail` is entirely agnostic to language, build tools, compilers, and so on. It emits structured text, making this output easily composed with other programs to act on those changes.
-
-The provided `monorail-bash` script uses the output of `monorail` to drive a robust user-defined scripting build tool. To use it, you create ordinary shell script files, define functions, and then execute them either implicitly via `monorail` change detection, or explicitly by selecting targets.
 
 See the [tutorial](#tutorial) below for a practical walkthrough of how `monorail` and `monorail-bash` work.
 
@@ -24,44 +22,36 @@ Run `cargo install --path .`
 
 At this time, Windows is unsupported.
 
-## Commands
+## Overview
 
-Use `monorail help`
+`monorail` is internally driven by two things:
 
-## Configuration
+1. A graph representation of your repository, built from a list of `target` entries and each target's `uses` list. 
+2. A change detection provider, which provides a list of files that have changed in the repository
 
-Create a `Monorail.toml` configuration file in the root of the repository, referring to the `Monorail.reference.toml` file for an annotated example.
+Changes are mapped to affected targets, and a graph traversal powers various dependency-related tasks such as target grouping for parallel execution, "depended upon by" analysis, and so forth.
 
-## Vocabulary
+Monorail has a small lexicon:
 
-Monorail has a simple lexicon:
+* `change`: a created, updated, or deleted filesystem path as reported by a change provider
+* `checkpoint`: a location in vcs history that marks the end of a sequence of changes
+* `target`: a unique container that can be referenced by change detection and script execution.
+* `uses`: a set of paths that a target depends upon
+* `ignores`: a set of paths within a target path that should not be considered during change detection
+* `function` code written in a supported language and invoked per target
 
-* vcs: the repository version control system that `monorail` integrates with to detect changes
-* change: a CRUD operation reported by the vcs as a filesystem path
-* checkpoint: a location in vcs history that marks the end of a sequence of changes
-
-`monorail` works by labeling filesystem paths within a repository as meaningful. These labels determine how changes reported by the vcs are interpreted. The label types are:
-
-* target: A unique container that can be referenced by change detection and script execution. For example, `ui`, `api`, and `database`, as directories carrying files specific to those projects, would be good candidates for being labeled as targets. You can also label directories containing multiple targets as a target (e.g. `apps` containing your projects).
-* links: A set of paths that recursively affect a target and any targets that lie in its path. For example, a `vendor` directory carrying copies of third-party code may require that all targets within a target's path subdirectories be re-tested.
-* uses: A set of paths that affect a target. For example, a directory called `common`, carrying files used by multiple targets might be referred to by multiple targets in their `uses` arrays.
-* ignores: a set of paths that do not affect a target
-
-For executing code against targets, two more terms:
-
-* extension: runs user-defined code written in a supported language
-* command: a function optionally defined in a target's script
+The tutorial in the next section will elaborate on these concepts in a practical fashion.
 
 # Tutorial
 
-_NOTE: this tutorial assumes a UNIX-like environment._
+NOTE: You'll want `jq` installed to pretty-print the output from various steps in this tutorial. If you don't want to install it, you can just omit any `| jq` that you find.
 
 In this tutorial, you'll learn about:
 
-  * mapping repository paths to targets
-  * analyzing
-  * defining commands
-  * executing commands
+  * mapping repository paths to targets, uses, and ignores
+  * analysis
+  * defining and executing commands
+  * command logging
   * checkpointing
 
 ## One-time setup
@@ -70,48 +60,424 @@ First, create a fresh `git` repository, and another to act as a remote:
 
 ```sh
 git init --initial-branch=master monorail-tutorial
-git init --initial-branch=master monorail-tutorial-remote
-REMOTE_TRUNK=$(git -C monorail-tutorial-remote branch --show-current)
-git -C monorail-tutorial-remote checkout -b x
 cd monorail-tutorial
-git remote add origin ../monorail-tutorial-remote
-git commit --allow-empty -m "HEAD"
-git push --set-upstream origin $REMOTE_TRUNK
+git commit -m x --allow-empty # initial commit
+echo 'monorail-out' > .gitignore
 ```
 
 _NOTE_: the commit is to create a valid HEAD reference, and the branch checkout in the remote is to avoid `receive.denyCurrentBranch` errors from `git` when we push during the tutorial.
 
-## Defining a target
 
-To get started, generate a directory structure with the following shell commands:
+First, we will set up some toy projects to help get a feel for using `monorail`. Since `rust` is already installed, we'll use that in addition to `python` (which you likely also have installed; if not, go ahead and do so). The third project will not include any real code, because it's just going to illustrate how shared dependencies are considered during execution of commands. Finally, each will get an empty `monorail.sh` file that we will add code to as the tutorial proceeds.
 
-```sh
-mkdir -p rust
-touch Monorail.toml
-```
-... which yields the following directory structure:
-
-```
-├── Monorail.toml
-└── rust
-```
-
-_NOTE_: the remainder of this tutorial will apply updates to the `Monorail.toml` file with heredoc strings, for convenience.
-
-Execute the following to map the path `rust` to a target in `Monorail.toml`; this will act as a sort of "group" for additional targets we will create later:
+### Rust
+These commands will make a rust workspace with two member projects with tests:
 
 ```sh
-cat <<EOF > Monorail.toml
-[[targets]]
-path = "rust"
+mkdir -p rust/monorail
+pushd rust
+cargo init --lib app1
+cargo init --lib app2
+cat <<EOF > Cargo.toml
+[workspace]
+resolver = "2"
+members = [
+  "app1",
+  "app2"
+]
+EOF
+popd
+```
+
+### Python
+These commands will make a simple python project with a virtualenv and a test:
+```sh
+mkdir -p python/app3/monorail
+pushd python/app3
+
+python3 -m venv "venv"
+source venv/bin/activate 
+cat <<EOF > hello.py
+def get_message():
+    return "Hello, World!"
+
+def main():
+    print(get_message())
+
+if __name__ == "__main__":
+    main()
+EOF
+mkdir tests
+cat <<EOF > tests/test_hello.py
+import unittest
+from hello import get_message
+
+class TestHello(unittest.TestCase):
+    def test_get_message(self):
+        self.assertEqual(get_message(), "Hello, World!")
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+deactivate
+popd
+```
+### Protobuf
+```sh
+mkdir -p proto/monorail
+pushd proto
+touch README.md
+popd
+```
+
+## Mapping targets
+
+Now that our repository structure is in place, we will create a `Monorail.json` file that describes this structure in terms `monorail` understands. This command will create a `Monorail.json` file in the root of the repository, and simply map top level paths to targets:
+
+```sh
+cat <<EOF > Monorail.json
+{
+  "targets": [
+    { "path": "rust" },
+    { "path": "python/app3" },
+    { "path": "proto" }
+  ]
+}
 EOF
 ```
 
-_NOTE_: All filesystem locations specified in `Monorail.toml` are relative to the root the repository.
+This is how you generally specify targets; a unique filesystem path relative to the root of your repository.
+
+Running `monorail config show | jq` produces the following output (which includes some default values for things not specified), indicating that our config file is well-formed:
+
+```json
+{
+  "output_dir": "monorail-out",
+  "max_retained_run_results": 10,
+  "change_provider": "git",
+  "targets": [
+    {
+      "path": "rust",
+      "uses": null,
+      "ignores": null,
+      "commands_path": "monorail",
+      "commands": null
+    },
+    {
+      "path": "python/app3",
+      "uses": null,
+      "ignores": null,
+      "commands_path": "monorail",
+      "commands": null
+    },
+    {
+      "path": "proto",
+      "uses": null,
+      "ignores": null,
+      "commands_path": "monorail",
+      "commands": null
+    }
+  ]
+}
+```
+
+## Preview: running commands
+
+Commands will be covered in more depth later in the tutorial (along with logging), but now that we have a valid `Monorail.toml` we can execute a command and view logs right away. Run the following to create an executable (in this case, a bash script) for the `rust` target:
+
+```sh
+cat <<EOF > rust/monorail/test.sh
+#!/bin/bash
+
+echo "Hello, world!"
+EOF
+chmod +x rust/monorail/test.sh
+```
+
+Now execute it: `monorail run -c test`
+
+```json
+{
+  "failed": false,
+  "results": [
+    {
+      "command": "test",
+      "successes": [
+        {
+          "target": "rust",
+          "code": 0,
+          "stdout_path": "/Users/patrick/lab/monorail-tutorial/monorail-out/log/6/test/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst",
+          "stderr_path": "/Users/patrick/lab/monorail-tutorial/monorail-out/log/6/test/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst",
+          "runtime_secs": 0.002611583
+        }
+      ],
+      "failures": [],
+      "unknowns": []
+    }
+  ]
+}
+```
+
+You can also view logs, both historically and by tailing (shown in more detail later). Show the logs for the most recent `run`:
+
+```sh
+monorail log show --stdout
+```
+```
+[monorail | stdout.zst | rust | test]
+Hello, world!
+```
+
+In this example, we just used `monorail` as a simple command runner like `make` or `just`. However, unlike these other tools `monorail` is capable of running commands in parallel based on your dependency graph, streaming logs, collecting historical results and compressed logs, and more.
+
+Before we explore commands and logging in more detail, it's important to understand how `monorail` detects changes. In the next section we'll use the 
 
 ## Analyzing changes
 
-`monorail` will detect changes since the last checkpoint; see: [Checkpointing](#checkpointing). For `git`, this means uncommitted, committed, and pushed files since the last annotated tag created by `monorail checkpoint create`.
+`monorail` integrates with a `change_provider` to obtain a view of filesystem changes, which are processed along with a graph built from the specification in `Monorail.toml`. Display an analysis of this changeset and graph with:
+
+```sh
+monorail analysis show | jq
+```
+```json
+{
+  "targets": [
+    "proto",
+    "python/app3",
+    "rust"
+  ]
+}
+```
+
+This indicates that based on our current changeset and graph, all three targets have changed. Display more information by adding `--change-targets`:
+```sh
+monorail analysis show --change-targets | jq
+```
+```json
+{
+  "changes": ["... hundreds of entries ..."],
+  "targets": [
+    "proto",
+    "python/app3",
+    "rust"
+  ]
+}
+```
+
+Unfortunately, hundreds of virtualenv files are in our changes array. In the next section, we'll rectify this.
+
+### Ignoring with .gitignore
+
+As mentioned, `monorail` defers change detection to a provider. Since our change provider is `git`, we can exclude these files by adding them to `.gitignore`:
+
+```sh
+echo 'python/app3/venv' >> .gitignore
+```
+
+Re-running the commnand, notice that all of the offending files are gone:
+```sh
+monorail analysis show --changes | jq | less
+```
+```json
+{
+  "changes": [
+    {
+      "path": ".gitignore"
+    },
+    {
+      "path": "Monorail.json"
+    },
+    {
+      "path": "proto/app.proto"
+    },
+    {
+      "path": "python/app3/hello.py"
+    },
+    {
+      "path": "python/app3/tests/test_hello.py"
+    },
+    {
+      "path": "rust/Cargo.toml"
+    },
+    {
+      "path": "rust/app1/Cargo.toml"
+    },
+    {
+      "path": "rust/app1/src/lib.rs"
+    },
+    {
+      "path": "rust/app2/Cargo.toml"
+    },
+    {
+      "path": "rust/app2/src/lib.rs"
+    }
+  ],
+  "targets": [
+    "proto",
+    "python/app3",
+    "rust"
+
+```
+
+### Ignoring with 'ignores'
+
+For directories and files we need checked in, but do not want to consider as a reason for a target to be considered changed, there is the 'ignores' array. This is useful for things like a README.md, docs, etc. Run the following to ignore the README file in the proto target:
+
+
+```sh
+cat <<EOF > Monorail.json
+{
+  "targets": [
+    { "path": "rust" },
+    { "path": "python/app3" },
+    { "path": "proto", "ignores": [ "proto/README.md" ] }
+  ]
+}
+EOF
+```
+
+Running the analysis again, but as a preview for the next section add the `--target-groups` flag. Note that `proto` no longer appears in the list of changed targets, and a new array of arrays has appeared:
+
+```sh
+monorail analysis show --target-groups | jq
+```
+```json
+{
+  "targets": [
+    "python/app3",
+    "rust"
+  ],
+  "target_groups": [
+    [
+      "rust",
+      "python/app3"
+    ]
+  ]
+}
+```
+
+The `target_groups` array is built by constructing a graph from the dependencies specified in `Monorail.json`. This is used to control parallel command execution, ensuring that maximum parallelism is achieved while respecting the hierarchy of dependencies at any given time. In the next section, we will establish a simple dependency graph between our targets.
+
+## Dependencies
+
+## Logging 
+
+### Historical
+
+### Tailing
+
+## Commands
+
+
+
+
+Next, we will manipulate the changes being used to derive this list of targets with the `checkpoint`.
+
+## Checkpoint
+
+The `checkpoint` is a marker in change provider history (see: [Checkpointing](#checkpointing). When present, it is used as the beginning of an interval in history used for collecting a set of changes. The end of this interval is the latest point in change provider history. In addition, any pending changes not present in history are merged with the history set.
+
+For `git`, the checkpoint is stored as a reference such as HEAD, or an object SHA. Pending changes are untracked and uncommitted files. Therefore, the set of changes reported by the `git` change provider is: `[<checkpoint>, ..., HEAD] + [untracked] + [uncommitted]`.
+
+Now, for a practical example. First, query the checkpoint:
+
+```sh
+monorail checkpoint show
+```
+```json
+{"kind":"error","type":"tracking_checkpoint_not_found","message":"Tracking checkpoint open error; No such file or directory (os error 2)"}
+```
+
+This error is fine, because by default no checkpoint exists. This means that all of the various files we've added are seen by `monorail` as changes. Now, update the checkpoint to include the current "latest point" in history; since we have only our initial HEAD commit, that's what we see:
+
+```sh
+monorail checkpoint update | jq
+```
+```json
+{
+  "checkpoint": {
+    "id": "head",
+    "pending": null
+  }
+}
+```
+
+This is however, not so useful; none of the files we've added have been committed so this doesn't affect analysis results like we'd want:
+
+```sh
+monorail analysis show | jq
+```
+```json
+{
+  "targets": [
+    "python/app3",
+    "rust"
+  ]
+}
+```
+
+The key is to add --pending or -p when updating the checkpoint, which will include those files and their SHA2 checksums in the checkpoint:
+
+```sh
+monorail checkpoint update --pending | jq
+```
+```json
+{
+  "checkpoint": {
+    "id": "head",
+    "pending": {
+      "rust/monorail/test.sh": "664e00829847270dd823957d46bf19b6c9618743527f7bfa057c338328911393",
+      "rust/Cargo.toml": "a35f77bcdb163b0880db4c5efeb666f96496bcb409b4cd52ba6df517fb4d625b",
+      "rust/app2/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9",
+      "python/app3/tests/test_hello.py": "72b3668ed95f4f246150f5f618e71f6cdbd397af785cd6f1137ee87524566948",
+      ".gitignore": "c1cf4f9ff4b1419420b8508426051e8925e2888b94b0d830e27b9071989e8e7d",
+      "Monorail.json": "56d18cfea88a841a06e3f240f843e61aefec87866544aaee796de9b78b893a31",
+      "rust/app1/Cargo.toml": "044de847669ad2d9681ba25c4c71e584b5f12d836b9a49e71b4c8d68119e5592",
+      "rust/app2/Cargo.toml": "111f4cf0fd1b6ce6f690a5f938599be41963905db7d1169ec02684b00494e383",
+      "proto/app.proto": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "python/app3/hello.py": "3639634f2916441a55e4b9be3497673f110014d0ce3b241c93a9794ffcf2c910",
+      "rust/app1/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9"
+    }
+  }
+}
+```
+
+Now, `monorail` knows that these pending changes are no longer considered changed:
+
+```sh
+monorail analysis show | jq
+```
+```json
+{
+  "targets": []
+}
+```
+
+The `checkpoint` is a powerful way to control the view of changes in a repository. Here are a few ways you can use it:
+
+1. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ### Analyze showing no affected targets
 

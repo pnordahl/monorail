@@ -66,14 +66,14 @@ impl LogInfo {
 pub(crate) struct Checkpoint {
     #[serde(skip)]
     pub(crate) path: path::PathBuf,
-    pub(crate) commit: String,
+    pub(crate) id: String,
     pub(crate) pending: Option<HashMap<String, String>>,
 }
 impl Checkpoint {
     pub(crate) fn new(file_path: &path::Path) -> Self {
         Self {
             path: file_path.to_path_buf(),
-            commit: String::new(),
+            id: String::new(),
             pending: None,
         }
     }

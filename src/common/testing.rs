@@ -17,6 +17,7 @@ pub fn repo_path(test_path: &path::Path, n: usize) -> path::PathBuf {
 pub async fn init(bare: bool) -> path::PathBuf {
     let id = GLOBAL_REPO_ID.fetch_add(1, Ordering::SeqCst);
     let test_path = test_path();
+    tokio::fs::create_dir_all(&test_path).await.unwrap();
     let repo_path = repo_path(&test_path, id);
     let mut args = vec!["init", repo_path.to_str().unwrap()];
     if bare {
@@ -25,6 +26,7 @@ pub async fn init(bare: bool) -> path::PathBuf {
     if repo_path.exists() {
         tokio::fs::remove_dir_all(&repo_path).await.unwrap_or(());
     }
+    dbg!(&test_path);
     let _ = tokio::process::Command::new("git")
         .args(&args)
         .current_dir(&test_path)

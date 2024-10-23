@@ -29,7 +29,7 @@ pub const ARG_CONFIG_FILE: &str = "config-file";
 pub const ARG_WORKING_DIRECTORY: &str = "working-directory";
 pub const ARG_OUTPUT_FORMAT: &str = "output-format";
 pub const ARG_PENDING: &str = "pending";
-pub const ARG_FUNCTION: &str = "function";
+pub const ARG_COMMAND: &str = "command";
 pub const ARG_TARGET: &str = "target";
 pub const ARG_CHANGES: &str = "changes";
 pub const ARG_CHANGE_TARGETS: &str = "change-targets";
@@ -68,14 +68,14 @@ pub fn get_app() -> clap::Command {
         .value_parser(clap::value_parser!(usize))
         .num_args(1)
         .help("Result id to query; if not provided, the most recent will be used");
-    let arg_log_function = Arg::new(ARG_FUNCTION)
-        .short('f')
-        .long(ARG_FUNCTION)
+    let arg_log_command = Arg::new(ARG_COMMAND)
+        .short('c')
+        .long(ARG_COMMAND)
         .required(false)
         .num_args(1..)
         .value_delimiter(' ')
         .action(ArgAction::Append)
-        .help("A list functions for which to include logs");
+        .help("A list commands for which to include logs");
     let arg_log_target = Arg::new(ARG_TARGET)
         .short('t')
         .long(ARG_TARGET)
@@ -101,11 +101,11 @@ pub fn get_app() -> clap::Command {
     .about("An overlay for effective monorepo development.")
     .arg(
         Arg::new(ARG_CONFIG_FILE)
-            .short('c')
+            .short('f')
             .long(ARG_CONFIG_FILE)
             .help("Sets a file to use for configuration")
             .num_args(1)
-            .default_value("Monorail.toml"),
+            .default_value("Monorail.json"),
     )
     .arg(
         Arg::new(ARG_WORKING_DIRECTORY)
@@ -171,20 +171,20 @@ pub fn get_app() -> clap::Command {
     ))
 
     .subcommand(Command::new(CMD_RUN)
-        .about("Run target-defined functions.")
-        .after_help(r#"Execute the provided functions for a graph traversal rooted at the targets specified (optional), or inferred target groups via change detection and graph analysis."#)
+        .about("Run target-defined commands.")
+        .after_help(r#"Execute the provided commands for a graph traversal rooted at the targets specified (optional), or inferred target groups via change detection and graph analysis."#)
         .arg(arg_git_path.clone())
         .arg(arg_start.clone())
         .arg(arg_end.clone())
         .arg(
-            Arg::new(ARG_FUNCTION)
-                .short('f')
-                .long(ARG_FUNCTION)
+            Arg::new(ARG_COMMAND)
+                .short('c')
+                .long(ARG_COMMAND)
                 .required(true)
                 .num_args(1..)
                 .value_delimiter(' ')
                 .action(ArgAction::Append)
-                .help("A list functions that will be executed, in the order specified.")
+                .help("A list commands that will be executed, in the order specified.")
         )
         .arg(
             Arg::new(ARG_TARGET)
@@ -194,13 +194,13 @@ pub fn get_app() -> clap::Command {
                 .value_delimiter(' ')
                 .required(false)
                 .action(ArgAction::Append)
-                .help("A list of targets for which functions will be executed. If not provided, target groups will be inferred from the target graph.")
+                .help("A list of targets for which commands will be executed. If not provided, target groups will be inferred from the target graph.")
         )
     )
     .subcommand(Command::new(CMD_RESULT).subcommand(Command::new(CMD_SHOW).about("Show results from `run` invocations")))
     /*
 
-    log --tail --result (-r) <id> --function (-f) [f1 f2 ... fN] --target (-t) [t1 t2 ... tN] --stdout --stderr
+    log --tail --result (-r) <id> --command (-f) [f1 f2 ... fN] --target (-t) [t1 t2 ... tN] --stdout --stderr
 
     */
     // TODO: monorail log delete [--all] --result [r1 r2 r3 ... rN]
@@ -210,14 +210,14 @@ pub fn get_app() -> clap::Command {
             Command::new(CMD_SHOW).about("Display run logs")
                 .after_help(r#"This command shows logs for current or historical run invocations."#)
                 .arg(arg_log_id.clone())
-                .arg(arg_log_function.clone())
+                .arg(arg_log_command.clone())
                 .arg(arg_log_target.clone())
                 .arg(arg_log_stderr.clone())
                 .arg(arg_log_stdout.clone()))
         .subcommand(
-            Command::new(CMD_TAIL).about("Receive a stream of logs from executed functions")
+            Command::new(CMD_TAIL).about("Receive a stream of logs from executed commands")
                 .arg(arg_log_id)
-                .arg(arg_log_function)
+                .arg(arg_log_command)
                 .arg(arg_log_target)
                 .arg(arg_log_stderr)
                 .arg(arg_log_stdout))
@@ -455,9 +455,9 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::RunInput<'a> {
                     .get_one::<String>(ARG_GIT_PATH)
                     .ok_or(MonorailError::MissingArg(ARG_GIT_PATH.into()))?,
             },
-            functions: cmd
-                .get_many::<String>(ARG_FUNCTION)
-                .ok_or(MonorailError::MissingArg(ARG_FUNCTION.into()))
+            commands: cmd
+                .get_many::<String>(ARG_COMMAND)
+                .ok_or(MonorailError::MissingArg(ARG_COMMAND.into()))
                 .into_iter()
                 .flatten()
                 .collect(),
@@ -498,8 +498,8 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogStreamArgs {
         Ok(Self {
             include_stdout: cmd.get_flag(ARG_STDOUT),
             include_stderr: cmd.get_flag(ARG_STDERR),
-            functions: cmd
-                .get_many::<String>(ARG_FUNCTION)
+            commands: cmd
+                .get_many::<String>(ARG_COMMAND)
                 .into_iter()
                 .flatten()
                 .map(|x| x.to_owned())

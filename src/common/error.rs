@@ -34,7 +34,6 @@ pub enum MonorailError {
     Git(String),
     Io(io::Error),
     PathDNE(String),
-    TomlDeserialize(toml::de::Error),
     SerdeJSON(serde_json::error::Error),
     Utf8(str::Utf8Error),
     ParseInt(num::ParseIntError),
@@ -78,11 +77,6 @@ impl From<std::str::Utf8Error> for MonorailError {
         MonorailError::Utf8(error)
     }
 }
-impl From<toml::de::Error> for MonorailError {
-    fn from(error: toml::de::Error) -> Self {
-        MonorailError::TomlDeserialize(error)
-    }
-}
 impl From<serde_json::error::Error> for MonorailError {
     fn from(error: serde_json::error::Error) -> Self {
         MonorailError::SerdeJSON(error)
@@ -106,9 +100,6 @@ impl fmt::Display for MonorailError {
             MonorailError::Git(error) => write!(f, "Git error; {}", error),
             MonorailError::Io(error) => write!(f, "IO error; {}", error),
             MonorailError::PathDNE(error) => write!(f, "Path does not exist: {}", error),
-            MonorailError::TomlDeserialize(error) => {
-                write!(f, "TOML deserialize error; {}", error)
-            }
             MonorailError::SerdeJSON(error) => write!(f, "JSON error; {}", error),
             MonorailError::Utf8(error) => write!(f, "UTF8 error; {}", error),
             MonorailError::ParseInt(error) => write!(f, "Integer parsing error; {}", error),
@@ -156,10 +147,6 @@ impl Serialize for MonorailError {
             }
             MonorailError::Io(_) => {
                 state.serialize_field("type", "io")?;
-                state.serialize_field("message", &self.to_string())?;
-            }
-            MonorailError::TomlDeserialize(_) => {
-                state.serialize_field("type", "toml_deserialize")?;
                 state.serialize_field("message", &self.to_string())?;
             }
             MonorailError::SerdeJSON(_) => {

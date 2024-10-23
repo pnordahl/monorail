@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::fs::PermissionsExt;
 
 use std::result::Result;
 use std::str::FromStr;
@@ -38,18 +39,18 @@ pub struct GitOptions<'a> {
 #[derive(Debug)]
 pub struct RunInput<'a> {
     pub(crate) git_opts: GitOptions<'a>,
-    pub(crate) functions: Vec<&'a String>,
+    pub(crate) commands: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RunOutput {
     pub(crate) failed: bool,
-    results: Vec<FunctionRunResult>,
+    results: Vec<CommandRunResult>,
 }
 #[derive(Debug, Serialize, Deserialize)]
-pub struct FunctionRunResult {
-    function: String,
+pub struct CommandRunResult {
+    command: String,
     successes: Vec<TargetRunResult>,
     failures: Vec<TargetRunResult>,
     unknowns: Vec<TargetRunResult>,
@@ -130,12 +131,12 @@ async fn get_git_diff_changes<'a>(
     work_dir: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
     let start = git_opts.start.or_else(|| {
-        // otherwise, check checkpoint.commit; if provided, use that
+        // otherwise, check checkpoint.id; if provided, use that
         if let Some(checkpoint) = checkpoint {
-            if checkpoint.commit.is_empty() {
+            if checkpoint.id.is_empty() {
                 None
             } else {
-                Some(&checkpoint.commit)
+                Some(&checkpoint.id)
             }
         } else {
             // if not then there's nowhere to start from, and we're done
@@ -246,7 +247,7 @@ pub fn handle_log_show<'a>(
     for fn_entry in log_dir.read_dir()? {
         let fn_path = fn_entry?.path();
         if fn_path.is_dir() {
-            let function = fn_path.file_name().unwrap().to_str().unwrap();
+            let command = fn_path.file_name().unwrap().to_str().unwrap();
             for t_entry in fn_path.read_dir()? {
                 let t_path = t_entry?.path();
                 if t_path.is_dir() {
@@ -270,14 +271,14 @@ pub fn handle_log_show<'a>(
                             .ok_or(MonorailError::from("Bad file name string"))?;
                         if is_log_allowed(
                             &input.args.targets,
-                            &input.args.functions,
+                            &input.args.commands,
                             &target,
-                            &function,
+                            &command,
                         ) {
                             if filename == STDOUT_FILE && input.args.include_stdout
                                 || filename == STDERR_FILE && input.args.include_stderr
                             {
-                                let header = get_log_header(filename, target, function, true);
+                                let header = get_log_header(filename, target, command, true);
                                 let header_bytes = header.as_bytes();
                                 stream_archive_file_to_stdout(header_bytes, &p, &mut stdout)?;
                             }
@@ -291,16 +292,16 @@ pub fn handle_log_show<'a>(
     Ok(())
 }
 
-fn get_log_header(filename: &str, target: &str, function: &str, color: bool) -> String {
+fn get_log_header(filename: &str, target: &str, command: &str, color: bool) -> String {
     if color {
         let filename_color = match filename {
             STDOUT_FILE => "\x1b[38;5;81m",
             STDERR_FILE => "\x1b[38;5;214m",
             _ => "",
         };
-        format!("[monorail | {filename_color}{filename}{RESET_COLOR} | {target} | {function}]\n")
+        format!("[monorail | {filename_color}{filename}{RESET_COLOR} | {target} | {command}]\n")
     } else {
-        format!("[monorail | {filename} | {target} | {function}]\n")
+        format!("[monorail | {filename} | {target} | {command}]\n")
     }
 }
 
@@ -351,8 +352,8 @@ pub async fn handle_run<'a>(
                 }
             };
 
-            let changes = match cfg.vcs.r#use {
-                VcsKind::Git => {
+            let changes = match cfg.change_provider {
+                ChangeProvider::Git => {
                     get_git_diff_changes(&input.git_opts, &checkpoint, work_dir).await?
                 }
             };
@@ -365,7 +366,7 @@ pub async fn handle_run<'a>(
                 &tracking_table,
                 &lookups,
                 work_dir,
-                &input.functions,
+                &input.commands,
                 targets.clone(),
                 &target_groups,
             )
@@ -382,7 +383,7 @@ pub async fn handle_run<'a>(
                 &tracking_table,
                 &lookups,
                 work_dir,
-                &input.functions,
+                &input.commands,
                 targets.clone(),
                 &target_groups,
             )
@@ -393,14 +394,15 @@ pub async fn handle_run<'a>(
 #[derive(Serialize)]
 struct RunData {
     target_path: String,
-    script_path: String,
+    command_path: Option<path::PathBuf>,
+    command_args: Option<Vec<String>>,
     #[serde(skip)]
     logs: Logs,
 }
 #[derive(Serialize)]
 struct RunDataGroup {
     #[serde(skip)]
-    function_index: usize,
+    command_index: usize,
     datas: Vec<RunData>,
 }
 #[derive(Serialize)]
@@ -409,10 +411,41 @@ struct RunDataGroups {
     groups: Vec<RunDataGroup>,
 }
 
+fn find_command_executable(name: &str, dir: &path::Path) -> Option<path::PathBuf> {
+    debug!(
+        name = name,
+        dir = dir.display().to_string(),
+        "Command search"
+    );
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(stem) = path.file_stem() {
+                        if stem == name {
+                            return Some(path.to_path_buf());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn is_executable(p: &path::Path) -> bool {
+    if let Ok(metadata) = std::fs::metadata(p) {
+        let permissions = metadata.permissions();
+        return permissions.mode() & 0o111 != 0;
+    }
+    false
+}
+
 // Create an initial run output with unknowns, and build the RunData for each target group.
 fn get_run_data_groups<'a>(
     lookups: &Lookups<'_>,
-    functions: &'a [&'a String],
+    commands: &'a [&'a String],
     targets: &[Target],
     target_groups: &[Vec<String>],
     work_dir: &path::Path,
@@ -422,13 +455,13 @@ fn get_run_data_groups<'a>(
     let mut path_hasher = sha2::Sha256::new();
 
     let mut groups = Vec::with_capacity(target_groups.len());
-    let mut frrs = Vec::with_capacity(target_groups.len());
-    for (i, f) in functions.iter().enumerate() {
+    let mut crrs = Vec::with_capacity(target_groups.len());
+    for (i, c) in commands.iter().enumerate() {
         for group in target_groups {
             let mut run_data = Vec::with_capacity(group.len());
             let mut unknowns = Vec::with_capacity(group.len());
             for target_path in group {
-                let logs = Logs::new(log_dir, f.as_str(), target_path, &mut path_hasher)?;
+                let logs = Logs::new(log_dir, c.as_str(), target_path, &mut path_hasher)?;
                 unknowns.push(TargetRunResult {
                     target: target_path.to_owned(),
                     code: None,
@@ -448,35 +481,43 @@ fn get_run_data_groups<'a>(
                 let target = targets
                     .get(target_index)
                     .ok_or(MonorailError::from("Target not found"))?;
-                let script_path = std::path::Path::new(&target_path)
-                    .join(&target.run)
-                    .to_str()
-                    .ok_or(MonorailError::from("Run file not found"))?
-                    .to_owned();
+                let commands_path = work_dir.join(&target_path).join(&target.commands_path);
+                let mut command_args = None;
+                let command_path = match &target.commands {
+                    Some(commands) => match commands.get(c.as_str()) {
+                        Some(def) => {
+                            command_args = Some(def.args.clone());
+                            Some(commands_path.join(&def.exec))
+                        }
+                        None => find_command_executable(&c, &commands_path),
+                    },
+                    None => find_command_executable(&c, &commands_path),
+                };
                 run_data.push(RunData {
                     target_path: target_path.to_owned(),
-                    script_path: script_path.to_owned(),
+                    command_path,
+                    command_args,
                     logs,
                 });
             }
             groups.push(RunDataGroup {
-                function_index: i,
+                command_index: i,
                 datas: run_data,
             });
-            let frr = FunctionRunResult {
-                function: f.to_string(),
+            let crr = CommandRunResult {
+                command: c.to_string(),
                 successes: vec![],
                 failures: vec![],
                 unknowns,
             };
-            frrs.push(frr);
+            crrs.push(crr);
         }
     }
 
     Ok((
         RunOutput {
             failed: false,
-            results: frrs,
+            results: crrs,
         },
         RunDataGroups {
             work_dir: work_dir.to_path_buf(),
@@ -485,47 +526,52 @@ fn get_run_data_groups<'a>(
     ))
 }
 
-pub fn spawn_bash_task(
-    function: &str,
+pub fn spawn_task(
     work_dir: &path::Path,
-    script_path: &str,
+    command_path: &path::Path,
+    command_args: &Option<Vec<String>>,
 ) -> Result<tokio::process::Child, MonorailError> {
-    tokio::process::Command::new("bash")
-        .arg("-c")
-        .arg(format!("source $(pwd)/{} && {}", script_path, function))
-        .current_dir(work_dir)
+    debug!(
+        command_path = command_path.display().to_string(),
+        command_args = command_args.clone().unwrap_or(vec![]).join(", "),
+        "Spawn task"
+    );
+    let mut cmd = tokio::process::Command::new(command_path);
+    cmd.current_dir(work_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         // parallel execution makes use of stdin impractical
-        .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(MonorailError::from)
+        .stdin(std::process::Stdio::null());
+    if let Some(ca) = command_args {
+        cmd.args(ca);
+    }
+    cmd.spawn().map_err(MonorailError::from)
 }
 
 fn is_log_allowed(
     targets: &HashSet<String>,
-    functions: &HashSet<String>,
+    commands: &HashSet<String>,
     target: &str,
-    function: &str,
+    command: &str,
 ) -> bool {
     let target_allowed = targets.is_empty() || targets.contains(target);
-    let function_allowed = functions.is_empty() || functions.contains(function);
-    target_allowed && function_allowed
+    let command_allowed = commands.is_empty() || commands.contains(command);
+    target_allowed && command_allowed
 }
 
 #[derive(Debug)]
-struct FunctionTask {
+struct CommandTask {
     id: usize,
     start_time: time::Instant,
 }
-impl FunctionTask {
+impl CommandTask {
     #[instrument]
     async fn run(
         &mut self,
         mut child: tokio::process::Child,
         token: sync::Arc<tokio_util::sync::CancellationToken>,
         target: String,
-        function: String,
+        command: String,
         stdout_client: CompressorClient,
         stderr_client: CompressorClient,
         log_stream_client: Option<LogStreamClient>,
@@ -536,7 +582,7 @@ impl FunctionTask {
         let (stdout_log_stream_client, stderr_log_stream_client) = match log_stream_client {
             Some(lsc) => {
                 let allowed =
-                    is_log_allowed(&lsc.args.targets, &lsc.args.functions, &target, &function);
+                    is_log_allowed(&lsc.args.targets, &lsc.args.commands, &target, &command);
                 let stdout_lsc = if allowed && lsc.args.include_stdout {
                     Some(lsc.clone())
                 } else {
@@ -551,7 +597,7 @@ impl FunctionTask {
             }
             None => (None, None),
         };
-        let stdout_header = get_log_header(&stdout_client.file_name, &target, &function, true);
+        let stdout_header = get_log_header(&stdout_client.file_name, &target, &command, true);
         let stdout_fut = process_reader(
             tokio::io::BufReader::new(child.stdout.take().unwrap()),
             stdout_client,
@@ -559,7 +605,7 @@ impl FunctionTask {
             stdout_log_stream_client,
             token.clone(),
         );
-        let stderr_header = get_log_header(&stderr_client.file_name, &target, &function, true);
+        let stderr_header = get_log_header(&stderr_client.file_name, &target, &command, true);
         let stderr_fut = process_reader(
             tokio::io::BufReader::new(child.stderr.take().unwrap()),
             stderr_client,
@@ -578,7 +624,7 @@ impl FunctionTask {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LogStreamArgs {
-    pub functions: HashSet<String>,
+    pub commands: HashSet<String>,
     pub targets: HashSet<String>,
     pub include_stdout: bool,
     pub include_stderr: bool,
@@ -655,14 +701,10 @@ impl LogStreamClient {
             } else {
                 args.targets.iter().cloned().collect::<Vec<_>>().join(", ")
             };
-            let functions = if args.functions.is_empty() {
-                String::from("(any function)")
+            let commands = if args.commands.is_empty() {
+                String::from("(any command)")
             } else {
-                args.functions
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                args.commands.iter().cloned().collect::<Vec<_>>().join(", ")
             };
             let mut files = vec![];
             if args.include_stdout {
@@ -672,9 +714,7 @@ impl LogStreamClient {
                 files.push(STDERR_FILE);
             }
             stream
-                .write_all(
-                    get_log_header(&files.join(", "), &targets, &functions, false).as_bytes(),
-                )
+                .write_all(get_log_header(&files.join(", "), &targets, &commands, false).as_bytes())
                 .await
                 .map_err(MonorailError::from)?;
         }
@@ -903,7 +943,7 @@ async fn run<'a>(
     tracking_table: &tracking::Table,
     lookups: &Lookups<'_>,
     work_dir: &path::Path,
-    functions: &'a [&'a String],
+    commands: &'a [&'a String],
     targets: Vec<Target>,
     target_groups: &[Vec<String>],
 ) -> Result<RunOutput, MonorailError> {
@@ -943,7 +983,7 @@ async fn run<'a>(
 
     let (initial_run_output, run_data_groups) = get_run_data_groups(
         lookups,
-        functions,
+        commands,
         &targets,
         target_groups,
         work_dir,
@@ -959,10 +999,10 @@ async fn run<'a>(
 
     // Spawn concurrent tasks for each group of rundata
     for mut run_data_group in run_data_groups.groups {
-        let function = &functions[run_data_group.function_index];
+        let command = &commands[run_data_group.command_index];
         info!(
             num = run_data_group.datas.len(),
-            function = function,
+            command = command,
             "processing targets",
         );
         if cancelled {
@@ -971,7 +1011,7 @@ async fn run<'a>(
                 let target = rd.target_path.to_owned();
                 error!(
                     status = "aborted",
-                    function = function,
+                    command = command,
                     target = &rd.target_path
                 );
                 unknowns.push(TargetRunResult {
@@ -979,12 +1019,12 @@ async fn run<'a>(
                     code: None,
                     stdout_path: None,
                     stderr_path: None,
-                    error: Some("Function task cancelled".to_string()),
+                    error: Some("command task cancelled".to_string()),
                     runtime_secs: 0.0,
                 });
             }
-            o.results.push(FunctionRunResult {
-                function: function.to_string(),
+            o.results.push(CommandRunResult {
+                command: command.to_string(),
                 successes: vec![],
                 failures: vec![],
                 unknowns,
@@ -992,8 +1032,8 @@ async fn run<'a>(
             continue;
         }
 
-        let mut frr = FunctionRunResult {
-            function: function.to_string(),
+        let mut crr = CommandRunResult {
+            command: command.to_string(),
             successes: vec![],
             failures: vec![],
             unknowns: vec![],
@@ -1010,36 +1050,71 @@ async fn run<'a>(
             let stderr_client = compressor.register(&rd.logs.stderr_path)?;
             compressor_clients.push(stdout_client.clone());
             compressor_clients.push(stderr_client.clone());
-            let mut ft = FunctionTask {
+            let mut ft = CommandTask {
                 id,
                 start_time: time::Instant::now(),
             };
             let target2 = rd.target_path.clone();
-            let function2 = function.to_string();
-            info!(
-                status = "scheduled",
-                function = function,
-                target = &rd.target_path,
-                "task"
-            );
+            let command2 = command.to_string();
 
-            // TODO: check file type to pick command
-            let child = spawn_bash_task(function, &run_data_groups.work_dir, &rd.script_path)?;
-            let token2 = token.clone();
-            let log_stream_client2 = log_stream_client.clone();
-            let handle = js.spawn(async move {
-                ft.run(
-                    child,
-                    token2,
-                    target2,
-                    function2,
-                    stdout_client,
-                    stderr_client,
-                    log_stream_client2,
-                )
-                .await
-            });
-            abort_table.insert(handle.id(), id);
+            if let Some(command_path) = &rd.command_path {
+                // check that the command path is executable before proceeding
+                if is_executable(command_path) {
+                    info!(
+                        status = "scheduled",
+                        command = command,
+                        target = &rd.target_path,
+                        "task"
+                    );
+                    let child =
+                        spawn_task(&run_data_groups.work_dir, &command_path, &rd.command_args)?;
+                    let token2 = token.clone();
+                    let log_stream_client2 = log_stream_client.clone();
+                    let handle = js.spawn(async move {
+                        ft.run(
+                            child,
+                            token2,
+                            target2,
+                            command2,
+                            stdout_client,
+                            stderr_client,
+                            log_stream_client2,
+                        )
+                        .await
+                    });
+                    abort_table.insert(handle.id(), id);
+                } else {
+                    info!(
+                        status = "non_executable",
+                        command = command,
+                        target = &rd.target_path,
+                        "task"
+                    );
+                    crr.unknowns.push(TargetRunResult {
+                        target: target2,
+                        code: None,
+                        stdout_path: None,
+                        stderr_path: None,
+                        error: Some("command not executable".to_string()),
+                        runtime_secs: 0.0,
+                    });
+                }
+            } else {
+                info!(
+                    status = "undefined",
+                    command = command,
+                    target = &rd.target_path,
+                    "task"
+                );
+                crr.unknowns.push(TargetRunResult {
+                    target: target2,
+                    code: None,
+                    stdout_path: None,
+                    stderr_path: None,
+                    error: Some("command not found".to_string()),
+                    runtime_secs: 0.0,
+                });
+            }
         }
         let compressor_handle = std::thread::spawn(move || compressor.run());
         while let Some(join_res) = js.join_next().await {
@@ -1059,25 +1134,25 @@ async fn run<'a>(
                             if status.success() {
                                 info!(
                                     status = "success",
-                                    function = function,
+                                    command = command,
                                     target = &rd.target_path,
                                     "task"
                                 );
 
-                                frr.successes.push(trr);
+                                crr.successes.push(trr);
                             } else {
                                 // TODO: --cancel-on-error option
                                 token.cancel();
                                 cancelled = true;
                                 error!(
                                     status = "failed",
-                                    function = function,
+                                    command = command,
                                     target = &rd.target_path,
                                     "task"
                                 );
 
-                                trr.error = Some("Function returned an error".to_string());
-                                frr.failures.push(trr);
+                                trr.error = Some("command returned an error".to_string());
+                                crr.failures.push(trr);
                             }
                         }
                         Err((id, duration, e)) => {
@@ -1087,20 +1162,20 @@ async fn run<'a>(
 
                             let (status, message) = match e {
                                 MonorailError::TaskCancelled => {
-                                    ("cancelled", "Function task cancelled".to_string())
+                                    ("cancelled", "command task cancelled".to_string())
                                 }
-                                _ => ("error", format!("Function task failed: {}", e)),
+                                _ => ("error", format!("command task failed: {}", e)),
                             };
 
                             let rd = &run_data_group.datas[id];
                             error!(
                                 status = status,
-                                function = function,
+                                command = command,
                                 target = &rd.target_path,
                                 "task"
                             );
 
-                            frr.failures.push(TargetRunResult {
+                            crr.failures.push(TargetRunResult {
                                 target: rd.target_path.to_owned(),
                                 code: None,
                                 stdout_path: Some(rd.logs.stdout_path.to_owned()),
@@ -1119,17 +1194,17 @@ async fn run<'a>(
                         let rd = &mut run_data_group.datas[*run_data_index];
                         error!(
                             status = "aborted",
-                            function = function,
+                            command = command,
                             target = &rd.target_path,
                             "task"
                         );
 
-                        frr.unknowns.push(TargetRunResult {
+                        crr.unknowns.push(TargetRunResult {
                             target: rd.target_path.to_owned(),
                             code: None,
                             stdout_path: None,
                             stderr_path: None,
-                            error: Some("Function task cancelled".to_string()),
+                            error: Some("command task cancelled".to_string()),
                             runtime_secs: 0.0,
                         })
                     }
@@ -1144,10 +1219,10 @@ async fn run<'a>(
         // because it doesn't impl Error; however, the internals of this handle do, so they
         // will get propagated.
         compressor_handle.join().unwrap()?;
-        if !frr.failures.is_empty() || !frr.unknowns.is_empty() {
+        if !crr.failures.is_empty() {
             o.failed = true;
         }
-        o.results.push(frr);
+        o.results.push(crr);
     }
 
     // Update the run output with final results
@@ -1179,13 +1254,13 @@ pub struct Logs {
 impl Logs {
     fn new(
         log_dir: &path::Path,
-        function: &str,
+        command: &str,
         target_path: &str,
         hasher: &mut sha2::Sha256,
     ) -> Result<Self, MonorailError> {
         hasher.update(target_path);
         let dir_path = log_dir
-            .join(function)
+            .join(command)
             .join(format!("{:x}", hasher.finalize_reset()));
         std::fs::create_dir_all(&dir_path)?;
         Ok(Self {
@@ -1280,9 +1355,9 @@ pub async fn handle_analyze_show<'a>(
 ) -> Result<AnalysisShowOutput, MonorailError> {
     let (mut lookups, changes) = match input.targets.len() {
         0 => {
-            let changes = match cfg.vcs.r#use {
-                VcsKind::Git => match cfg.vcs.r#use {
-                    VcsKind::Git => {
+            let changes = match cfg.change_provider {
+                ChangeProvider::Git => match cfg.change_provider {
+                    ChangeProvider::Git => {
                         let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
                         let checkpoint = match tracking.open_checkpoint().await {
                             Ok(checkpoint) => Some(checkpoint),
@@ -1312,6 +1387,22 @@ pub async fn handle_analyze_show<'a>(
     )
 }
 
+// Gets the targets that would be ignored by this change.
+fn get_ignore_targets<'a>(lookups: &'a Lookups<'_>, name: &'a str) -> HashSet<&'a str> {
+    let mut ignore_targets = HashSet::new();
+    lookups
+        .ignores
+        .common_prefix_search(name)
+        .for_each(|m: String| {
+            if let Some(v) = lookups.ignore2targets.get(m.as_str()) {
+                v.iter().for_each(|target| {
+                    ignore_targets.insert(*target);
+                });
+            }
+        });
+    ignore_targets
+}
+
 fn analyze_show(
     lookups: &mut Lookups<'_>,
     changes: Option<Vec<Change>>,
@@ -1324,7 +1415,6 @@ fn analyze_show(
         targets: vec![],
         target_groups: None,
     };
-
     let output_targets = match changes {
         Some(changes) => {
             let mut output_targets = HashSet::new();
@@ -1335,32 +1425,51 @@ fn analyze_show(
                     None
                 };
                 let mut add_targets = HashSet::new();
-
+                let ignore_targets = get_ignore_targets(lookups, &c.name);
                 lookups
                     .targets_trie
                     .common_prefix_search(&c.name)
                     .for_each(|target: String| {
-                        // additionally, add any targets that lie further up from this target
-                        lookups.targets_trie.common_prefix_search(&target).for_each(
-                            |target2: String| {
-                                if target2 != target {
-                                    if let Some(change_targets) = change_targets.as_mut() {
-                                        change_targets.push(AnalyzedChangeTarget {
-                                            path: target2.to_owned(),
-                                            reason: AnalyzedChangeTargetReason::TargetParent,
-                                        });
+                        if !ignore_targets.contains(target.as_str()) {
+                            // additionally, add any targets that lie further up from this target
+                            lookups.targets_trie.common_prefix_search(&target).for_each(
+                                |target2: String| {
+                                    if target2 != target {
+                                        if !ignore_targets.contains(target2.as_str()) {
+                                            if let Some(change_targets) = change_targets.as_mut() {
+                                                change_targets.push(AnalyzedChangeTarget {
+                                                    path: target2.to_owned(),
+                                                    reason:
+                                                        AnalyzedChangeTargetReason::TargetParent,
+                                                });
+                                            }
+                                            add_targets.insert(target2);
+                                        } else {
+                                            if let Some(change_targets) = change_targets.as_mut() {
+                                                change_targets.push(AnalyzedChangeTarget {
+                                                    path: target.to_owned(),
+                                                    reason: AnalyzedChangeTargetReason::Ignores,
+                                                });
+                                            }
+                                        }
                                     }
-                                    add_targets.insert(target2);
-                                }
-                            },
-                        );
-                        if let Some(change_targets) = change_targets.as_mut() {
-                            change_targets.push(AnalyzedChangeTarget {
-                                path: target.to_owned(),
-                                reason: AnalyzedChangeTargetReason::Target,
-                            });
+                                },
+                            );
+                            if let Some(change_targets) = change_targets.as_mut() {
+                                change_targets.push(AnalyzedChangeTarget {
+                                    path: target.to_owned(),
+                                    reason: AnalyzedChangeTargetReason::Target,
+                                });
+                            }
+                            add_targets.insert(target);
+                        } else {
+                            if let Some(change_targets) = change_targets.as_mut() {
+                                change_targets.push(AnalyzedChangeTarget {
+                                    path: target.to_owned(),
+                                    reason: AnalyzedChangeTargetReason::Ignores,
+                                });
+                            }
                         }
-                        add_targets.insert(target);
                     });
                 lookups
                     .uses
@@ -1368,44 +1477,44 @@ fn analyze_show(
                     .for_each(|m: String| {
                         if let Some(v) = lookups.use2targets.get(m.as_str()) {
                             v.iter().for_each(|target| {
-                                // additionally, add any targets that lie further up from this target
-                                lookups.targets_trie.common_prefix_search(target).for_each(
-                                    |target2: String| {
-                                        if &target2 != target {
-                                            if let Some(change_targets) = change_targets.as_mut() {
-                                                change_targets.push(AnalyzedChangeTarget {
-                                                path: target2.to_owned(),
-                                                reason:
-                                                    AnalyzedChangeTargetReason::UsesTargetParent,
-                                            });
+                                if !ignore_targets.contains(target) {
+                                    // additionally, add any targets that lie further up from this target
+                                    lookups.targets_trie.common_prefix_search(target).for_each(
+                                        |target2: String| {
+                                            if &target2 != target {
+                                                if !ignore_targets.contains(target2.as_str()) {
+                                                    if let Some(change_targets) = change_targets.as_mut() {
+                                                        change_targets.push(AnalyzedChangeTarget {
+                                                            path: target2.to_owned(),
+                                                            reason: AnalyzedChangeTargetReason::UsesTargetParent,
+                                                        });
+                                                    }
+                                                    add_targets.insert(target2);
+                                                } else {
+                                                    if let Some(change_targets) = change_targets.as_mut() {
+                                                        change_targets.push(AnalyzedChangeTarget {
+                                                            path: target.to_string(),
+                                                            reason: AnalyzedChangeTargetReason::Ignores,
+                                                        });
+                                                    }
+                                                }
                                             }
-                                            add_targets.insert(target2);
-                                        }
-                                    },
-                                );
-                                if let Some(change_targets) = change_targets.as_mut() {
-                                    change_targets.push(AnalyzedChangeTarget {
-                                        path: target.to_string(),
-                                        reason: AnalyzedChangeTargetReason::Uses,
-                                    });
-                                }
-                                add_targets.insert(target.to_string());
-                            });
-                        }
-                    });
-
-                lookups
-                    .ignores
-                    .common_prefix_search(&c.name)
-                    .for_each(|m: String| {
-                        if let Some(v) = lookups.ignore2targets.get(m.as_str()) {
-                            v.iter().for_each(|target| {
-                                add_targets.remove(*target);
-                                if let Some(change_targets) = change_targets.as_mut() {
-                                    change_targets.push(AnalyzedChangeTarget {
-                                        path: target.to_string(),
-                                        reason: AnalyzedChangeTargetReason::Ignores,
-                                    });
+                                        },
+                                    );
+                                    if let Some(change_targets) = change_targets.as_mut() {
+                                        change_targets.push(AnalyzedChangeTarget {
+                                            path: target.to_string(),
+                                            reason: AnalyzedChangeTargetReason::Uses,
+                                        });
+                                    }
+                                    add_targets.insert(target.to_string());
+                                } else {
+                                    if let Some(change_targets) = change_targets.as_mut() {
+                                        change_targets.push(AnalyzedChangeTarget {
+                                            path: target.to_string(),
+                                            reason: AnalyzedChangeTargetReason::Ignores,
+                                        });
+                                    }
                                 }
                             });
                         }
@@ -1508,7 +1617,7 @@ pub async fn handle_checkpoint_delete(
 ) -> Result<CheckpointDeleteOutput, MonorailError> {
     let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
     let mut checkpoint = tracking.open_checkpoint().await?;
-    checkpoint.commit = "".to_string();
+    checkpoint.id = "".to_string();
     checkpoint.pending = None;
 
     tokio::fs::remove_file(&checkpoint.path).await?;
@@ -1547,8 +1656,8 @@ pub async fn handle_checkpoint_update(
     input: &HandleCheckpointUpdateInput<'_>,
     work_dir: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
-    match cfg.vcs.r#use {
-        VcsKind::Git => {
+    match cfg.change_provider {
+        ChangeProvider::Git => {
             checkpoint_update_git(
                 input.pending,
                 &input.git_opts,
@@ -1575,7 +1684,7 @@ async fn checkpoint_update_git<'a>(
             return Err(e);
         }
     };
-    checkpoint.commit = "head".to_string();
+    checkpoint.id = "head".to_string();
     if include_pending {
         // get all changes with no checkpoint, so diff will return [HEAD, staging area]
         let pending_changes = get_git_all_changes(git_opts, &None, work_dir).await?;
@@ -1835,18 +1944,18 @@ pub struct Change {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-enum VcsKind {
+enum ChangeProvider {
     #[serde(rename = "git")]
     #[default]
     Git,
 }
-impl FromStr for VcsKind {
+impl FromStr for ChangeProvider {
     type Err = MonorailError;
-    fn from_str(s: &str) -> Result<VcsKind, Self::Err> {
+    fn from_str(s: &str) -> Result<ChangeProvider, Self::Err> {
         match s {
-            "git" => Ok(VcsKind::Git),
+            "git" => Ok(ChangeProvider::Git),
             _ => Err(MonorailError::Generic(format!(
-                "Unrecognized vcs kind: {}",
+                "Unrecognized change provider kind: {}",
                 s
             ))),
         }
@@ -1860,7 +1969,7 @@ pub struct Config {
     #[serde(default = "Config::default_max_retained_run_results")]
     max_retained_run_results: usize,
     #[serde(default)]
-    vcs: Vcs,
+    change_provider: ChangeProvider,
     targets: Option<Vec<Target>>,
 }
 impl Config {
@@ -1868,7 +1977,7 @@ impl Config {
         let file = File::open(file_path)?;
         let mut buf_reader = BufReader::new(file);
         let buf = buf_reader.fill_buf()?;
-        Ok(toml::from_str(std::str::from_utf8(buf)?)?)
+        Ok(serde_json::from_str(std::str::from_utf8(buf)?)?)
     }
     pub fn get_target_path_set(&self) -> HashSet<&String> {
         let mut o = HashSet::new();
@@ -1893,12 +2002,11 @@ impl Config {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct Vcs {
-    #[serde(default)]
-    r#use: VcsKind,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CommandDefinition {
+    exec: String,
+    args: Vec<String>,
 }
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Target {
     // The filesystem path, relative to the repository root.
@@ -1911,13 +2019,17 @@ pub struct Target {
     // precedence when evaluating a change.
     ignores: Option<Vec<String>>,
     // Relative path from this target's `path` to a file containing
-    // functions that can be executed by `monorail run`.
-    #[serde(default = "Target::default_run")]
-    run: String,
+    // commands that can be executed by `monorail run`.
+    #[serde(default = "Target::default_commands_path")]
+    commands_path: String,
+    // Mappings of command names to executable statements; these
+    // statements will be used when spawning tasks, and if unspecified
+    // monorail will try to use an executable named {{command}}*.
+    commands: Option<HashMap<String, CommandDefinition>>,
 }
 impl Target {
-    fn default_run() -> String {
-        "monorail.sh".into()
+    fn default_commands_path() -> String {
+        "monorail".into()
     }
 }
 
@@ -1927,18 +2039,23 @@ mod tests {
     use crate::common::testing::*;
 
     const RAW_CONFIG: &str = r#"
-[[targets]]
-path = "rust"
-
-[[targets]]
-path = "rust/target"
-ignores = [
-    "rust/target/ignoreme.txt"
-]
-uses = [
-    "rust/vendor",
-    "common"
-]
+{
+    "targets": [
+        {
+            "path": "rust"
+        },
+        {
+            "path": "rust/target",
+            "ignores": [
+                "rust/target/ignoreme.txt"
+            ],
+            "uses": [
+                "rust/vendor",
+                "common"
+            ]
+        }
+    ]
+}
 "#;
 
     #[tokio::test]
@@ -2467,20 +2584,20 @@ uses = [
 
     async fn prep_raw_config_repo() -> (Config, path::PathBuf) {
         let repo_path = init(false).await;
-        let c: Config = toml::from_str(RAW_CONFIG).unwrap();
+        let c: Config = serde_json::from_str(RAW_CONFIG).unwrap();
 
         create_file(
             &repo_path,
             "rust",
             "monorail.sh",
-            b"function whoami { echo 'rust' }",
+            b"command whoami { echo 'rust' }",
         )
         .await;
         create_file(
             &repo_path,
             "rust/target",
             "monorail.sh",
-            b"function whoami { echo 'rust/target' }",
+            b"command whoami { echo 'rust/target' }",
         )
         .await;
         (c, repo_path)
@@ -2656,14 +2773,6 @@ uses = [
                     reason: AnalyzedChangeTargetReason::Target,
                 },
                 AnalyzedChangeTarget {
-                    path: target1.to_string(),
-                    reason: AnalyzedChangeTargetReason::TargetParent,
-                },
-                AnalyzedChangeTarget {
-                    path: target2.to_string(),
-                    reason: AnalyzedChangeTargetReason::Target,
-                },
-                AnalyzedChangeTarget {
                     path: target2.to_string(),
                     reason: AnalyzedChangeTargetReason::Ignores,
                 },
@@ -2713,13 +2822,14 @@ uses = [
     #[test]
     fn test_err_duplicate_target_path() {
         let config_str: &str = r#"
-[[targets]]
-path = "rust"
-
-[[targets]]
-path = "rust"
+{
+    "targets": [
+        { "path": "rust" },
+        { "path": "rust" }
+    ]
+}
 "#;
-        let c: Config = toml::from_str(config_str).unwrap();
+        let c: Config = serde_json::from_str(config_str).unwrap();
         let work_dir = std::env::current_dir().unwrap();
         assert!(Lookups::new(&c, &c.get_target_path_set(), &work_dir).is_err());
     }
