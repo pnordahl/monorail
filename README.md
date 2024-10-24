@@ -49,7 +49,7 @@ NOTE: You may want `jq` installed to pretty-print the output from various steps 
 In this tutorial, you'll learn about:
 
   * mapping repository paths
-  * analysis
+  * analyzing changes
   * defining and executing commands
   * command logging
   * checkpointing
@@ -233,14 +233,14 @@ Hello, world!
 
 In this example, we just used `monorail` as a simple command runner like `make` or `just`. However, unlike these other tools `monorail` is capable of running commands in parallel based on your dependency graph, streaming logs, collecting historical results and compressed logs, and more.
 
-Before we explore commands and logging in more detail, it's important to understand how `monorail` detects changes. In the next section we'll use the `analysis` API to do so.
+Before we explore commands and logging in more detail, it's important to understand how `monorail` detects changes. In the next section we'll use the `analyze` API to do so.
 
-## Analysis
+## Analyze
 
 `monorail` integrates with a `change_provider` to obtain a view of filesystem changes, which are processed along with a graph built from the specification in `Monorail.json`. Display an analysis of this changeset and graph with:
 
 ```sh
-monorail analysis show | jq
+monorail analyze | jq
 ```
 ```json
 {
@@ -254,7 +254,7 @@ monorail analysis show | jq
 
 This indicates that based on our current changeset and graph, all three targets have changed. Display more information about the specific changes causing these targets to appear by adding `--change-targets`:
 ```sh
-monorail analysis show --change-targets | jq
+monorail analyze --change-targets | jq
 ```
 ```json
 {
@@ -279,7 +279,7 @@ echo 'python/app3/venv' >> .gitignore
 
 Re-running the commnand, notice that all of the offending files are gone:
 ```sh
-monorail analysis show --changes | jq | less
+monorail analyze --changes | jq | less
 ```
 ```json
 {
@@ -342,10 +342,10 @@ cat <<EOF > Monorail.json
 EOF
 ```
 
-Running the analysis again, but as a preview for the next section add the `--target-groups` flag. Note that `proto` no longer appears in the list of changed targets, and a new array of arrays has appeared:
+Run the analyze again, but as a preview for the next section add the `--target-groups` flag. Note that `proto` no longer appears in the list of changed targets, and a new array of arrays has appeared:
 
 ```sh
-monorail analysis show --target-groups | jq
+monorail analyze --target-groups | jq
 ```
 ```json
 {
@@ -380,10 +380,10 @@ cat <<EOF > Monorail.json
 EOF
 ```
 
-This has created a dependency on `proto` for `rust` and `python/app3` targets, connecting them for change detection and command execution. Observe the results of analysis now:
+This has created a dependency on `proto` for `rust` and `python/app3` targets, connecting them for change detection and command execution. Observe the results of analyze now:
 
 ```sh
-monorail analysis show --target-groups | jq
+monorail analyze --target-groups | jq
 ```
 ```json
 {
@@ -501,14 +501,12 @@ monorail -v run -c hello -t rust
 As this command executes, you'll see internal progress due to the inclusion of the `-v` flag:
 
 ```
-{"timestamp":"2024-10-23T11:56:12.070820Z","level":"INFO","fields":{"message":"Connected to log stream server","address":"127.0.0.1:9201"}}
-{"timestamp":"2024-10-23T11:56:12.073148Z","level":"INFO","fields":{"message":"processing groups","num":2}}
-{"timestamp":"2024-10-23T11:56:12.073159Z","level":"INFO","fields":{"message":"processing targets","num":1,"command":"hello"}}
-{"timestamp":"2024-10-23T11:56:12.073169Z","level":"INFO","fields":{"message":"task","status":"undefined","command":"hello","target":"proto"}}
-{"timestamp":"2024-10-23T11:56:12.073612Z","level":"INFO","fields":{"message":"processing targets","num":1,"command":"hello"}}
-{"timestamp":"2024-10-23T11:56:12.073626Z","level":"INFO","fields":{"message":"task","status":"scheduled","command":"hello","target":"rust"}}
-{"timestamp":"2024-10-23T11:56:12.640462Z","level":"INFO","fields":{"message":"task","status":"success","command":"hello","target":"rust"}}
-{"failed":false,"results":[{"command":"hello","successes":[],"failures":[],"unknowns":[{"target":"proto","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0}]},{"command":"hello","successes":[{"target":"rust","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/6/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/6/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst","runtime_secs":0.5667086}],"failures":[],"unknowns":[]}]}
+{"timestamp":"2024-10-24T11:50:39.160786Z","level":"INFO","fields":{"message":"Connected to log stream server","address":"127.0.0.1:9201"}}
+{"timestamp":"2024-10-24T11:50:39.162429Z","level":"INFO","fields":{"message":"processing groups","num":1}}
+{"timestamp":"2024-10-24T11:50:39.162435Z","level":"INFO","fields":{"message":"processing targets","num":1,"command":"hello"}}
+{"timestamp":"2024-10-24T11:50:39.162452Z","level":"INFO","fields":{"message":"task","status":"scheduled","command":"hello","target":"rust"}}
+{"timestamp":"2024-10-24T11:50:39.696190Z","level":"INFO","fields":{"message":"task","status":"success","command":"hello","target":"rust"}}
+{"failed":false,"results":[{"command":"hello","successes":[{"target":"rust","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/8/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/8/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst","runtime_secs":0.53362244}],"failures":[],"unknowns":[]}]}
 ```
 
 ... as well as log statements from the command itself in your log tailing window:
@@ -555,51 +553,20 @@ Hello, world!
 
 A few things are worth noting in this output.
 
-First, in the workflow logs:
-
-```json
-{"timestamp":"2024-10-23T11:16:06.143173Z","level":"INFO","fields":{"message":"task","status":"undefined","command":"hello","target":"proto"}}
-```
-
-Despite our selecting only the `rust` target with our run, `monorail` also attempted to run `hello` for the `proto` target. The reason for this behavior is to provide a measure of safety when choosing to run commands explicitly for a target. For example, if the `hello` command for `rust` required some output from its dependency `proto` to succeed, then it could fail if run in isolation. However, note that `proto` doesn't define this command so nothing happens and the run still succeeds.
-
-The second item of note is the log stream header:
+First, is the log stream header:
 ```
 [monorail | stdout.zst, stderr.zst | (any target) | (any command)]
 ```
 
-Every `monorail run` will print this header once at the beginning of a new log stream, indicating what data will be shown in the stream. When you start the tail process, by default it will not filter any targets or commands; this is indicated by the `(any target)` and `(any command)` entries in the header. If we had provided `--target rust proto` and `--command hello test build` (which can also be provided to `monorail log show`), then the header would look like `[monorail | stdout.zst, stderr.zst | rust, proto | hello, test, build]`, and only those logs that match these filters would appear. Additionally, note how multiple log block headers are printed; this is because the output from multiple files is independently collected and flushed at regular intervals and interleaved in the stream. In practice, you will often use target and command filters to reduce noise, but even without them block headers make it possible to visually parse the combined log stream.
+Every `monorail run` will print this header once at the beginning of a new log stream, indicating what data will be shown in the stream. When you start the tail process, by default it will not filter any targets or commands; this is indicated by the `(any target)` and `(any command)` entries in the header. If we had provided `--target rust proto` and `--command hello test build` (which can also be provided to `monorail log show`), then the header would look like `[monorail | stdout.zst, stderr.zst | rust, proto | hello, test, build]`, and only those logs that match these filters would appear.
+
+Second, note how multiple log block headers (e.g. `[monorail | stderr.zst | rust | hello]`) are printed; this is because the output from multiple files is independently collected and flushed at regular intervals and interleaved in the stream. In practice, you will often use target and command filters to reduce noise, but even without them block headers make it possible to visually parse the combined log stream.
 
 ## Commands
 
-## Results
+TODO
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Next, we will manipulate the changes being used to derive this list of targets with the `checkpoint`.
+Finally, we will manipulate the changes being used to derive the targets our commands are executed for with the `checkpoint`.
 
 ## Checkpoint
 
@@ -633,7 +600,7 @@ monorail checkpoint update | jq
 This is however, not so useful; none of the files we've added have been committed so this doesn't affect analysis results like we'd want:
 
 ```sh
-monorail analysis show | jq
+monorail analyze | jq
 ```
 ```json
 {
@@ -673,7 +640,7 @@ monorail checkpoint update --pending | jq
 Now, `monorail` knows that these pending changes are no longer considered changed:
 
 ```sh
-monorail analysis show | jq
+monorail analyze | jq
 ```
 ```json
 {
@@ -687,6 +654,7 @@ monorail analysis show | jq
 -show checkpoint deletion
 
 -show ci example of `monorail run -c prep check build unit-test integration-test package && monorail checkpoint update` is useful for something like CI; only update the checkpoint if all commands for all affected targets succeed`
+- add note about uses working for non-target paths as well
 
 -give recommended usage of commands, e.g. checking if output from command already exists (like if target signature is the same)
 -give recommended usage in ci (e.g. run branch builds on virts with a persistent volume, so that subsequent runs can use cached artifacts)

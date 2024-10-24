@@ -2,7 +2,7 @@ mod graph;
 mod tracking;
 
 use std::cmp::Ordering;
-use std::{path, sync, time};
+use std::{io, path, sync, time};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -41,6 +41,8 @@ pub struct RunInput<'a> {
     pub(crate) git_opts: GitOptions<'a>,
     pub(crate) commands: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
+    pub(crate) include_deps: bool,
+    pub(crate) fail_on_undefined: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,8 +73,14 @@ pub struct TargetRunResult {
 // TODO: allow hasher to be passed in?
 // TODO: configure buffer size based on file size?
 // TODO: pass in open file instead of path?
-async fn get_file_checksum(path: &path::Path) -> Result<String, MonorailError> {
-    let mut file = tokio::fs::File::open(path).await?;
+async fn get_file_checksum(p: &path::Path) -> Result<String, MonorailError> {
+    let mut file = match tokio::fs::File::open(p).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok("".to_string()),
+        Err(e) => {
+            return Err(MonorailError::from(e));
+        }
+    };
     let mut hasher = sha2::Sha256::new();
 
     let mut buffer = [0u8; 64 * 1024];
@@ -354,10 +362,11 @@ pub async fn handle_run<'a>(
 
             let changes = match cfg.change_provider {
                 ChangeProvider::Git => {
-                    get_git_diff_changes(&input.git_opts, &checkpoint, work_dir).await?
+                    get_git_all_changes(&input.git_opts, &checkpoint, work_dir).await?
                 }
             };
-            let ao = analyze_show(&mut lookups, changes, false, false, true)?;
+            let ai = AnalyzeInput::new(false, false, true);
+            let ao = analyze(&ai, &mut lookups, changes)?;
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
@@ -369,15 +378,28 @@ pub async fn handle_run<'a>(
                 &input.commands,
                 targets.clone(),
                 &target_groups,
+                input.fail_on_undefined,
             )
             .await
         }
         _ => {
             let mut lookups = Lookups::new(cfg, &input.targets, work_dir)?;
-            let ao = analyze_show(&mut lookups, None, false, false, true)?;
-            let target_groups = ao
-                .target_groups
-                .ok_or(MonorailError::from("No target groups found"))?;
+            let target_groups = if input.include_deps {
+                let ai = AnalyzeInput::new(false, false, true);
+                let ao = analyze(&ai, &mut lookups, None)?;
+                ao.target_groups
+                    .ok_or(MonorailError::from("No target groups found"))?
+            } else {
+                // since the user specified the targets they want, without deps,
+                // we will make synthetic serialized length 1 groups that ignore the graph
+                let mut tg = vec![];
+                for t in input.targets.iter() {
+                    tg.push(vec![t.to_string()]);
+                }
+                debug!("Synthesizing target groups");
+                tg
+            };
+
             run(
                 cfg,
                 &tracking_table,
@@ -386,6 +408,7 @@ pub async fn handle_run<'a>(
                 &input.commands,
                 targets.clone(),
                 &target_groups,
+                input.fail_on_undefined,
             )
             .await
         }
@@ -946,6 +969,7 @@ async fn run<'a>(
     commands: &'a [&'a String],
     targets: Vec<Target>,
     target_groups: &[Vec<String>],
+    fail_on_undefined: bool,
 ) -> Result<RunOutput, MonorailError> {
     let log_stream_client = match LogStreamClient::connect("127.0.0.1:9201").await {
         Ok(lsc) => Some(lsc),
@@ -1106,14 +1130,19 @@ async fn run<'a>(
                     target = &rd.target_path,
                     "task"
                 );
-                crr.unknowns.push(TargetRunResult {
+                let trr = TargetRunResult {
                     target: target2,
                     code: None,
                     stdout_path: None,
                     stderr_path: None,
                     error: Some("command not found".to_string()),
                     runtime_secs: 0.0,
-                });
+                };
+                if fail_on_undefined {
+                    crr.failures.push(trr);
+                } else {
+                    crr.unknowns.push(trr);
+                }
             }
         }
         let compressor_handle = std::thread::spawn(move || compressor.run());
@@ -1294,12 +1323,35 @@ pub async fn handle_result_show<'a>(
 }
 
 #[derive(Debug)]
-pub struct AnalysisShowInput<'a> {
+pub struct HandleAnalyzeInput<'a> {
     pub(crate) git_opts: GitOptions<'a>,
+    pub(crate) analyze_input: AnalyzeInput,
+    pub(crate) targets: HashSet<&'a String>,
+}
+
+#[derive(Debug)]
+pub struct AnalyzeInput {
     pub(crate) show_changes: bool,
     pub(crate) show_change_targets: bool,
     pub(crate) show_target_groups: bool,
-    pub(crate) targets: HashSet<&'a String>,
+}
+impl AnalyzeInput {
+    fn new(show_changes: bool, show_change_targets: bool, show_target_groups: bool) -> Self {
+        Self {
+            show_changes,
+            show_change_targets,
+            show_target_groups,
+        }
+    }
+}
+
+#[derive(Serialize, Debug)]
+pub struct AnalyzeOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changes: Option<Vec<AnalyzedChange>>,
+    targets: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_groups: Option<Vec<Vec<String>>>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1348,9 +1400,9 @@ enum AnalyzedChangeTargetReason {
     Ignores,
 }
 
-pub async fn handle_analyze_show<'a>(
+pub async fn handle_analyze<'a>(
     cfg: &'a Config,
-    input: &AnalysisShowInput<'a>,
+    input: &HandleAnalyzeInput<'a>,
     work_dir: &'a path::Path,
 ) -> Result<AnalysisShowOutput, MonorailError> {
     let (mut lookups, changes) = match input.targets.len() {
@@ -1378,13 +1430,7 @@ pub async fn handle_analyze_show<'a>(
         _ => (Lookups::new(cfg, &input.targets, work_dir)?, None),
     };
 
-    analyze_show(
-        &mut lookups,
-        changes,
-        input.show_changes,
-        input.show_change_targets,
-        input.show_target_groups,
-    )
+    analyze(&input.analyze_input, &mut lookups, changes)
 }
 
 // Gets the targets that would be ignored by this change.
@@ -1403,15 +1449,104 @@ fn get_ignore_targets<'a>(lookups: &'a Lookups<'_>, name: &'a str) -> HashSet<&'
     ignore_targets
 }
 
-fn analyze_show(
+// // todo various stuff aroudn porting analysis show to analyze, factor out some of the internals of analyze
+
+// fn analyze<'a>(
+//     input: &AnalyzeInput<'a>,
+//     lookups: &mut Lookups<'_>,
+//     changes: Option<Vec<Change>>,
+// ) -> Result<AnalyzeOutput, MonorailError> {
+//     let mut output = AnalyzeOutput {
+//         changes: if input.show_changes {
+//             Some(vec![])
+//         } else {
+//             None
+//         },
+//         targets: vec![],
+//         target_groups: None,
+//     };
+
+//     // determine which targets are affected by this change
+//     let change_targets = match changes {
+//         Some(changes) => {
+//             let mut targets = HashSet::new();
+//             changes.iter().for_each(|c| {
+//                 let mut change_targets = if input.show_change_targets {
+//                     Some(vec![])
+//                 } else {
+//                     None
+//                 };
+//                 let ignore_targets = get_ignore_targets(lookups, &c.name);
+//                 analyze_change_targets_and_ancestors(
+//                     &c.name,
+//                     &lookups,
+//                     &ignore_targets,
+//                     &mut targets,
+//                     &mut output,
+//                 );
+
+//                 let use_matches = lookups.uses_trie.common_prefix_search(&c.name);
+//                 use_matches.for_each(|u: String| {
+//                     if !ignore_targets.contains(u.as_str()) {
+//                         if let Some(v) = lookups.use2targets.get(u.as_str()) {
+//                             v.iter().for_each(|target| {
+//                                 analyze_change_targets_and_ancestors(
+//                                     target,
+//                                     &lookups,
+//                                     &ignore_targets,
+//                                     &mut targets,
+//                                     &mut output,
+//                                 );
+//                             });
+//                         }
+//                     }
+//                 });
+//             });
+//             Some(targets)
+//         }
+//         None => None,
+//     };
+// }
+
+// fn analyze_change_targets_and_ancestors(
+//     change: &Change,
+//     lookups: &Lookups<'_>,
+//     ignore_targets: &HashSet<&str>,
+//     targets: &mut HashSet<&str>,
+//     output: &mut AnalyzeOutput,
+// ) {
+//     let target_matches = lookups.targets_trie.common_prefix_search(&change.name);
+//     target_matches.for_each(|target: String| {
+//         if !ignore_targets.contains(target.as_str()) {
+//             targets.insert(target);
+//             trace!(target = &target, "Added");
+//             // additionally check any target path ancestors
+//             let ancestor_target_matches = lookups.targets_trie.common_prefix_search(&target);
+//             ancestor_target_matches.for_each(|target2: String| {
+//                 if target2 != target && !ignore_targets.contains(target2.as_str()) {
+//                     targets.insert(target2);
+//                     trace!(target = &target, ancestor = &target2, "Added ancestor");
+//                 } else {
+//                     trace!(target = &target, ancestor = &target2, "Ignored ancestor");
+//                 }
+//             });
+//         } else {
+//             trace!(target = &target, "Ignored");
+//         }
+//     });
+// }
+
+fn analyze(
+    input: &AnalyzeInput,
     lookups: &mut Lookups<'_>,
     changes: Option<Vec<Change>>,
-    show_changes: bool,
-    show_change_targets: bool,
-    show_target_groups: bool,
 ) -> Result<AnalysisShowOutput, MonorailError> {
     let mut output = AnalysisShowOutput {
-        changes: if show_changes { Some(vec![]) } else { None },
+        changes: if input.show_changes {
+            Some(vec![])
+        } else {
+            None
+        },
         targets: vec![],
         target_groups: None,
     };
@@ -1419,12 +1554,11 @@ fn analyze_show(
         Some(changes) => {
             let mut output_targets = HashSet::new();
             changes.iter().for_each(|c| {
-                let mut change_targets = if show_change_targets {
+                let mut change_targets = if input.show_change_targets {
                     Some(vec![])
                 } else {
                     None
                 };
-                let mut add_targets = HashSet::new();
                 let ignore_targets = get_ignore_targets(lookups, &c.name);
                 lookups
                     .targets_trie
@@ -1443,7 +1577,7 @@ fn analyze_show(
                                                         AnalyzedChangeTargetReason::TargetParent,
                                                 });
                                             }
-                                            add_targets.insert(target2);
+                                            output_targets.insert(target2);
                                         } else {
                                             if let Some(change_targets) = change_targets.as_mut() {
                                                 change_targets.push(AnalyzedChangeTarget {
@@ -1461,7 +1595,7 @@ fn analyze_show(
                                     reason: AnalyzedChangeTargetReason::Target,
                                 });
                             }
-                            add_targets.insert(target);
+                            output_targets.insert(target);
                         } else {
                             if let Some(change_targets) = change_targets.as_mut() {
                                 change_targets.push(AnalyzedChangeTarget {
@@ -1475,54 +1609,52 @@ fn analyze_show(
                     .uses
                     .common_prefix_search(&c.name)
                     .for_each(|m: String| {
-                        if let Some(v) = lookups.use2targets.get(m.as_str()) {
-                            v.iter().for_each(|target| {
-                                if !ignore_targets.contains(target) {
-                                    // additionally, add any targets that lie further up from this target
-                                    lookups.targets_trie.common_prefix_search(target).for_each(
-                                        |target2: String| {
-                                            if &target2 != target {
-                                                if !ignore_targets.contains(target2.as_str()) {
-                                                    if let Some(change_targets) = change_targets.as_mut() {
-                                                        change_targets.push(AnalyzedChangeTarget {
-                                                            path: target2.to_owned(),
-                                                            reason: AnalyzedChangeTargetReason::UsesTargetParent,
-                                                        });
-                                                    }
-                                                    add_targets.insert(target2);
-                                                } else {
-                                                    if let Some(change_targets) = change_targets.as_mut() {
-                                                        change_targets.push(AnalyzedChangeTarget {
-                                                            path: target.to_string(),
-                                                            reason: AnalyzedChangeTargetReason::Ignores,
-                                                        });
+                        if !ignore_targets.contains(m.as_str()) {
+                            if let Some(v) = lookups.use2targets.get(m.as_str()) {
+                                v.iter().for_each(|target| {
+                                    if !ignore_targets.contains(target) {
+                                        // additionally, add any targets that lie further up from this target
+                                        lookups.targets_trie.common_prefix_search(target).for_each(
+                                            |target2: String| {
+                                                if &target2 != target {
+                                                    if !ignore_targets.contains(target2.as_str()) {
+                                                        if let Some(change_targets) = change_targets.as_mut() {
+                                                            change_targets.push(AnalyzedChangeTarget {
+                                                                path: target2.to_owned(),
+                                                                reason: AnalyzedChangeTargetReason::UsesTargetParent,
+                                                            });
+                                                        }
+                                                        output_targets.insert(target2);
+                                                    } else {
+                                                        if let Some(change_targets) = change_targets.as_mut() {
+                                                            change_targets.push(AnalyzedChangeTarget {
+                                                                path: target.to_string(),
+                                                                reason: AnalyzedChangeTargetReason::Ignores,
+                                                            });
+                                                        }
                                                     }
                                                 }
-                                            }
-                                        },
-                                    );
-                                    if let Some(change_targets) = change_targets.as_mut() {
-                                        change_targets.push(AnalyzedChangeTarget {
-                                            path: target.to_string(),
-                                            reason: AnalyzedChangeTargetReason::Uses,
-                                        });
+                                            },
+                                        );
+                                        if let Some(change_targets) = change_targets.as_mut() {
+                                            change_targets.push(AnalyzedChangeTarget {
+                                                path: target.to_string(),
+                                                reason: AnalyzedChangeTargetReason::Uses,
+                                            });
+                                        }
+                                        output_targets.insert(target.to_string());
+                                    } else {
+                                        if let Some(change_targets) = change_targets.as_mut() {
+                                            change_targets.push(AnalyzedChangeTarget {
+                                                path: target.to_string(),
+                                                reason: AnalyzedChangeTargetReason::Ignores,
+                                            });
+                                        }
                                     }
-                                    add_targets.insert(target.to_string());
-                                } else {
-                                    if let Some(change_targets) = change_targets.as_mut() {
-                                        change_targets.push(AnalyzedChangeTarget {
-                                            path: target.to_string(),
-                                            reason: AnalyzedChangeTargetReason::Ignores,
-                                        });
-                                    }
-                                }
-                            });
+                                });
+                            }
                         }
                     });
-
-                add_targets.iter().for_each(|t| {
-                    output_targets.insert(t.to_owned());
-                });
 
                 if let Some(change_targets) = change_targets.as_mut() {
                     change_targets.sort();
@@ -1540,12 +1672,13 @@ fn analyze_show(
         None => None,
     };
 
+    // todo; copy this into analyze factored
     if let Some(output_targets) = output_targets {
         // copy the hashmap into the output vector
         for t in output_targets.iter() {
             output.targets.push(t.clone());
         }
-        if show_target_groups {
+        if input.show_target_groups {
             let groups = lookups.dag.get_groups()?;
 
             // prune the groups to contain only affected targets
@@ -1571,7 +1704,7 @@ fn analyze_show(
         for t in &lookups.targets {
             output.targets.push(t.to_string());
         }
-        if show_target_groups {
+        if input.show_target_groups {
             output.target_groups = Some(lookups.dag.get_labeled_groups()?);
         }
     }
@@ -1693,6 +1826,7 @@ async fn checkpoint_update_git<'a>(
                 let mut pending = HashMap::new();
                 for change in pending_changes.iter() {
                     let p = work_dir.join(&change.name);
+
                     pending.insert(change.name.clone(), get_file_checksum(&p).await?);
                 }
                 checkpoint.pending = Some(pending);
@@ -1700,6 +1834,7 @@ async fn checkpoint_update_git<'a>(
         }
     }
     checkpoint.save().await?;
+
     Ok(CheckpointUpdateOutput { checkpoint })
 }
 
@@ -2608,7 +2743,8 @@ mod tests {
         let changes = vec![];
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze_show(&mut lookups, Some(changes), true, false, false).unwrap();
+        let ai = AnalyzeInput::new(true, false, false);
+        let o = analyze(&ai, &mut lookups, Some, false).unwrap();
 
         assert!(o.changes.unwrap().is_empty());
         assert!(o.targets.is_empty());
@@ -2628,7 +2764,8 @@ mod tests {
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
+        let ai = AnalyzeInput::new(true, true, true);
+        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2654,7 +2791,8 @@ mod tests {
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
+        let ai = AnalyzeInput::new(true, true, true);
+        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2679,7 +2817,8 @@ mod tests {
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
+        let ai = AnalyzeInput::new(true, true, true);
+        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2716,7 +2855,8 @@ mod tests {
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
+        let ai = AnalyzeInput::new(true, true, true);
+        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2749,7 +2889,8 @@ mod tests {
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
+        let ai = AnalyzeInput::new(true, true, true);
+        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2781,7 +2922,8 @@ mod tests {
 
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
-        let o = analyze_show(&mut lookups, Some(changes), true, true, true).unwrap();
+        let ai = AnalyzeInput::new(true, true, true);
+        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);

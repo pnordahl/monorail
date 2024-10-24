@@ -17,7 +17,7 @@ pub const CMD_UPDATE: &str = "update";
 pub const CMD_SHOW: &str = "show";
 pub const CMD_TARGET: &str = "target";
 pub const CMD_RUN: &str = "run";
-pub const CMD_ANALYSIS: &str = "analysis";
+pub const CMD_ANALYZE: &str = "analyze";
 pub const CMD_RESULT: &str = "result";
 pub const CMD_LOG: &str = "log";
 pub const CMD_TAIL: &str = "tail";
@@ -39,6 +39,8 @@ pub const ARG_VERBOSE: &str = "verbose";
 pub const ARG_STDERR: &str = "stderr";
 pub const ARG_STDOUT: &str = "stdout";
 pub const ARG_ID: &str = "id";
+pub const ARG_DEPS: &str = "deps";
+pub const ARG_FAIL_ON_UNDEFINED: &str = "fail-on-undefined";
 
 pub const VAL_JSON: &str = "json";
 
@@ -196,6 +198,19 @@ pub fn get_app() -> clap::Command {
                 .action(ArgAction::Append)
                 .help("A list of targets for which commands will be executed. If not provided, target groups will be inferred from the target graph.")
         )
+        .arg(
+            Arg::new(ARG_DEPS)
+                .long(ARG_DEPS)
+                .help("Include target dependencies")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new(ARG_FAIL_ON_UNDEFINED)
+                .long(ARG_FAIL_ON_UNDEFINED)
+                .long_help("Fail commands that are undefined by targets. If --target is specified, this defaults to true.")
+                .default_value_if(ARG_TARGET, ArgPredicate::IsPresent, Some("true"))
+                .action(ArgAction::SetTrue),
+        )
     )
     .subcommand(Command::new(CMD_RESULT).subcommand(Command::new(CMD_SHOW).about("Show results from `run` invocations")))
     /*
@@ -223,8 +238,8 @@ pub fn get_app() -> clap::Command {
                 .arg(arg_log_stdout))
     )
     .subcommand(
-        Command::new(CMD_ANALYSIS).subcommand(Command::new(CMD_SHOW).about("Display an analysis of repository changes and targets")
-            .after_help(r#"This command shows an analysis of staged, unpushed, and pushed changes between two checkpoints in version control history, as well as unstaged changes present only in your local filesystem. By default, only outputs a list of affected targets."#)
+        Command::new(CMD_ANALYZE).about("Analyze repository changes and targets")
+            .after_help(r#"This command performs an analysis of historical changes from the checkpoint to end of history in a change provider, as well as pending changes on the filesystem. By default, this command only outputs a list of affected targets."#)
             .arg(arg_git_path.clone())
             .arg(arg_start.clone())
             .arg(arg_end.clone())
@@ -246,7 +261,7 @@ pub fn get_app() -> clap::Command {
             .arg(
                 Arg::new(ARG_TARGET_GROUPS)
                     .long(ARG_TARGET_GROUPS)
-                    .help("Display targets grouped according to the dependency graph. Each array in the output array contains the targets that are valid to execute in parallel.")
+                    .help("Display targets grouped according to the dependency graph.")
                     .action(ArgAction::SetTrue)
                     .default_value_if(ARG_ALL, ArgPredicate::IsPresent, Some("true")),
             )
@@ -264,7 +279,7 @@ pub fn get_app() -> clap::Command {
                 .num_args(1..)
                 .value_delimiter(' ')
                 .action(ArgAction::Append)
-                .help("Scope analysis to only the provided targets."))))
+                .help("Scope analysis to only the provided targets.")))
 }
 
 pub const HANDLE_OK: i32 = 0;
@@ -337,13 +352,11 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                 }
             }
 
-            if let Some(analyze) = matches.subcommand_matches(CMD_ANALYSIS) {
-                if let Some(show) = analyze.subcommand_matches(CMD_SHOW) {
-                    let i = core::AnalysisShowInput::from(show);
-                    let res = core::handle_analyze_show(&cfg, &i, &work_dir).await;
-                    write_result(&res, output_format)?;
-                    return Ok(get_code(res.is_err()));
-                }
+            if let Some(analyze) = matches.subcommand_matches(CMD_ANALYZE) {
+                let i = core::HandleAnalyzeInput::from(analyze);
+                let res = core::handle_analyze(&cfg, &i, &work_dir).await;
+                write_result(&res, output_format)?;
+                return Ok(get_code(res.is_err()));
             }
 
             if let Some(run) = matches.subcommand_matches(CMD_RUN) {
@@ -466,11 +479,13 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::RunInput<'a> {
                 .into_iter()
                 .flatten()
                 .collect(),
+            include_deps: cmd.get_flag(ARG_DEPS),
+            fail_on_undefined: cmd.get_flag(ARG_FAIL_ON_UNDEFINED),
         })
     }
 }
 
-impl<'a> From<&'a clap::ArgMatches> for core::AnalysisShowInput<'a> {
+impl<'a> From<&'a clap::ArgMatches> for core::HandleAnalyzeInput<'a> {
     fn from(cmd: &'a clap::ArgMatches) -> Self {
         Self {
             git_opts: core::GitOptions {
@@ -480,14 +495,16 @@ impl<'a> From<&'a clap::ArgMatches> for core::AnalysisShowInput<'a> {
                 end: cmd.get_one::<String>(ARG_END).map(|x: &String| x.as_str()),
                 git_path: cmd.get_one::<String>(ARG_GIT_PATH).unwrap(),
             },
-            show_changes: cmd.get_flag(ARG_CHANGES),
-            show_change_targets: cmd.get_flag(ARG_CHANGE_TARGETS),
-            show_target_groups: cmd.get_flag(ARG_TARGET_GROUPS),
             targets: cmd
                 .get_many::<String>(ARG_TARGET)
                 .into_iter()
                 .flatten()
                 .collect(),
+            analyze_input: core::AnalyzeInput {
+                show_changes: cmd.get_flag(ARG_CHANGES),
+                show_change_targets: cmd.get_flag(ARG_CHANGE_TARGETS),
+                show_target_groups: cmd.get_flag(ARG_TARGET_GROUPS),
+            },
         }
     }
 }
