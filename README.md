@@ -44,14 +44,14 @@ The tutorial in the next section will elaborate on these concepts in a practical
 
 # Tutorial
 
-NOTE: You may want `jq` installed to pretty-print the output from various steps in this tutorial. If you don't want to install it, you can just omit any `| jq` that you find.
+To illustrate multi-language command executables, ensure that `awk` and `python3` are installed. Additionally, you may want `jq` installed to pretty-print the output from various steps in this tutorial. If you don't want to install it, you can just omit any `| jq` that you find.
 
 In this tutorial, you'll learn about:
 
   * mapping repository paths
   * analyzing changes
   * defining and executing commands
-  * command logging
+  * logging
   * checkpointing
 
 ## One-time setup
@@ -61,7 +61,7 @@ First, create a fresh `git` repository, and another to act as a remote:
 ```sh
 git init --initial-branch=master monorail-tutorial
 cd monorail-tutorial
-git commit -m x --allow-empty # initial commit
+git commit -m x --allow-empty
 echo 'monorail-out' > .gitignore
 ```
 
@@ -148,8 +148,11 @@ EOF
 
 This is how you generally specify targets; a unique filesystem path relative to the root of your repository.
 
-Running `monorail config show | jq` produces the following output (which includes some default values for things not specified), indicating that our config file is well-formed:
+Run the following, to show our config and ensure our input is well-formed:
 
+```sh
+monorail config show | jq
+```
 ```json
 {
   "output_dir": "monorail-out",
@@ -181,6 +184,8 @@ Running `monorail config show | jq` produces the following output (which include
 }
 ```
 
+This output includes some default values for things not specified, but otherwise reflects what we have entered.
+
 ## Preview: running commands
 
 Commands will be covered in more depth later in the tutorial (along with logging), but now that we have a valid `Monorail.json` we can execute a command and view logs right away. Run the following to create an executable (in this case, a bash script) for the `rust` target:
@@ -195,7 +200,11 @@ EOF
 chmod +x rust/monorail/hello.sh
 ```
 
-Now execute it: `monorail run -c hello`
+Now execute it:
+
+```sh
+monorail run -c hello -t rust
+```
 
 ```json
 {
@@ -254,7 +263,7 @@ monorail analyze | jq
 
 This indicates that based on our current changeset and graph, all three targets have changed. Display more information about the specific changes causing these targets to appear by adding `--change-targets`:
 ```sh
-monorail analyze --change-targets | jq
+monorail analyze --changes | jq
 ```
 ```json
 {
@@ -366,7 +375,7 @@ The `target_groups` array is built by constructing a graph from the dependencies
 
 ## Dependencies
 
-Specifying dependencies between targets is done with the `uses` field on a `target` in `Monorail.json`. Run the following to set up a simple graph:
+Specifying dependencies between targets is done with the `uses` field on a `target` in `Monorail.json`. Run the following to set up a simple graph (and create a file so our `proto` project is visible again, since we ignored `README.md`):
 
 ```sh
 cat <<EOF > Monorail.json
@@ -378,6 +387,7 @@ cat <<EOF > Monorail.json
   ]
 }
 EOF
+touch proto/LICENSE.md
 ```
 
 This has created a dependency on `proto` for `rust` and `python/app3` targets, connecting them for change detection and command execution. Observe the results of analyze now:
@@ -405,6 +415,8 @@ monorail analyze --target-groups | jq
 ```
 
 Semantically, each element of `target_groups` is an array of targets that can be considered "independent" of subsequent elements. Since `proto` does not depend on any other targets, it stands alone and prior to `rust` and `python/app3`, which depend on `proto`. As it pertains to command execution, each target found within a group is executed in parallel, and when successful `monorail` will move on to the next array and do the same. For change detection, changes to dependencies of a target will cause that target to be considered changed as well; i.e. a "what depends on me" graph traversal. In the final sections, we will cover logging and parallel command execution with practical examples.
+
+Finally, keep in mind that you can specify non-target paths in `uses` and those paths will now be considered part of that target. In general, this is not commonly used but remains a convenient way to link targets to paths they would otherwise not be.
 
 ## Logging and Results
 
@@ -473,7 +485,7 @@ It's often useful to observe how a `monorail run` invocation is progressing; to 
 monorail log tail --stderr --stdout
 ```
 
-This has started a server that will receive logs. Leave that running in a separate window, and let's update our existing command to demonstrate tailing:
+This has started a server that will receive logs. For the rest of this tutorial, leave that running in a separate window. Now, let's update our existing command to demonstrate tailing:
 
 ```sh
 cat <<EOF > rust/monorail/hello.sh
@@ -564,9 +576,110 @@ Second, note how multiple log block headers (e.g. `[monorail | stderr.zst | rust
 
 ## Commands
 
-TODO
+Commands are the way `monorail` executes your code against targets. Each target implements a command with a unique name, e.g. `test`, `build`, etc. as an executable file, and that file is executed and monitored as a subprocess of `monorail`. Depending on the graph defined by `Monorail.json`, these commands may be executed in parallel when it's safe to do so. 
 
-Finally, we will manipulate the changes being used to derive the targets our commands are executed for with the `checkpoint`.
+### Defining a command
+
+By default, `monorail` will use the `commands_path` (default: a `monorail` directory in the target path) field of a target as a search path for commands, and by default look for a file with a stem of `{{command}}`, e.g. `{{command}}.sh`. The command we defined earlier in the tutorial, `rust/monorail/hello.sh`, used these defaults; While customizing these defaults is possible via `Monorail.json`, it's not necessary for this tutorial. Let's define two new executables, this time in Python and Awk:
+
+```sh
+cat <<EOF > python/app3/monorail/hello.py
+#!/usr/bin/python3
+import sys
+
+print("Hello, from python/app3 and python!")
+print("An error occurred", file=sys.stderr)
+EOF
+chmod +x python/app3/monorail/hello.py
+```
+
+```sh
+cat <<EOF > proto/monorail/hello.awk
+#!/usr/bin/awk -f
+
+BEGIN {
+    print "Hello, from proto and awk!"
+}
+EOF
+chmod +x proto/monorail/hello.awk
+```
+
+As mentioned earlier, commands can be written in any language, and need only be executable. We're using hashbangs to avoid cluttering the tutorial with compilation steps, but commands could be compiled to machine code, stored as something like `hello`, and executed just the same. Before we run this command, let's look at the output of analyze:
+
+```sh
+monorail analyze --target-groups | jq
+```
+```json
+{
+  "targets": [
+    "proto",
+    "python/app3",
+    "rust"
+  ],
+  "target_groups": [
+    [
+      "proto"
+    ],
+    [
+      "rust",
+      "python/app3"
+    ]
+  ]
+}
+```
+
+In the next section, we will see how the target graph guides parallel command execution.
+
+### Running commands
+
+We have already seen an example of explictly choosing target(s) to run commands for with `monorail run -c hello -t rust`, but `monorail` is also capable of executing commands based on a dependency graph-guided analysis of changes, automatically. To do this, simply leave off a list of targets for the `run`:
+
+```sh
+monorail -v run -c hello
+```
+```json
+{"timestamp":"2024-10-24T13:22:46.560897Z","level":"INFO","fields":{"message":"Connected to log stream server","address":"127.0.0.1:9201"}}
+{"timestamp":"2024-10-24T13:22:46.563368Z","level":"INFO","fields":{"message":"processing groups","num":2}}
+{"timestamp":"2024-10-24T13:22:46.563375Z","level":"INFO","fields":{"message":"processing targets","num":1,"command":"hello"}}
+{"timestamp":"2024-10-24T13:22:46.563383Z","level":"INFO","fields":{"message":"task","status":"scheduled","command":"hello","target":"proto"}}
+{"timestamp":"2024-10-24T13:22:46.709942Z","level":"INFO","fields":{"message":"task","status":"success","command":"hello","target":"proto"}}
+{"timestamp":"2024-10-24T13:22:46.710204Z","level":"INFO","fields":{"message":"processing targets","num":2,"command":"hello"}}
+{"timestamp":"2024-10-24T13:22:46.710228Z","level":"INFO","fields":{"message":"task","status":"scheduled","command":"hello","target":"rust"}}
+{"timestamp":"2024-10-24T13:22:46.710490Z","level":"INFO","fields":{"message":"task","status":"scheduled","command":"hello","target":"python/app3"}}
+{"timestamp":"2024-10-24T13:22:46.730676Z","level":"INFO","fields":{"message":"task","status":"success","command":"hello","target":"python/app3"}}
+{"timestamp":"2024-10-24T13:22:47.254108Z","level":"INFO","fields":{"message":"task","status":"success","command":"hello","target":"rust"}}
+{"failed":false,"results":[{"command":"hello","successes":[{"target":"proto","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/2/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/2/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stderr.zst","runtime_secs":0.14653416}],"failures":[],"unknowns":[]},{"command":"hello","successes":[{"target":"python/app3","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/2/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/2/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stderr.zst","runtime_secs":0.020165},{"target":"rust","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/2/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/2/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst","runtime_secs":0.5438243}],"failures":[],"unknowns":[]}]}
+```
+
+In this sequence of events: the `hello` command is scheduled and executed to completion for `proto` prior to the same for `python/app3` and `rust`. This is because both of the latter depend on `proto`. A practical scenario where this is relevant is building protobuf files for use by both `python/app3` and `rust`. By encoding this dependency in `Monorail.json`, we have ensured that when protobuf files in `proto` change, we have definitely compiled them by the time we execute commands for `python/app3` and `rust`.
+
+You can also execute multiple commands. Each command in `-t <command1> <command2> ... <commandN>` is executed in the order listed, serially; the parallelism of `run` occurs within a command, at the target group level. Add a non-existent command to the list and run again:
+
+```sh
+monorail -v run -c hello build
+```
+```json
+{"timestamp":"2024-10-24T13:55:32.355589Z","level":"INFO","fields":{"message":"Connected to log stream server","address":"127.0.0.1:9201"}}
+{"timestamp":"2024-10-24T13:55:32.357969Z","level":"INFO","fields":{"message":"processing groups","num":4}}
+{"timestamp":"2024-10-24T13:55:32.357979Z","level":"INFO","fields":{"message":"processing targets","num":1,"command":"hello"}}
+{"timestamp":"2024-10-24T13:55:32.357986Z","level":"INFO","fields":{"message":"task","status":"scheduled","command":"hello","target":"proto"}}
+{"timestamp":"2024-10-24T13:55:32.359481Z","level":"INFO","fields":{"message":"task","status":"success","command":"hello","target":"proto"}}
+{"timestamp":"2024-10-24T13:55:32.359685Z","level":"INFO","fields":{"message":"processing targets","num":2,"command":"hello"}}
+{"timestamp":"2024-10-24T13:55:32.359718Z","level":"INFO","fields":{"message":"task","status":"scheduled","command":"hello","target":"rust"}}
+{"timestamp":"2024-10-24T13:55:32.359955Z","level":"INFO","fields":{"message":"task","status":"scheduled","command":"hello","target":"python/app3"}}
+{"timestamp":"2024-10-24T13:55:32.379457Z","level":"INFO","fields":{"message":"task","status":"success","command":"hello","target":"python/app3"}}
+{"timestamp":"2024-10-24T13:55:32.874222Z","level":"INFO","fields":{"message":"task","status":"success","command":"hello","target":"rust"}}
+{"timestamp":"2024-10-24T13:55:32.874656Z","level":"INFO","fields":{"message":"processing targets","num":1,"command":"build"}}
+{"timestamp":"2024-10-24T13:55:32.874691Z","level":"INFO","fields":{"message":"task","status":"undefined","command":"build","target":"proto"}}
+{"timestamp":"2024-10-24T13:55:32.875223Z","level":"INFO","fields":{"message":"processing targets","num":2,"command":"build"}}
+{"timestamp":"2024-10-24T13:55:32.875243Z","level":"INFO","fields":{"message":"task","status":"undefined","command":"build","target":"rust"}}
+{"timestamp":"2024-10-24T13:55:32.875248Z","level":"INFO","fields":{"message":"task","status":"undefined","command":"build","target":"python/app3"}}
+{"failed":false,"results":[{"command":"hello","successes":[{"target":"proto","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/3/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/3/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stderr.zst","runtime_secs":0.001467291}],"failures":[],"unknowns":[]},{"command":"hello","successes":[{"target":"python/app3","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/3/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/3/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stderr.zst","runtime_secs":0.0194885},{"target":"rust","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/3/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/log/3/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst","runtime_secs":0.51448536}],"failures":[],"unknowns":[]},{"command":"build","successes":[],"failures":[],"unknowns":[{"target":"proto","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0}]},{"command":"build","successes":[],"failures":[],"unknowns":[{"target":"rust","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0},{"target":"python/app3","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0}]}]}
+```
+
+You might notice the exit code of 0 and `"failed":false`, and that's because by default it is not required for a target to define a command. You can override this behavior with `--fail-on-undefined`, but in general this allows targets to define only the commands they need and eliminates the need for "stubs" that may never be implemented. One exception to this is when providing a list of targets to `run`, where `--fail-on-undefined` defaults to true. The reason for this is that when executing a command directly for targets, one expects that command to exist.
+
+In the final section of this tutorial, we will manipulate the changes being used for `analyze` and guided `run` with the `checkpoint`.
 
 ## Checkpoint
 
@@ -605,6 +718,7 @@ monorail analyze | jq
 ```json
 {
   "targets": [
+    "proto",
     "python/app3",
     "rust"
   ]
@@ -621,17 +735,20 @@ monorail checkpoint update --pending | jq
   "checkpoint": {
     "id": "head",
     "pending": {
-      "rust/monorail/hello.sh": "664e00829847270dd823957d46bf19b6c9618743527f7bfa057c338328911393",
-      "rust/Cargo.toml": "a35f77bcdb163b0880db4c5efeb666f96496bcb409b4cd52ba6df517fb4d625b",
-      "rust/app2/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9",
-      "python/app3/tests/test_hello.py": "72b3668ed95f4f246150f5f618e71f6cdbd397af785cd6f1137ee87524566948",
-      ".gitignore": "c1cf4f9ff4b1419420b8508426051e8925e2888b94b0d830e27b9071989e8e7d",
-      "Monorail.json": "56d18cfea88a841a06e3f240f843e61aefec87866544aaee796de9b78b893a31",
-      "rust/app1/Cargo.toml": "044de847669ad2d9681ba25c4c71e584b5f12d836b9a49e71b4c8d68119e5592",
-      "rust/app2/Cargo.toml": "111f4cf0fd1b6ce6f690a5f938599be41963905db7d1169ec02684b00494e383",
+      "proto/monorail/hello.awk": "5af404fedc153710aec00c8bf788d8f71b00c733c506d4c28fda1b7d618e4af6",
+      "python/app3/monorail/hello.py": "b9e75978d51cbf8104374373550d9f530df0de07b6bdb9f285afd7d96e48223d",
       "proto/README.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "python/app3/hello.py": "3639634f2916441a55e4b9be3497673f110014d0ce3b241c93a9794ffcf2c910",
-      "rust/app1/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9"
+      "python/app3/tests/test_hello.py": "72b3668ed95f4f246150f5f618e71f6cdbd397af785cd6f1137ee87524566948",
+      "rust/app1/Cargo.toml": "044de847669ad2d9681ba25c4c71e584b5f12d836b9a49e71b4c8d68119e5592",
+      "rust/Cargo.toml": "a35f77bcdb163b0880db4c5efeb666f96496bcb409b4cd52ba6df517fb4d625b",
+      "proto/LICENSE.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "rust/app1/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9",
+      "Monorail.json": "cdea86b01e3e6f719abecde8e127ba3d450dcaccfd2f9e5f9ffb27dd0ad2dadb",
+      "rust/app2/Cargo.toml": "111f4cf0fd1b6ce6f690a5f938599be41963905db7d1169ec02684b00494e383",
+      ".gitignore": "c1cf4f9ff4b1419420b8508426051e8925e2888b94b0d830e27b9071989e8e7d",
+      "rust/app2/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9",
+      "rust/monorail/hello.sh": "c1b9355995507cd3e90727bc79a0d6716b3f921a29b003f9d7834882218e2020",
+      "python/app3/hello.py": "3639634f2916441a55e4b9be3497673f110014d0ce3b241c93a9794ffcf2c910"
     }
   }
 }
@@ -648,32 +765,19 @@ monorail analyze | jq
 }
 ```
 
-<!-- 
+```sh
+monorail -v run -c hello build
+```
+```json
+{"timestamp":"2024-10-24T14:12:25.344530Z","level":"INFO","fields":{"message":"Connected to log stream server","address":"127.0.0.1:9201"}}
+{"timestamp":"2024-10-24T14:12:25.345471Z","level":"INFO","fields":{"message":"processing groups","num":0}}
+{"failed":false,"results":[]}
+```
 
--show how this affects implicit target selection for command execution
--show checkpoint deletion
+The `checkpoint` is a powerful way to control the behaviors of `analyze` and guided `run`. One of the most valuable ways to use it is to avoid executing the same commands for the same changeset. E.g. if all commands succeed in this hypothetical CI job, update the checkpoint to avoid running these commands for targets that haven't changed since the last push; `monorail run -c prep check build unit-test integration-test package && monorail checkpoint update -p`
 
--show ci example of `monorail run -c prep check build unit-test integration-test package && monorail checkpoint update` is useful for something like CI; only update the checkpoint if all commands for all affected targets succeed`
-- add note about uses working for non-target paths as well
-
--give recommended usage of commands, e.g. checking if output from command already exists (like if target signature is the same)
--give recommended usage in ci (e.g. run branch builds on virts with a persistent volume, so that subsequent runs can use cached artifacts)
-
--address some things like <why no bazel feature>, e.g. caching and remote execution
-
--->
-
-The `checkpoint` is a powerful way to control the view of changes in a repository. Here are a few ways you can use it:
-
-1. 
-
-
-
-
-
-
-
-
+## Conclusion
+This concludes the tutorial on the fundamentals of `monorail`. For most of what was covered here, additional options and configuration exists but are outside the scope of an introductory tutorial.
 
 # Development setup
 
