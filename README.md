@@ -694,7 +694,7 @@ In the final section of this tutorial, we will manipulate the changes being used
 
 ## Checkpoint
 
-The `checkpoint` is a marker in change provider history (see: [Checkpointing](#checkpointing). When present, it is used as the beginning of an interval in history used for collecting a set of changes. The end of this interval is the latest point in change provider history. In addition, any pending changes not present in history are merged with the history set.
+The `checkpoint` is a marker in change provider history. When present, it is used as the beginning of an interval in history used for collecting a set of changes. The end of this interval is the latest point in change provider history. In addition, any pending changes not present in history are merged with the history set.
 
 For `git`, the checkpoint is stored as a reference such as HEAD, or an object SHA. Pending changes are untracked and uncommitted files. Therefore, the set of changes reported by the `git` change provider is: `[<checkpoint>, ..., HEAD] + [untracked] + [uncommitted]`.
 
@@ -788,11 +788,11 @@ monorail -v run -c hello build
 The `checkpoint` is a powerful way to control the behaviors of `analyze` and guided `run`. One of the most valuable ways to use it is to avoid executing the same commands for the same changeset. E.g. if all commands succeed in this hypothetical CI job, update the checkpoint to avoid running these commands for targets that haven't changed since the last push; `monorail run -c prep check build unit-test integration-test package && monorail checkpoint update -p`
 
 ## Conclusion
-This concludes the tutorial on the fundamentals of `monorail`. For most of what was covered here, additional options and configuration exists but are outside the scope of an introductory tutorial.
+This concludes the tutorial on the fundamentals of `monorail`. For most of what was covered here, additional options and configuration exists but are outside the scope of an introductory tutorial. For more information, use `monorail help` or pass the `--help` flag to subcommands.
 
 # Development setup
 
-This will build the project and run the tests:
+`monorail` is written in Rust, so working on it is straightforward; this will build the project and run the tests:
 
 ```sh
 cargo build
