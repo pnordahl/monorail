@@ -4,9 +4,7 @@
 ![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=main)
 [![Cargo](https://img.shields.io/crates/v/monorail.svg)](https://crates.io/crates/monorail)
 
-`monorail` is optimized to support the needs of single or multi-project, multi-language monorepos. Using a lightweight graph configuration, it provides APIs for analyzing changes, parallel command execution, logging, and more. It is designed to be fast, output structured text for use in other systems, and compose with existing compilers, interpreters, and tools without the need for bespoke rules or plugins.
-
-`monorail` can also be used as a replacement for command-runner tools such as `make`, `just`, `ninja`, and so on.
+`monorail` is optimized to support the needs of single or multi-project, multi-language monorepos. Using a lightweight graph configuration, it provides APIs for analyzing changes, parallel command execution, logging, and more. It is designed to be fast, output structured text for use in other systems, and compose with existing compilers, interpreters, and tools without the need for bespoke rules or plugins. With features found in large build systems like `bazel` and `buck`, 
 
 See the [tutorial](#tutorial) below for a practical walkthrough of how `monorail` works.
 
@@ -25,6 +23,8 @@ Run `cargo install --path .`
 At this time, Windows is unsupported. However, there are no technical limitations preventing its support in the future.
 
 ## Overview
+
+`monorail` blends features of build systems like `bazel` and `buck` with the simplicity and flexibility of command runners like `make` and `just`. It manages dependencies and target mapping with `bazel`-like change tracking, enabling selective rebuilds and efficient parallel execution. At the same time, `monorail` simplifies scripting, providing a streamlined, CLI-driven workflow for running custom tasks in any language across a monorepo.
 
 `monorail` is internally driven by two things:
 
@@ -61,7 +61,7 @@ In this tutorial, you'll learn about:
 First, create a fresh `git` repository, and another to act as a remote:
 
 ```sh
-git init --initial-branch=master monorail-tutorial
+git init monorail-tutorial
 cd monorail-tutorial
 git commit -m x --allow-empty
 echo 'monorail-out' > .gitignore
