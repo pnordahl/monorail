@@ -226,7 +226,7 @@ pub fn handle_log_show<'a>(
         Some(id) => *id,
         None => {
             let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
-            let log_info = tracking_table.open_log_info_sync()?;
+            let log_info = tracking_table.open_log_info()?;
             log_info.id
         }
     };
@@ -352,7 +352,7 @@ pub async fn handle_run<'a>(
         0 => {
             let ths = cfg.get_target_path_set();
             let mut lookups = Lookups::new(cfg, &ths, work_dir)?;
-            let checkpoint = match tracking_table.open_checkpoint().await {
+            let checkpoint = match tracking_table.open_checkpoint() {
                 Ok(checkpoint) => Some(checkpoint),
                 Err(MonorailError::TrackingCheckpointNotFound(_)) => None,
                 Err(e) => {
@@ -986,7 +986,7 @@ async fn run<'a>(
     };
     let log_dir = {
         // obtain current log info counter and increment it before using
-        let mut log_info = match tracking_table.open_log_info().await {
+        let mut log_info = match tracking_table.open_log_info() {
             Ok(log_info) => log_info,
             Err(MonorailError::TrackingLogInfoNotFound(_)) => tracking_table.new_log_info(),
             Err(e) => {
@@ -998,7 +998,7 @@ async fn run<'a>(
         }
         log_info.id += 1;
 
-        log_info.save().await?;
+        log_info.save()?;
         let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
         // remove the log_dir path if it exists, and create a new one
         std::fs::remove_dir_all(&log_dir).unwrap_or(());
@@ -1310,7 +1310,7 @@ pub async fn handle_result_show<'a>(
     // open tracking and get log_info
     let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
     // use log_info to get results.json file in id dir
-    let log_info = tracking_table.open_log_info().await?;
+    let log_info = tracking_table.open_log_info()?;
     let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
     let run_output_file = std::fs::OpenOptions::new()
         .read(true)
@@ -1411,7 +1411,7 @@ pub async fn handle_analyze<'a>(
                 ChangeProvider::Git => match cfg.change_provider {
                     ChangeProvider::Git => {
                         let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
-                        let checkpoint = match tracking.open_checkpoint().await {
+                        let checkpoint = match tracking.open_checkpoint() {
                             Ok(checkpoint) => Some(checkpoint),
                             Err(MonorailError::TrackingCheckpointNotFound(_)) => None,
                             Err(e) => {
@@ -1749,7 +1749,7 @@ pub async fn handle_checkpoint_delete(
     work_dir: &path::Path,
 ) -> Result<CheckpointDeleteOutput, MonorailError> {
     let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
-    let mut checkpoint = tracking.open_checkpoint().await?;
+    let mut checkpoint = tracking.open_checkpoint()?;
     checkpoint.id = "".to_string();
     checkpoint.pending = None;
 
@@ -1769,7 +1769,7 @@ pub async fn handle_checkpoint_show(
 ) -> Result<CheckpointShowOutput, MonorailError> {
     let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
     Ok(CheckpointShowOutput {
-        checkpoint: tracking.open_checkpoint().await?,
+        checkpoint: tracking.open_checkpoint()?,
     })
 }
 
@@ -1809,7 +1809,7 @@ async fn checkpoint_update_git<'a>(
     tracking_path: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
     let tracking = tracking::Table::new(tracking_path)?;
-    let mut checkpoint = match tracking.open_checkpoint().await {
+    let mut checkpoint = match tracking.open_checkpoint() {
         Ok(cp) => cp,
         Err(MonorailError::TrackingCheckpointNotFound(_)) => tracking.new_checkpoint(),
         // TODO: need to set path on checkpoint tho; don't use default
@@ -1833,7 +1833,7 @@ async fn checkpoint_update_git<'a>(
             }
         }
     }
-    checkpoint.save().await?;
+    checkpoint.save()?;
 
     Ok(CheckpointUpdateOutput { checkpoint })
 }

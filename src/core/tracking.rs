@@ -2,10 +2,9 @@ use crate::common::error::MonorailError;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Read;
-use std::path;
+use std::io::{Read, Write};
 use std::result::Result;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::{fs, io, path};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct LogInfo {
@@ -20,22 +19,9 @@ impl LogInfo {
             id: 0,
         }
     }
-    // Open the internal file and read its contents.
-    pub(crate) async fn open(file_path: &path::Path) -> Result<Self, MonorailError> {
-        let mut file = tokio::fs::OpenOptions::new()
-            .read(true)
-            .open(file_path)
-            .await
-            .map_err(MonorailError::TrackingLogInfoNotFound)?;
-        let mut data = vec![];
-        file.read_to_end(&mut data).await?;
-        let mut cp: Self = serde_json::from_slice(&data)?;
-        cp.path = file_path.to_path_buf();
-        Ok(cp)
-    }
 
     // Open the internal file and read its contents.
-    pub(crate) fn open_sync(file_path: &path::Path) -> Result<Self, MonorailError> {
+    pub(crate) fn open(file_path: &path::Path) -> Result<Self, MonorailError> {
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .open(file_path)
@@ -48,16 +34,15 @@ impl LogInfo {
     }
 
     // Copy all current state into the file.
-    pub(crate) async fn save(&mut self) -> Result<(), MonorailError> {
-        let mut file = tokio::fs::OpenOptions::new()
+    pub(crate) fn save(&mut self) -> Result<(), MonorailError> {
+        let mut file = fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .create(true)
-            .open(&self.path)
-            .await?;
+            .open(&self.path)?;
 
         let data = serde_json::to_vec(self)?;
-        file.write_all(&data).await?;
+        file.write_all(&data)?;
         Ok(())
     }
 }
@@ -78,30 +63,29 @@ impl Checkpoint {
         }
     }
     // Open the internal file and read its contents.
-    pub(crate) async fn open(file_path: &path::Path) -> Result<Self, MonorailError> {
-        let mut file = tokio::fs::OpenOptions::new()
+    pub(crate) fn open(file_path: &path::Path) -> Result<Self, MonorailError> {
+        let file = fs::OpenOptions::new()
             .read(true)
             .open(file_path)
-            .await
             .map_err(MonorailError::TrackingCheckpointNotFound)?;
-        let mut data = vec![];
-        file.read_to_end(&mut data).await?;
-        let mut cp: Self = serde_json::from_slice(&data)?;
+        let br = io::BufReader::new(file);
+        let mut decoder = zstd::stream::read::Decoder::new(br)?;
+        let mut cp: Checkpoint = serde_json::from_reader(&mut decoder)?;
         cp.path = file_path.to_path_buf();
         Ok(cp)
     }
 
     // Copy all current state into the file.
-    pub(crate) async fn save(&mut self) -> Result<(), MonorailError> {
-        let mut file = tokio::fs::OpenOptions::new()
+    pub(crate) fn save(&mut self) -> Result<(), MonorailError> {
+        let file = fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .create(true)
-            .open(&self.path)
-            .await?;
-
-        let data = serde_json::to_vec(self)?;
-        file.write_all(&data).await?;
+            .open(&self.path)?;
+        let bw = io::BufWriter::new(file);
+        let mut encoder = zstd::stream::write::Encoder::new(bw, 3)?;
+        serde_json::to_writer(&mut encoder, self)?;
+        encoder.finish()?;
         Ok(())
     }
 }
@@ -116,22 +100,19 @@ impl<'a> Table {
         std::fs::create_dir_all(dir_path)?;
         Ok(Self {
             log_info_path: dir_path.join("log_info.json"),
-            checkpoint_path: dir_path.join("checkpoint.json"),
+            checkpoint_path: dir_path.join("checkpoint.json.zst"),
         })
     }
     pub(crate) fn new_checkpoint(&'a self) -> Checkpoint {
         Checkpoint::new(&self.checkpoint_path)
     }
-    pub(crate) async fn open_checkpoint(&'a self) -> Result<Checkpoint, MonorailError> {
-        Checkpoint::open(&self.checkpoint_path).await
+    pub(crate) fn open_checkpoint(&'a self) -> Result<Checkpoint, MonorailError> {
+        Checkpoint::open(&self.checkpoint_path)
     }
     pub(crate) fn new_log_info(&'a self) -> LogInfo {
         LogInfo::new(&self.log_info_path)
     }
-    pub(crate) async fn open_log_info(&'a self) -> Result<LogInfo, MonorailError> {
-        LogInfo::open(&self.log_info_path).await
-    }
-    pub(crate) fn open_log_info_sync(&'a self) -> Result<LogInfo, MonorailError> {
-        LogInfo::open_sync(&self.log_info_path)
+    pub(crate) fn open_log_info(&'a self) -> Result<LogInfo, MonorailError> {
+        LogInfo::open(&self.log_info_path)
     }
 }
