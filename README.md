@@ -4,7 +4,7 @@
 ![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=main)
 [![Cargo](https://img.shields.io/crates/v/monorail.svg)](https://crates.io/crates/monorail)
 
-`monorail` is optimized to support the needs of single or multi-project, multi-language monorepos. Using a lightweight graph configuration, it provides APIs for analyzing changes, parallel command execution, logging, and more. It is designed to be fast, output structured text for use in other systems, and compose with existing compilers, interpreters, and tools without the need for bespoke rules or plugins. With features found in large build systems like `bazel` and `buck`, 
+`monorail` is optimized to support the needs of single or multi-project, multi-language monorepos. Using a lightweight graph configuration, it provides APIs for analyzing changes, parallel command execution, logging, and more. It is designed to be fast, output structured text for use in other systems, and compose with existing compilers, interpreters, and tools without the need for bespoke rules or plugins.
 
 See the [tutorial](#tutorial) below for a practical walkthrough of how `monorail` works.
 
