@@ -593,14 +593,16 @@ By default, `monorail` will use the `commands_path` (default: a `monorail` direc
 
 ```sh
 cat <<EOF > python/app3/monorail/hello.py
-#!/usr/bin/python3
+#!venv/bin/python3
 import sys
 
-print("Hello, from python/app3 and python!")
+print("Hello, from python/app3 and virtualenv python!")
 print("An error occurred", file=sys.stderr)
 EOF
 chmod +x python/app3/monorail/hello.py
 ```
+
+NOTE: While we're able to use the venv python3 executable directly in this trivial way, we wouldn't be able to access things that are installed in the environment without first activating the venv in a shell. So, in practice Python projects generally require a command written in a shell script that activates the env and then calls the script.
 
 ```sh
 cat <<EOF > proto/monorail/hello.awk
