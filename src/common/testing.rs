@@ -26,7 +26,6 @@ pub async fn init(bare: bool) -> path::PathBuf {
     if repo_path.exists() {
         tokio::fs::remove_dir_all(&repo_path).await.unwrap_or(());
     }
-    dbg!(&test_path);
     let _ = tokio::process::Command::new("git")
         .args(&args)
         .current_dir(&test_path)

@@ -3,11 +3,11 @@ use crate::core;
 
 use clap::builder::ArgPredicate;
 use clap::{Arg, ArgAction, Command};
+use once_cell::sync::OnceCell;
 use serde::Serialize;
-use std::env;
 use std::io::Write;
-use std::path;
 use std::result::Result;
+use std::{env, path};
 
 pub const CMD_MONORAIL: &str = "monorail";
 pub const CMD_CONFIG: &str = "config";
@@ -26,7 +26,6 @@ pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_START: &str = "start";
 pub const ARG_END: &str = "end";
 pub const ARG_CONFIG_FILE: &str = "config-file";
-pub const ARG_WORKING_DIRECTORY: &str = "working-directory";
 pub const ARG_OUTPUT_FORMAT: &str = "output-format";
 pub const ARG_PENDING: &str = "pending";
 pub const ARG_COMMAND: &str = "command";
@@ -43,6 +42,19 @@ pub const ARG_DEPS: &str = "deps";
 pub const ARG_FAIL_ON_UNDEFINED: &str = "fail-on-undefined";
 
 pub const VAL_JSON: &str = "json";
+
+// clap requires fields to be static, so dynamic fields like this need to be provided as static references
+static DEFAULT_CONFIG_PATH: OnceCell<String> = OnceCell::new();
+
+fn default_config_path() -> &'static str {
+    DEFAULT_CONFIG_PATH.get_or_init(|| {
+        env::current_dir()
+            .unwrap()
+            .join("Monorail.json")
+            .display()
+            .to_string()
+    })
+}
 
 pub fn get_app() -> clap::Command {
     let arg_git_path = Arg::new(ARG_GIT_PATH)
@@ -105,16 +117,9 @@ pub fn get_app() -> clap::Command {
         Arg::new(ARG_CONFIG_FILE)
             .short('f')
             .long(ARG_CONFIG_FILE)
-            .help("Sets a file to use for configuration")
+            .help("Absolute path to a configuration file")
             .num_args(1)
-            .default_value("Monorail.json"),
-    )
-    .arg(
-        Arg::new(ARG_WORKING_DIRECTORY)
-            .short('w')
-            .long(ARG_WORKING_DIRECTORY)
-            .help("Sets a directory to use for execution")
-            .num_args(1),
+            .default_value(default_config_path()),
     )
     .arg(
         Arg::new(ARG_OUTPUT_FORMAT)
@@ -132,8 +137,9 @@ pub fn get_app() -> clap::Command {
             .help("Emit additional workflow, result, and error logging. Specifying this flag multiple times (up to 3) increases the verbosity.")
             .action(ArgAction::Count),
     )
-    .subcommand(Command::new(CMD_CONFIG).subcommand(Command::new(CMD_SHOW).about("Show configuration, including runtime default values")))
+    .subcommand(Command::new(CMD_CONFIG).about("Parse and display configuration").subcommand(Command::new(CMD_SHOW).about("Show configuration, including runtime default values")))
     .subcommand(Command::new(CMD_CHECKPOINT)
+        .about("Show, update, or delete the tracking checkpoint")
         .subcommand(
         Command::new(CMD_UPDATE)
             .about("Update the tracking checkpoint")
@@ -159,6 +165,7 @@ pub fn get_app() -> clap::Command {
         )
     )
     .subcommand(Command::new(CMD_TARGET)
+        .about("Display targets and target groups")
         .subcommand(
         Command::new(CMD_SHOW)
             .about("List targets and their properties.")
@@ -212,7 +219,7 @@ pub fn get_app() -> clap::Command {
                 .action(ArgAction::SetTrue),
         )
     )
-    .subcommand(Command::new(CMD_RESULT).subcommand(Command::new(CMD_SHOW).about("Show results from `run` invocations")))
+    .subcommand(Command::new(CMD_RESULT).about("Show historical results from runs").subcommand(Command::new(CMD_SHOW).about("Show results from `run` invocations")))
     /*
 
     log --tail --result (-r) <id> --command (-f) [f1 f2 ... fN] --target (-t) [t1 t2 ... tN] --stdout --stderr
@@ -221,6 +228,7 @@ pub fn get_app() -> clap::Command {
     // TODO: monorail log delete [--all] --result [r1 r2 r3 ... rN]
     .subcommand(
         Command::new(CMD_LOG)
+        .about("Show historical or tail real-time logs")
         .subcommand(
             Command::new(CMD_SHOW).about("Display run logs")
                 .after_help(r#"This command shows logs for current or historical run invocations."#)
@@ -296,14 +304,18 @@ fn get_code(is_err: bool) -> i32 {
 
 #[tracing::instrument]
 pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i32, MonorailError> {
-    let work_dir: path::PathBuf = match matches.get_one::<String>(ARG_WORKING_DIRECTORY) {
-        Some(wd) => path::Path::new(wd).to_path_buf(),
-        None => env::current_dir()?,
-    };
-
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
-        Some(cfg_path) => {
-            let cfg = core::Config::new(&work_dir.join(cfg_path))?;
+        Some(cfg_file) => {
+            let cfg_path = path::Path::new(cfg_file);
+            let work_dir = path::Path::new(cfg_path)
+                .parent()
+                .ok_or(MonorailError::Generic(format!(
+                    "Config file {} has no parent directory",
+                    cfg_path.display().to_string()
+                )))?;
+
+            // let cfg = core::Config::new(&work_dir.join(cfg_path))?;
+            let cfg = core::Config::new(cfg_path)?;
             if let Some(config) = matches.subcommand_matches(CMD_CONFIG) {
                 if config.subcommand_matches(CMD_SHOW).is_some() {
                     write_result(&Ok(cfg), output_format)?;
@@ -313,17 +325,17 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
             if let Some(checkpoint) = matches.subcommand_matches(CMD_CHECKPOINT) {
                 if let Some(update) = checkpoint.subcommand_matches(CMD_UPDATE) {
                     let i = core::HandleCheckpointUpdateInput::try_from(update)?;
-                    let res = core::handle_checkpoint_update(&cfg, &i, &work_dir).await;
+                    let res = core::handle_checkpoint_update(&cfg, &i, work_dir).await;
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
                 }
                 if checkpoint.subcommand_matches(CMD_DELETE).is_some() {
-                    let res = core::handle_checkpoint_delete(&cfg, &work_dir).await;
+                    let res = core::handle_checkpoint_delete(&cfg, work_dir).await;
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
                 }
                 if checkpoint.subcommand_matches(CMD_SHOW).is_some() {
-                    let res = core::handle_checkpoint_show(&cfg, &work_dir).await;
+                    let res = core::handle_checkpoint_show(&cfg, work_dir).await;
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
                 }
@@ -332,7 +344,7 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
             if let Some(result) = matches.subcommand_matches(CMD_RESULT) {
                 if result.subcommand_matches(CMD_SHOW).is_some() {
                     let i = core::HandleResultShowInput::try_from(result)?;
-                    let res = core::handle_result_show(&cfg, &i, &work_dir).await;
+                    let res = core::handle_result_show(&cfg, &i, work_dir).await;
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
                 }
@@ -345,7 +357,7 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                         core::HandleTargetShowInput {
                             show_target_groups: list.get_flag(ARG_TARGET_GROUPS),
                         },
-                        &work_dir,
+                        work_dir,
                     );
                     write_result(&res, output_format)?;
                     return Ok(get_code(res.is_err()));
@@ -354,14 +366,14 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
 
             if let Some(analyze) = matches.subcommand_matches(CMD_ANALYZE) {
                 let i = core::HandleAnalyzeInput::from(analyze);
-                let res = core::handle_analyze(&cfg, &i, &work_dir).await;
+                let res = core::handle_analyze(&cfg, &i, work_dir).await;
                 write_result(&res, output_format)?;
                 return Ok(get_code(res.is_err()));
             }
 
             if let Some(run) = matches.subcommand_matches(CMD_RUN) {
                 let i = core::RunInput::try_from(run).unwrap();
-                match core::handle_run(&cfg, &i, &work_dir).await {
+                match core::handle_run(&cfg, &i, work_dir).await {
                     Ok(o) => {
                         let mut code = HANDLE_OK;
                         if o.failed {
@@ -388,7 +400,7 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                 }
                 if let Some(show) = log.subcommand_matches(CMD_SHOW) {
                     let i = core::LogShowInput::try_from(show)?;
-                    match core::handle_log_show(&cfg, &i, &work_dir) {
+                    match core::handle_log_show(&cfg, &i, work_dir) {
                         Err(e) => {
                             write_result(&Err::<(), MonorailError>(e), output_format)?;
                             return Ok(HANDLE_ERR);

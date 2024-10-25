@@ -131,7 +131,7 @@ popd
 
 ## Mapping targets
 
-Now that our repository structure is in place, we will create a `Monorail.json` file that describes this structure in terms `monorail` understands. This command will create a `Monorail.json` file in the root of the repository, and simply map top level paths to targets:
+Now that our repository structure is in place, we will create a `Monorail.json` file that describes this structure in terms `monorail` understands. This command will create that file in the root of the repository, and simply map top level paths to targets:
 
 ```sh
 cat <<EOF > Monorail.json
@@ -183,7 +183,7 @@ monorail config show | jq
 }
 ```
 
-This output includes some default values for things not specified, but otherwise reflects what we have entered.
+This output includes some default values for things not specified, but otherwise reflects what we have entered. An additional note about the location of the `Monorail.json` file; you can specify an absolute path with `-c`, e.g. `monorail -c </path/to/your/config/file>`, and this will be used instead of the default (`$(pwd)/Monorail.json`). All of `monorail`s commands are executed, and internal tracking files and logs stored, _relative to this path_.
 
 ## Preview: running commands
 
@@ -575,12 +575,11 @@ Second, note how multiple log block headers (e.g. `[monorail | stderr.zst | rust
 
 ## Commands
 
-Commands are the way `monorail` executes your code against targets. Each target implements a command with a unique name, e.g. `test`, `build`, etc. as an executable file, and that file is executed and monitored as a subprocess of `monorail`. Depending on the graph defined by `Monorail.json`, these commands may be executed in parallel when it's safe to do so. All commands are executed within a working directory defined by the `-w` flag, which defaults to the root of the repo. So, in many cases you may want to `cd` or `pushd` before running code that expects to be inside of a target path. For example, this code does just that:
+Commands are the way `monorail` executes your code against targets. Each target implements a command with a unique name, e.g. `test`, `build`, etc. as an executable file, and that file is executed and monitored as a subprocess of `monorail`. Depending on the graph defined by `Monorail.json`, these commands may be executed in parallel when it's safe to do so. For convenience, all commands are executed relative to the target path, e.g. for a target with path `rust`, the following code runs within the `rust` directory:
 
 ```sh
 #!/bin/bash
 
-cd rust
 cargo test -- --nocapture
 ```
 

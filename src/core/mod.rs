@@ -417,6 +417,7 @@ pub async fn handle_run<'a>(
 #[derive(Serialize)]
 struct RunData {
     target_path: String,
+    command_work_dir: path::PathBuf,
     command_path: Option<path::PathBuf>,
     command_args: Option<Vec<String>>,
     #[serde(skip)]
@@ -430,7 +431,6 @@ struct RunDataGroup {
 }
 #[derive(Serialize)]
 struct RunDataGroups {
-    work_dir: path::PathBuf,
     groups: Vec<RunDataGroup>,
 }
 
@@ -518,6 +518,7 @@ fn get_run_data_groups<'a>(
                 };
                 run_data.push(RunData {
                     target_path: target_path.to_owned(),
+                    command_work_dir: work_dir.join(target_path),
                     command_path,
                     command_args,
                     logs,
@@ -543,14 +544,14 @@ fn get_run_data_groups<'a>(
             results: crrs,
         },
         RunDataGroups {
-            work_dir: work_dir.to_path_buf(),
+            // work_dir: work_dir.to_path_buf(),
             groups,
         },
     ))
 }
 
 pub fn spawn_task(
-    work_dir: &path::Path,
+    command_work_dir: &path::Path,
     command_path: &path::Path,
     command_args: &Option<Vec<String>>,
 ) -> Result<tokio::process::Child, MonorailError> {
@@ -560,7 +561,7 @@ pub fn spawn_task(
         "Spawn task"
     );
     let mut cmd = tokio::process::Command::new(command_path);
-    cmd.current_dir(work_dir)
+    cmd.current_dir(command_work_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         // parallel execution makes use of stdin impractical
@@ -1090,8 +1091,7 @@ async fn run<'a>(
                         target = &rd.target_path,
                         "task"
                     );
-                    let child =
-                        spawn_task(&run_data_groups.work_dir, &command_path, &rd.command_args)?;
+                    let child = spawn_task(&rd.command_work_dir, &command_path, &rd.command_args)?;
                     let token2 = token.clone();
                     let log_stream_client2 = log_stream_client.clone();
                     let handle = js.spawn(async move {
@@ -2271,7 +2271,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    commit: "".to_string(),
+                    id: "".to_string(),
                     pending: None,
                 }),
                 &repo_path
@@ -2291,7 +2291,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    commit: first_head.clone(),
+                    id: first_head.clone(),
                     pending: None,
                 }),
                 &repo_path
@@ -2314,7 +2314,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    commit: first_head.clone(),
+                    id: first_head.clone(),
                     pending: None,
                 }),
                 &repo_path
@@ -2331,7 +2331,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    commit: second_head.clone(),
+                    id: second_head.clone(),
                     pending: None,
                 }),
                 &repo_path
@@ -2350,7 +2350,7 @@ mod tests {
                 },
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    commit: second_head.clone(),
+                    id: second_head.clone(),
                     pending: None,
                 }),
                 &repo_path
@@ -2382,7 +2382,7 @@ mod tests {
             &git_opts,
             &Some(tracking::Checkpoint {
                 path: path::Path::new("x").to_path_buf(),
-                commit: "test".to_string(),
+                id: "test".to_string(),
                 pending: Some(HashMap::from([(
                     "foo.txt".to_string(),
                     "blarp".to_string()
@@ -2448,7 +2448,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    commit: start.clone(),
+                    id: start.clone(),
                     pending: Some(HashMap::from([(
                         "foo.txt".to_string(),
                         "dsfksl".to_string()
@@ -2499,7 +2499,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    commit: start.clone(),
+                    id: start.clone(),
                     pending: Some(HashMap::from([(
                         "foo.txt".to_string(),
                         foo_checksum.clone()
@@ -2526,7 +2526,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    commit: end.clone(),
+                    id: end.clone(),
                     pending: Some(HashMap::from([(
                         "foo.txt".to_string(),
                         foo_checksum.clone()
@@ -2547,7 +2547,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    commit: end.clone(),
+                    id: end.clone(),
                     pending: Some(HashMap::from([
                         ("foo.txt".to_string(), foo_checksum),
                         ("bar.txt".to_string(), bar_checksum)
@@ -2679,9 +2679,9 @@ mod tests {
     async fn test_get_file_checksum() {
         let repo_path = init(false).await;
 
-        // files that don't exist can't be checksummed
+        // files that don't exist have an empty checksum
         let p = &repo_path.join("test.txt");
-        assert!(get_file_checksum(p).await.is_err());
+        assert_eq!(get_file_checksum(p).await.unwrap(), "".to_string());
 
         // write file and compare checksums
         let checksum = write_with_checksum(p, &[1, 2, 3]).await.unwrap();
@@ -2744,7 +2744,7 @@ mod tests {
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let ai = AnalyzeInput::new(true, false, false);
-        let o = analyze(&ai, &mut lookups, Some, false).unwrap();
+        let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
         assert!(o.changes.unwrap().is_empty());
         assert!(o.targets.is_empty());
@@ -2765,7 +2765,7 @@ mod tests {
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
-        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
+        let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2792,7 +2792,7 @@ mod tests {
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
-        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
+        let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2818,7 +2818,7 @@ mod tests {
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
-        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
+        let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2856,7 +2856,7 @@ mod tests {
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
-        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
+        let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2890,7 +2890,7 @@ mod tests {
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
-        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
+        let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
@@ -2923,7 +2923,7 @@ mod tests {
         let (c, work_dir) = prep_raw_config_repo().await;
         let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
-        let o = analyze(&ai, &mut lookups, Some, true).unwrap();
+        let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
