@@ -48,6 +48,7 @@ pub struct RunInput<'a> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RunOutput {
     pub(crate) failed: bool,
+    invocation_args: String,
     results: Vec<CommandRunResult>,
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -340,6 +341,7 @@ fn stream_archive_file_to_stdout(
 pub async fn handle_run<'a>(
     cfg: &'a Config,
     input: &'a RunInput<'a>,
+    invocation_args: &'a str,
     work_dir: &'a path::Path,
 ) -> Result<RunOutput, MonorailError> {
     let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
@@ -379,6 +381,7 @@ pub async fn handle_run<'a>(
                 targets.clone(),
                 &target_groups,
                 input.fail_on_undefined,
+                invocation_args,
             )
             .await
         }
@@ -409,6 +412,7 @@ pub async fn handle_run<'a>(
                 targets.clone(),
                 &target_groups,
                 input.fail_on_undefined,
+                invocation_args,
             )
             .await
         }
@@ -473,6 +477,7 @@ fn get_run_data_groups<'a>(
     target_groups: &[Vec<String>],
     work_dir: &path::Path,
     log_dir: &path::Path,
+    invocation_args: &'a str,
 ) -> Result<(RunOutput, RunDataGroups), MonorailError> {
     // for converting potentially deep nested paths into a single directory string
     let mut path_hasher = sha2::Sha256::new();
@@ -541,12 +546,10 @@ fn get_run_data_groups<'a>(
     Ok((
         RunOutput {
             failed: false,
+            invocation_args: invocation_args.to_owned(),
             results: crrs,
         },
-        RunDataGroups {
-            // work_dir: work_dir.to_path_buf(),
-            groups,
-        },
+        RunDataGroups { groups },
     ))
 }
 
@@ -971,6 +974,7 @@ async fn run<'a>(
     targets: Vec<Target>,
     target_groups: &[Vec<String>],
     fail_on_undefined: bool,
+    invocation_args: &'a str,
 ) -> Result<RunOutput, MonorailError> {
     let log_stream_client = match LogStreamClient::connect("127.0.0.1:9201").await {
         Ok(lsc) => Some(lsc),
@@ -982,6 +986,7 @@ async fn run<'a>(
 
     let mut o = RunOutput {
         failed: false,
+        invocation_args: invocation_args.to_owned(),
         results: vec![],
     };
     let log_dir = {
@@ -1013,6 +1018,7 @@ async fn run<'a>(
         target_groups,
         work_dir,
         &log_dir,
+        invocation_args,
     )?;
 
     // Make initial run output available for use by other commands
@@ -1261,7 +1267,7 @@ async fn run<'a>(
 }
 
 // Serialize and store the compressed results of the given RunOutput.
-fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), MonorailError> {
+fn store_run_output<'a>(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), MonorailError> {
     let run_result_file = OpenOptions::new()
         .create(true)
         .write(true)

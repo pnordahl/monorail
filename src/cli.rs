@@ -373,7 +373,8 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
 
             if let Some(run) = matches.subcommand_matches(CMD_RUN) {
                 let i = core::RunInput::try_from(run).unwrap();
-                match core::handle_run(&cfg, &i, work_dir).await {
+                let invocation_args = env::args().skip(1).collect::<Vec<_>>().join(" ");
+                match core::handle_run(&cfg, &i, &invocation_args, work_dir).await {
                     Ok(o) => {
                         let mut code = HANDLE_OK;
                         if o.failed {
