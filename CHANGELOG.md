@@ -36,15 +36,14 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 
 - Replaced `monorail-bash` for running user-defined commands with `monorail run`
 - Generate a target DAG from target `uses` definitions
-- Parallel execution of UDFs guided by the target DAG
+- Parallel execution of user defined executables guided by the target DAG
 - Tracking table for storing the change detection checkpoint and for future internal use
-- Output directory for collecting logs and storing tracking table
-- Stdout/stderr logs piped to output directory
-- List configured targets with `monorail target list`
+- Collection of compressed logs and results
+- Real-time log streaming
 
 ### Changed
 
-- Replaced the concept of tag-based checkpoints with a single local checkpoint file
+- Replaced tag-based checkpoints with a universal checkpoint file
 - Replaced `monorail checkpoint create` with `monorail checkpoint update`
 - Removed `git.trunk`, `git.remote`, and `git.tags_refspec_prefix` configuration
 - Removed `extension` configuration

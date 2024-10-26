@@ -594,6 +594,7 @@ struct CommandTask {
     start_time: time::Instant,
 }
 impl CommandTask {
+    #[allow(clippy::too_many_arguments)]
     #[instrument]
     async fn run(
         &mut self,
@@ -676,7 +677,7 @@ impl<'a> LogStreamServer<'a> {
             debug!("Client connected");
             // first, write to the client what we're interested in receiving
             socket.write_all(&args_data).await?;
-            _ = socket.write(&[b'\n']).await?;
+            _ = socket.write(b"\n").await?;
             debug!("Sent log stream arguments");
             Self::process(socket).await?;
         }
@@ -688,7 +689,7 @@ impl<'a> LogStreamServer<'a> {
         let mut stdout = tokio::io::stdout();
         while let Some(line) = lines.next_line().await? {
             stdout.write_all(line.as_bytes()).await?;
-            _ = stdout.write(&[b'\n']).await?;
+            _ = stdout.write(b"\n").await?;
             stdout.flush().await?;
         }
         Ok(())
@@ -966,6 +967,7 @@ impl Compressor {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[instrument]
 async fn run<'a>(
     cfg: &'a Config,
