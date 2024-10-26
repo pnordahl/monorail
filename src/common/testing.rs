@@ -1,76 +1,90 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
-use std::fs;
-use std::io::Write;
+use std::path;
+use tokio::io::AsyncWriteExt;
 
 // Using this in tests allows them to execute concurrently with a clean repo in each case.
 static GLOBAL_REPO_ID: AtomicUsize = AtomicUsize::new(0);
 
 // Git utils
-pub fn repo_path(n: usize) -> String {
-    format!("/tmp/monorail/test-{}.git", n)
+pub fn test_path() -> path::PathBuf {
+    path::Path::new(&"/tmp/monorail".to_string()).to_path_buf()
 }
-pub fn get_repo(bare: bool) -> (git2::Repository, String) {
+
+pub fn repo_path(test_path: &path::Path, n: usize) -> path::PathBuf {
+    test_path.join(format!("test-{}", n))
+}
+
+pub async fn init(bare: bool) -> path::PathBuf {
     let id = GLOBAL_REPO_ID.fetch_add(1, Ordering::SeqCst);
-    let repo_path = repo_path(id);
-    let p = std::path::Path::new(&repo_path);
-    if p.exists() {
-        purge_repo(&repo_path);
-    }
+    let test_path = test_path();
+    tokio::fs::create_dir_all(&test_path).await.unwrap();
+    let repo_path = repo_path(&test_path, id);
+    let mut args = vec!["init", repo_path.to_str().unwrap()];
     if bare {
-        return (git2::Repository::init_bare(p).unwrap(), repo_path);
+        args.push("--bare");
     }
-    (git2::Repository::init(p).unwrap(), repo_path)
-}
-pub fn purge_repo(path: &str) {
-    let p = std::path::Path::new(path);
-    std::fs::remove_dir_all(p).unwrap_or(());
-}
-
-pub fn get_signature() -> git2::Signature<'static> {
-    git2::Signature::now("test", "test@foo.com").unwrap()
-}
-
-pub fn get_tree(repo: &git2::Repository) -> git2::Tree {
-    let tree_oid = repo.index().unwrap().write_tree().unwrap();
-    repo.find_tree(tree_oid).unwrap()
+    if repo_path.exists() {
+        tokio::fs::remove_dir_all(&repo_path).await.unwrap_or(());
+    }
+    let _ = tokio::process::Command::new("git")
+        .args(&args)
+        .current_dir(&test_path)
+        .output()
+        .await
+        .unwrap();
+    repo_path
 }
 
-pub fn create_commit(
-    repo: &git2::Repository,
-    tree: &git2::Tree,
-    message: &str,
-    update_ref: Option<&str>,
-    parents: &[&git2::Commit<'_>],
-) -> git2::Oid {
-    repo.commit(
-        update_ref,
-        &get_signature(),
-        &get_signature(),
-        message,
-        tree,
-        parents,
+pub async fn add(name: &str, repo_path: &path::Path) {
+    let _ = tokio::process::Command::new("git")
+        .arg("add")
+        .arg(name)
+        .current_dir(repo_path)
+        .output()
+        .await
+        .unwrap();
+}
+pub async fn commit(repo_path: &path::Path) {
+    let _ = tokio::process::Command::new("git")
+        .arg("commit")
+        .arg("-a")
+        .arg("-m")
+        .arg("test")
+        .arg("--allow-empty")
+        .current_dir(repo_path)
+        .output()
+        .await
+        .unwrap();
+}
+pub async fn get_head(repo_path: &path::Path) -> String {
+    let end = String::from_utf8(
+        tokio::process::Command::new("git")
+            .arg("rev-parse")
+            .arg("HEAD")
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap()
+            .stdout,
     )
-    .unwrap()
+    .unwrap();
+    String::from(end.trim())
 }
-
-pub fn get_commit(repo: &git2::Repository, oid: git2::Oid) -> git2::Commit<'_> {
-    repo.find_commit(oid).unwrap()
-}
-pub fn commit_file(
-    repo: &git2::Repository,
+pub async fn create_file(
+    repo_path: &path::Path,
+    dir: &str,
     file_name: &str,
-    update_ref: Option<&str>,
-    parents: &[&git2::Commit<'_>],
-) -> git2::Oid {
-    let mut index = repo.index().unwrap();
-    index.add_path(std::path::Path::new(file_name)).unwrap();
-    index.write_tree().unwrap();
-    create_commit(repo, &get_tree(repo), "b", update_ref, parents)
-}
-pub fn create_file(repo_path: &str, dir: &str, file_name: &str, content: &[u8]) -> std::fs::File {
-    fs::create_dir_all(std::path::Path::new(repo_path).join(dir)).unwrap();
-    let fpath = std::path::Path::new(repo_path).join(dir).join(file_name);
-    let mut file = std::fs::File::create(fpath).unwrap();
-    file.write_all(content).unwrap();
+    content: &[u8],
+) -> tokio::fs::File {
+    let dir_path = repo_path.join(dir);
+    tokio::fs::create_dir_all(&dir_path).await.unwrap();
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(&dir_path.join(file_name))
+        .await
+        .unwrap();
+    file.write_all(content).await.unwrap();
     file
 }

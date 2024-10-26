@@ -26,3 +26,25 @@ A large internal refactor to improve speed and flexibility.
 
 ### Fixed
 - Minor tag message formatting issue when using git tags for checkpointing
+
+
+## [3.0.0] - 2024-10-03
+  
+Dependency graph, parallel execution, replaced extensions with `monorail run`, and checkpoint rework.
+
+### Added
+
+- Replaced `monorail-bash` for running user-defined commands with `monorail run`
+- Generate a target DAG from target `uses` definitions
+- Parallel execution of user defined executables guided by the target DAG
+- Tracking table for storing the change detection checkpoint and for future internal use
+- Collection of compressed logs and results
+- Real-time log streaming
+
+### Changed
+
+- Replaced tag-based checkpoints with a universal checkpoint file
+- Replaced `monorail checkpoint create` with `monorail checkpoint update`
+- Removed `git.trunk`, `git.remote`, and `git.tags_refspec_prefix` configuration
+- Removed `extension` configuration
+- Removed `libgit` integration and `use_libgit2_status` argument
