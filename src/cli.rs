@@ -2,7 +2,7 @@ use crate::common::error::MonorailError;
 use crate::core;
 
 use clap::builder::ArgPredicate;
-use clap::{Arg, ArgAction, Command};
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use once_cell::sync::OnceCell;
 use serde::Serialize;
 use std::io::Write;
@@ -65,16 +65,17 @@ pub fn get_app() -> clap::Command {
     let arg_start = Arg::new(ARG_START)
         .short('s')
         .long(ARG_START)
-        .help("Start of the interval to consider for changes; if not provided, the latest tag (or first commit, if no tags have been made) is used")
+        .help("Start of the interval to consider for changes; if not provided, the checkpoint (or start of history, if no checkpoint exists) is used")
         .num_args(1)
         .required(false);
     let arg_end = Arg::new(ARG_END)
         .short('e')
         .long(ARG_END)
-        .help("End of the interval to consider for changes; if not provided HEAD is used")
+        .help(
+            "End of the interval to consider for changes; if not provided, end of history is used",
+        )
         .num_args(1)
         .required(false);
-
     let arg_log_id = Arg::new(ARG_ID)
         .long(ARG_ID)
         .short('i')
@@ -302,85 +303,81 @@ fn get_code(is_err: bool) -> i32 {
     HANDLE_OK
 }
 
+#[derive(Debug)]
+pub struct OutputOptions<'a> {
+    pub format: &'a str,
+}
+
 #[tracing::instrument]
-pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i32, MonorailError> {
+pub async fn handle<'a>(
+    matches: &ArgMatches,
+    output_options: &OutputOptions<'a>,
+) -> Result<i32, MonorailError> {
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
-        Some(cfg_file) => {
-            let cfg_path = path::Path::new(cfg_file);
-            let work_dir = path::Path::new(cfg_path)
+        Some(config_file) => {
+            let config_path = path::Path::new(config_file);
+            let work_path = path::Path::new(config_path)
                 .parent()
                 .ok_or(MonorailError::Generic(format!(
                     "Config file {} has no parent directory",
-                    cfg_path.display().to_string()
+                    config_path.display()
                 )))?;
-
-            // let cfg = core::Config::new(&work_dir.join(cfg_path))?;
-            let cfg = core::Config::new(cfg_path)?;
-            if let Some(config) = matches.subcommand_matches(CMD_CONFIG) {
-                if config.subcommand_matches(CMD_SHOW).is_some() {
-                    write_result(&Ok(cfg), output_format)?;
+            let config = core::Config::new(config_path)?;
+            if let Some(config_matches) = matches.subcommand_matches(CMD_CONFIG) {
+                if config_matches.subcommand_matches(CMD_SHOW).is_some() {
+                    write_result(&Ok(config), output_options)?;
                     return Ok(HANDLE_OK);
                 }
             }
-            if let Some(checkpoint) = matches.subcommand_matches(CMD_CHECKPOINT) {
-                if let Some(update) = checkpoint.subcommand_matches(CMD_UPDATE) {
-                    let i = core::HandleCheckpointUpdateInput::try_from(update)?;
-                    let res = core::handle_checkpoint_update(&cfg, &i, work_dir).await;
-                    write_result(&res, output_format)?;
+            if let Some(checkpoint_matches) = matches.subcommand_matches(CMD_CHECKPOINT) {
+                if let Some(update_matches) = checkpoint_matches.subcommand_matches(CMD_UPDATE) {
+                    // return handle_checkpoint_update(&config, update_matches, output_format, work_path);
+                    let i = core::CheckpointUpdateInput::try_from(update_matches)?;
+                    let res = core::handle_checkpoint_update(&config, &i, work_path).await;
+                    write_result(&res, output_options)?;
                     return Ok(get_code(res.is_err()));
                 }
-                if checkpoint.subcommand_matches(CMD_DELETE).is_some() {
-                    let res = core::handle_checkpoint_delete(&cfg, work_dir).await;
-                    write_result(&res, output_format)?;
+                if checkpoint_matches.subcommand_matches(CMD_DELETE).is_some() {
+                    let res = core::handle_checkpoint_delete(&config, work_path).await;
+                    write_result(&res, output_options)?;
                     return Ok(get_code(res.is_err()));
                 }
-                if checkpoint.subcommand_matches(CMD_SHOW).is_some() {
-                    let res = core::handle_checkpoint_show(&cfg, work_dir).await;
-                    write_result(&res, output_format)?;
-                    return Ok(get_code(res.is_err()));
-                }
-            }
-
-            if let Some(result) = matches.subcommand_matches(CMD_RESULT) {
-                if result.subcommand_matches(CMD_SHOW).is_some() {
-                    let i = core::HandleResultShowInput::try_from(result)?;
-                    let res = core::handle_result_show(&cfg, &i, work_dir).await;
-                    write_result(&res, output_format)?;
+                if checkpoint_matches.subcommand_matches(CMD_SHOW).is_some() {
+                    let res = core::handle_checkpoint_show(&config, work_path).await;
+                    write_result(&res, output_options)?;
                     return Ok(get_code(res.is_err()));
                 }
             }
 
-            if let Some(target) = matches.subcommand_matches(CMD_TARGET) {
-                if let Some(list) = target.subcommand_matches(CMD_SHOW) {
-                    let res = core::handle_target_show(
-                        &cfg,
-                        core::HandleTargetShowInput {
-                            show_target_groups: list.get_flag(ARG_TARGET_GROUPS),
-                        },
-                        work_dir,
-                    );
-                    write_result(&res, output_format)?;
-                    return Ok(get_code(res.is_err()));
+            if let Some(result_matches) = matches.subcommand_matches(CMD_RESULT) {
+                if result_matches.subcommand_matches(CMD_SHOW).is_some() {
+                    return handle_result_show(&config, result_matches, output_options, work_path);
+                }
+            }
+
+            if let Some(target_matches) = matches.subcommand_matches(CMD_TARGET) {
+                if let Some(list_matches) = target_matches.subcommand_matches(CMD_SHOW) {
+                    return handle_target_list(&config, list_matches, output_options, work_path);
                 }
             }
 
             if let Some(analyze) = matches.subcommand_matches(CMD_ANALYZE) {
                 let i = core::HandleAnalyzeInput::from(analyze);
-                let res = core::handle_analyze(&cfg, &i, work_dir).await;
-                write_result(&res, output_format)?;
+                let res = core::handle_analyze(&config, &i, work_path).await;
+                write_result(&res, output_options)?;
                 return Ok(get_code(res.is_err()));
             }
 
             if let Some(run) = matches.subcommand_matches(CMD_RUN) {
                 let i = core::RunInput::try_from(run).unwrap();
                 let invocation_args = env::args().skip(1).collect::<Vec<_>>().join(" ");
-                match core::handle_run(&cfg, &i, &invocation_args, work_dir).await {
+                match core::handle_run(&config, &i, &invocation_args, work_path).await {
                     Ok(o) => {
                         let mut code = HANDLE_OK;
                         if o.failed {
                             code = HANDLE_ERR;
                         }
-                        write_result(&Ok(o), output_format)?;
+                        write_result(&Ok(o), output_options)?;
                         return Ok(code);
                     }
                     Err(e) => {
@@ -388,26 +385,12 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
                     }
                 }
             }
-            if let Some(log) = matches.subcommand_matches(CMD_LOG) {
-                if let Some(tail) = log.subcommand_matches(CMD_TAIL) {
-                    let i = core::LogStreamArgs::try_from(tail)?;
-                    match core::handle_log_tail(&cfg, &i).await {
-                        Err(e) => {
-                            write_result(&Err::<(), MonorailError>(e), output_format)?;
-                            return Ok(HANDLE_ERR);
-                        }
-                        Ok(_) => return Ok(HANDLE_OK),
-                    }
+            if let Some(log_matches) = matches.subcommand_matches(CMD_LOG) {
+                if let Some(tail_matches) = log_matches.subcommand_matches(CMD_TAIL) {
+                    return handle_log_tail(&config, tail_matches, output_options).await;
                 }
-                if let Some(show) = log.subcommand_matches(CMD_SHOW) {
-                    let i = core::LogShowInput::try_from(show)?;
-                    match core::handle_log_show(&cfg, &i, work_dir) {
-                        Err(e) => {
-                            write_result(&Err::<(), MonorailError>(e), output_format)?;
-                            return Ok(HANDLE_ERR);
-                        }
-                        Ok(_) => return Ok(HANDLE_OK),
-                    }
+                if let Some(show_matches) = log_matches.subcommand_matches(CMD_SHOW) {
+                    return handle_log_show(&config, show_matches, output_options, work_path);
                 }
             }
             Err(MonorailError::from("Command not recognized"))
@@ -416,14 +399,73 @@ pub async fn handle(matches: &clap::ArgMatches, output_format: &str) -> Result<i
     }
 }
 
+async fn handle_log_tail<'a>(
+    config: &'a core::Config,
+    matches: &'a ArgMatches,
+    output_options: &OutputOptions<'a>,
+) -> Result<i32, MonorailError> {
+    let i = core::LogTailInput::try_from(matches)?;
+    match core::log_tail(config, &i).await {
+        Err(e) => {
+            write_result(&Err::<(), MonorailError>(e), output_options)?;
+            Ok(HANDLE_ERR)
+        }
+        Ok(_) => Ok(HANDLE_OK),
+    }
+}
+
+fn handle_log_show<'a>(
+    config: &'a core::Config,
+    matches: &'a ArgMatches,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let i = core::LogShowInput::try_from(matches)?;
+    match core::log_show(config, &i, work_path) {
+        Err(e) => {
+            write_result(&Err::<(), MonorailError>(e), output_options)?;
+            Ok(HANDLE_ERR)
+        }
+        Ok(_) => Ok(HANDLE_OK),
+    }
+}
+
+fn handle_target_list<'a>(
+    config: &'a core::Config,
+    matches: &'a ArgMatches,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let res = core::target_show(
+        config,
+        core::TargetShowInput {
+            show_target_groups: matches.get_flag(ARG_TARGET_GROUPS),
+        },
+        work_path,
+    );
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
+}
+fn handle_result_show<'a>(
+    config: &'a core::Config,
+    matches: &'a ArgMatches,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let i = core::ResultShowInput::try_from(matches)?;
+    let res = core::result_show(config, work_path, &i);
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
+}
+
 pub fn write_result<T>(
     value: &Result<T, MonorailError>,
-    output_format: &str,
+    opts: &OutputOptions<'_>,
 ) -> Result<(), MonorailError>
 where
     T: Serialize,
 {
-    match output_format {
+    match opts.format {
         "json" => {
             match value {
                 Ok(t) => {
@@ -441,19 +483,19 @@ where
         }
         _ => Err(MonorailError::Generic(format!(
             "Unrecognized output format {}",
-            output_format
+            opts.format
         ))),
     }
 }
 
-impl TryFrom<&clap::ArgMatches> for core::HandleResultShowInput {
+impl TryFrom<&clap::ArgMatches> for core::ResultShowInput {
     type Error = MonorailError;
     fn try_from(_cmd: &clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {})
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::HandleCheckpointUpdateInput<'a> {
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::CheckpointUpdateInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -522,7 +564,16 @@ impl<'a> From<&'a clap::ArgMatches> for core::HandleAnalyzeInput<'a> {
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogStreamArgs {
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogTailInput {
+    type Error = MonorailError;
+    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
+        Ok(Self {
+            filter_input: core::LogFilterInput::try_from(cmd)?,
+        })
+    }
+}
+
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogFilterInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -548,7 +599,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogShowInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            args: core::LogStreamArgs::try_from(cmd)?,
+            filter_input: core::LogFilterInput::try_from(cmd)?,
             id: cmd.get_one::<usize>(ARG_ID),
         })
     }

@@ -174,8 +174,12 @@ async fn get_git_all_changes<'a>(
     checkpoint: &'a Option<tracking::Checkpoint>,
     work_dir: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
-    let diff_changes = get_git_diff_changes(git_opts, checkpoint, work_dir).await?;
-    let mut other_changes = git_cmd_other_changes(git_opts.git_path, work_dir).await?;
+    // let diff_changes = get_git_diff_changes(git_opts, checkpoint, work_dir).await?;
+    // let mut other_changes = git_cmd_other_changes(git_opts.git_path, work_dir).await?;
+    let (diff_changes, mut other_changes) = tokio::try_join!(
+        get_git_diff_changes(git_opts, checkpoint, work_dir),
+        git_cmd_other_changes(git_opts.git_path, work_dir)
+    )?;
     if let Some(diff_changes) = diff_changes {
         other_changes.extend(diff_changes);
     }
@@ -205,20 +209,22 @@ async fn get_git_all_changes<'a>(
 }
 
 #[derive(Serialize)]
+pub struct LogTailInput {
+    pub filter_input: LogFilterInput,
+}
+
+pub async fn log_tail<'a>(_cfg: &'a Config, input: &LogTailInput) -> Result<(), MonorailError> {
+    let mut lss = LogStreamServer::new("127.0.0.1:9201", &input.filter_input);
+    lss.listen().await
+}
+
+#[derive(Serialize)]
 pub struct LogShowInput<'a> {
     pub id: Option<&'a usize>,
-    pub args: LogStreamArgs,
+    pub filter_input: LogFilterInput,
 }
 
-pub async fn handle_log_tail<'a>(
-    _cfg: &'a Config,
-    args: &'a LogStreamArgs,
-) -> Result<(), MonorailError> {
-    let mut log_stream_server = LogStreamServer::new("127.0.0.1:9201", args);
-    log_stream_server.listen().await
-}
-
-pub fn handle_log_show<'a>(
+pub fn log_show<'a>(
     cfg: &'a Config,
     input: &'a LogShowInput<'a>,
     work_dir: &'a path::Path,
@@ -279,18 +285,16 @@ pub fn handle_log_show<'a>(
                             .to_str()
                             .ok_or(MonorailError::from("Bad file name string"))?;
                         if is_log_allowed(
-                            &input.args.targets,
-                            &input.args.commands,
-                            &target,
-                            &command,
-                        ) {
-                            if filename == STDOUT_FILE && input.args.include_stdout
-                                || filename == STDERR_FILE && input.args.include_stderr
-                            {
-                                let header = get_log_header(filename, target, command, true);
-                                let header_bytes = header.as_bytes();
-                                stream_archive_file_to_stdout(header_bytes, &p, &mut stdout)?;
-                            }
+                            &input.filter_input.targets,
+                            &input.filter_input.commands,
+                            target,
+                            command,
+                        ) && (filename == STDOUT_FILE && input.filter_input.include_stdout
+                            || filename == STDERR_FILE && input.filter_input.include_stderr)
+                        {
+                            let header = get_log_header(filename, target, command, true);
+                            let header_bytes = header.as_bytes();
+                            stream_archive_file_to_stdout(header_bytes, &p, &mut stdout)?;
                         }
                     }
                 }
@@ -362,8 +366,8 @@ pub async fn handle_run<'a>(
                 }
             };
 
-            let changes = match cfg.change_provider {
-                ChangeProvider::Git => {
+            let changes = match cfg.change_provider.r#use {
+                ChangeProviderKind::Git => {
                     get_git_all_changes(&input.git_opts, &checkpoint, work_dir).await?
                 }
             };
@@ -445,14 +449,12 @@ fn find_command_executable(name: &str, dir: &path::Path) -> Option<path::PathBuf
         "Command search"
     );
     if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(stem) = path.file_stem() {
-                        if stem == name {
-                            return Some(path.to_path_buf());
-                        }
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(stem) = path.file_stem() {
+                    if stem == name {
+                        return Some(path.to_path_buf());
                     }
                 }
             }
@@ -509,17 +511,17 @@ fn get_run_data_groups<'a>(
                 let target = targets
                     .get(target_index)
                     .ok_or(MonorailError::from("Target not found"))?;
-                let commands_path = work_dir.join(&target_path).join(&target.commands_path);
+                let commands_path = work_dir.join(target_path).join(&target.commands.path);
                 let mut command_args = None;
-                let command_path = match &target.commands {
-                    Some(commands) => match commands.get(c.as_str()) {
+                let command_path = match &target.commands.definitions {
+                    Some(definitions) => match definitions.get(c.as_str()) {
                         Some(def) => {
                             command_args = Some(def.args.clone());
                             Some(commands_path.join(&def.exec))
                         }
-                        None => find_command_executable(&c, &commands_path),
+                        None => find_command_executable(c, &commands_path),
                     },
-                    None => find_command_executable(&c, &commands_path),
+                    None => find_command_executable(c, &commands_path),
                 };
                 run_data.push(RunData {
                     target_path: target_path.to_owned(),
@@ -560,7 +562,7 @@ pub fn spawn_task(
 ) -> Result<tokio::process::Child, MonorailError> {
     debug!(
         command_path = command_path.display().to_string(),
-        command_args = command_args.clone().unwrap_or(vec![]).join(", "),
+        command_args = command_args.clone().unwrap_or_default().join(", "),
         "Spawn task"
     );
     let mut cmd = tokio::process::Command::new(command_path);
@@ -650,7 +652,7 @@ impl CommandTask {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct LogStreamArgs {
+pub struct LogFilterInput {
     pub commands: HashSet<String>,
     pub targets: HashSet<String>,
     pub include_stdout: bool,
@@ -659,10 +661,10 @@ pub struct LogStreamArgs {
 
 struct LogStreamServer<'a> {
     address: &'a str,
-    args: &'a LogStreamArgs,
+    args: &'a LogFilterInput,
 }
 impl<'a> LogStreamServer<'a> {
-    fn new(address: &'a str, args: &'a LogStreamArgs) -> Self {
+    fn new(address: &'a str, args: &'a LogFilterInput) -> Self {
         Self { address, args }
     }
     async fn listen(&mut self) -> Result<(), MonorailError> {
@@ -674,7 +676,7 @@ impl<'a> LogStreamServer<'a> {
             debug!("Client connected");
             // first, write to the client what we're interested in receiving
             socket.write_all(&args_data).await?;
-            socket.write(&[b'\n']).await?;
+            _ = socket.write(&[b'\n']).await?;
             debug!("Sent log stream arguments");
             Self::process(socket).await?;
         }
@@ -686,7 +688,7 @@ impl<'a> LogStreamServer<'a> {
         let mut stdout = tokio::io::stdout();
         while let Some(line) = lines.next_line().await? {
             stdout.write_all(line.as_bytes()).await?;
-            stdout.write(&[b'\n']).await?;
+            _ = stdout.write(&[b'\n']).await?;
             stdout.flush().await?;
         }
         Ok(())
@@ -696,7 +698,7 @@ impl<'a> LogStreamServer<'a> {
 #[derive(Debug, Clone)]
 struct LogStreamClient {
     stream: sync::Arc<tokio::sync::Mutex<tokio::net::TcpStream>>,
-    args: LogStreamArgs,
+    args: LogFilterInput,
 }
 impl LogStreamClient {
     #[instrument]
@@ -720,7 +722,7 @@ impl LogStreamClient {
         // pull arg preferences from the server on connect
         let mut br = tokio::io::BufReader::new(&mut stream);
         br.read_until(b'\n', &mut args_data).await?;
-        let args: LogStreamArgs = serde_json::from_slice(args_data.as_slice())?;
+        let args: LogFilterInput = serde_json::from_slice(args_data.as_slice())?;
         debug!("Received log stream arguments");
         if args.include_stdout || args.include_stderr {
             let targets = if args.targets.is_empty() {
@@ -947,7 +949,7 @@ impl Compressor {
                             CompressRequest::Data(encoder_index, data) => {
                                 trace!(lines = data.len(), thread_id = x, "encoder write");
                                 for v in data.iter() {
-                                    encoders[encoder_index].write_all(&v)?;
+                                    encoders[encoder_index].write_all(v)?;
                                 }
                             }
                         }
@@ -1097,7 +1099,7 @@ async fn run<'a>(
                         target = &rd.target_path,
                         "task"
                     );
-                    let child = spawn_task(&rd.command_work_dir, &command_path, &rd.command_args)?;
+                    let child = spawn_task(&rd.command_work_dir, command_path, &rd.command_args)?;
                     let token2 = token.clone();
                     let log_stream_client2 = log_stream_client.clone();
                     let handle = js.spawn(async move {
@@ -1267,7 +1269,7 @@ async fn run<'a>(
 }
 
 // Serialize and store the compressed results of the given RunOutput.
-fn store_run_output<'a>(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), MonorailError> {
+fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), MonorailError> {
     let run_result_file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -1306,18 +1308,18 @@ impl Logs {
 }
 
 #[derive(Debug)]
-pub struct HandleResultShowInput {}
+pub struct ResultShowInput {}
 
-pub async fn handle_result_show<'a>(
+pub fn result_show<'a>(
     cfg: &'a Config,
-    _input: &'a HandleResultShowInput,
-    work_dir: &'a path::Path,
+    work_path: &'a path::Path,
+    _input: &'a ResultShowInput,
 ) -> Result<RunOutput, MonorailError> {
     // open tracking and get log_info
-    let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
+    let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
     // use log_info to get results.json file in id dir
     let log_info = tracking_table.open_log_info()?;
-    let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
+    let log_dir = cfg.get_log_path(work_path).join(format!("{}", log_info.id));
     let run_output_file = std::fs::OpenOptions::new()
         .read(true)
         .open(log_dir.join(RUN_OUTPUT_FILE_NAME))
@@ -1413,9 +1415,9 @@ pub async fn handle_analyze<'a>(
 ) -> Result<AnalysisShowOutput, MonorailError> {
     let (mut lookups, changes) = match input.targets.len() {
         0 => {
-            let changes = match cfg.change_provider {
-                ChangeProvider::Git => match cfg.change_provider {
-                    ChangeProvider::Git => {
+            let changes = match cfg.change_provider.r#use {
+                ChangeProviderKind::Git => match cfg.change_provider.r#use {
+                    ChangeProviderKind::Git => {
                         let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
                         let checkpoint = match tracking.open_checkpoint() {
                             Ok(checkpoint) => Some(checkpoint),
@@ -1584,13 +1586,11 @@ fn analyze(
                                                 });
                                             }
                                             output_targets.insert(target2);
-                                        } else {
-                                            if let Some(change_targets) = change_targets.as_mut() {
-                                                change_targets.push(AnalyzedChangeTarget {
-                                                    path: target.to_owned(),
-                                                    reason: AnalyzedChangeTargetReason::Ignores,
-                                                });
-                                            }
+                                        } else if let Some(change_targets) = change_targets.as_mut() {
+                                            change_targets.push(AnalyzedChangeTarget {
+                                                path: target.to_owned(),
+                                                reason: AnalyzedChangeTargetReason::Ignores,
+                                            });
                                         }
                                     }
                                 },
@@ -1602,13 +1602,11 @@ fn analyze(
                                 });
                             }
                             output_targets.insert(target);
-                        } else {
-                            if let Some(change_targets) = change_targets.as_mut() {
-                                change_targets.push(AnalyzedChangeTarget {
-                                    path: target.to_owned(),
-                                    reason: AnalyzedChangeTargetReason::Ignores,
-                                });
-                            }
+                        } else if let Some(change_targets) = change_targets.as_mut() {
+                            change_targets.push(AnalyzedChangeTarget {
+                                path: target.to_owned(),
+                                reason: AnalyzedChangeTargetReason::Ignores,
+                            });
                         }
                     });
                 lookups
@@ -1631,13 +1629,11 @@ fn analyze(
                                                             });
                                                         }
                                                         output_targets.insert(target2);
-                                                    } else {
-                                                        if let Some(change_targets) = change_targets.as_mut() {
-                                                            change_targets.push(AnalyzedChangeTarget {
-                                                                path: target.to_string(),
-                                                                reason: AnalyzedChangeTargetReason::Ignores,
-                                                            });
-                                                        }
+                                                } else if let Some(change_targets) = change_targets.as_mut() {
+                                                        change_targets.push(AnalyzedChangeTarget {
+                                                            path: target.to_string(),
+                                                            reason: AnalyzedChangeTargetReason::Ignores,
+                                                        });
                                                     }
                                                 }
                                             },
@@ -1649,13 +1645,11 @@ fn analyze(
                                             });
                                         }
                                         output_targets.insert(target.to_string());
-                                    } else {
-                                        if let Some(change_targets) = change_targets.as_mut() {
-                                            change_targets.push(AnalyzedChangeTarget {
-                                                path: target.to_string(),
-                                                reason: AnalyzedChangeTargetReason::Ignores,
-                                            });
-                                        }
+                                    } else if let Some(change_targets) = change_targets.as_mut() {
+                                        change_targets.push(AnalyzedChangeTarget {
+                                            path: target.to_string(),
+                                            reason: AnalyzedChangeTargetReason::Ignores,
+                                        });
                                     }
                                 });
                             }
@@ -1720,21 +1714,21 @@ fn analyze(
 }
 
 #[derive(Debug, Serialize)]
-pub struct HandleTargetShowInput {
+pub struct TargetShowInput {
     pub show_target_groups: bool,
 }
 #[derive(Debug, Serialize)]
-pub struct TargetListOutput {
+pub struct TargetShowOutput {
     targets: Option<Vec<Target>>,
     target_groups: Option<Vec<Vec<String>>>,
 }
 
-pub fn handle_target_show(
+pub fn target_show(
     cfg: &Config,
-    input: HandleTargetShowInput,
+    input: TargetShowInput,
     work_dir: &path::Path,
-) -> Result<TargetListOutput, MonorailError> {
-    let mut o = TargetListOutput {
+) -> Result<TargetShowOutput, MonorailError> {
+    let mut o = TargetShowOutput {
         targets: cfg.targets.clone(),
         target_groups: None,
     };
@@ -1780,7 +1774,7 @@ pub async fn handle_checkpoint_show(
 }
 
 #[derive(Debug)]
-pub struct HandleCheckpointUpdateInput<'a> {
+pub struct CheckpointUpdateInput<'a> {
     pub(crate) pending: bool,
     pub(crate) git_opts: GitOptions<'a>,
 }
@@ -1792,11 +1786,11 @@ pub struct CheckpointUpdateOutput {
 
 pub async fn handle_checkpoint_update(
     cfg: &Config,
-    input: &HandleCheckpointUpdateInput<'_>,
+    input: &CheckpointUpdateInput<'_>,
     work_dir: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
-    match cfg.change_provider {
-        ChangeProvider::Git => {
+    match cfg.change_provider.r#use {
+        ChangeProviderKind::Git => {
             checkpoint_update_git(
                 input.pending,
                 &input.git_opts,
@@ -2085,16 +2079,22 @@ pub struct Change {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-enum ChangeProvider {
+enum ChangeProviderKind {
     #[serde(rename = "git")]
     #[default]
     Git,
 }
-impl FromStr for ChangeProvider {
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+struct ChangeProvider {
+    r#use: ChangeProviderKind,
+}
+
+impl FromStr for ChangeProviderKind {
     type Err = MonorailError;
-    fn from_str(s: &str) -> Result<ChangeProvider, Self::Err> {
+    fn from_str(s: &str) -> Result<ChangeProviderKind, Self::Err> {
         match s {
-            "git" => Ok(ChangeProvider::Git),
+            "git" => Ok(ChangeProviderKind::Git),
             _ => Err(MonorailError::Generic(format!(
                 "Unrecognized change provider kind: {}",
                 s
@@ -2159,18 +2159,27 @@ pub struct Target {
     // Paths that should not affect this target; has the highest
     // precedence when evaluating a change.
     ignores: Option<Vec<String>>,
-    // Relative path from this target's `path` to a file containing
+    // Configuration and optional overrides for commands.
+    #[serde(default)]
+    commands: TargetCommands,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct TargetCommands {
+    // Relative path from this target's `path` to a directory containing
     // commands that can be executed by `monorail run`.
-    #[serde(default = "Target::default_commands_path")]
-    commands_path: String,
+    path: String,
     // Mappings of command names to executable statements; these
     // statements will be used when spawning tasks, and if unspecified
     // monorail will try to use an executable named {{command}}*.
-    commands: Option<HashMap<String, CommandDefinition>>,
+    definitions: Option<HashMap<String, CommandDefinition>>,
 }
-impl Target {
-    fn default_commands_path() -> String {
-        "monorail".into()
+impl Default for TargetCommands {
+    fn default() -> Self {
+        Self {
+            path: "monorail".into(),
+            definitions: None,
+        }
     }
 }
 
