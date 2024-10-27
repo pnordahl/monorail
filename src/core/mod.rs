@@ -2113,6 +2113,7 @@ pub struct Config {
     max_retained_runs: usize,
     #[serde(default)]
     change_provider: ChangeProvider,
+    #[serde(skip_serializing_if = "Option::is_none")]
     targets: Option<Vec<Target>>,
 }
 impl Config {
@@ -2157,9 +2158,11 @@ pub struct Target {
     // Out-of-path directories that should affect this target. If this
     // path lies within a target, then a dependency for this target
     // on the other target.
+    #[serde(skip_serializing_if = "Option::is_none")]
     uses: Option<Vec<String>>,
     // Paths that should not affect this target; has the highest
     // precedence when evaluating a change.
+    #[serde(skip_serializing_if = "Option::is_none")]
     ignores: Option<Vec<String>>,
     // Configuration and optional overrides for commands.
     #[serde(default)]
@@ -2174,6 +2177,7 @@ struct TargetCommands {
     // Mappings of command names to executable statements; these
     // statements will be used when spawning tasks, and if unspecified
     // monorail will try to use an executable named {{command}}*.
+    #[serde(skip_serializing_if = "Option::is_none")]
     definitions: Option<HashMap<String, CommandDefinition>>,
 }
 impl Default for TargetCommands {

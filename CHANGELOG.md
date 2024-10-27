@@ -28,7 +28,7 @@ A large internal refactor to improve speed and flexibility.
 - Minor tag message formatting issue when using git tags for checkpointing
 
 
-## [3.0.0] - 2024-10-03
+## [3.0.0] - 2024-10-26
   
 Dependency graph, parallel execution, replaced extensions with `monorail run`, and checkpoint rework.
 
@@ -48,3 +48,9 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 - Removed `git.trunk`, `git.remote`, and `git.tags_refspec_prefix` configuration
 - Removed `extension` configuration
 - Removed `libgit` integration and `use_libgit2_status` argument
+
+## [3.0.1] - 2024-10-26
+
+### Changed
+
+- Removed serialization of null fields in `monorail config show`
