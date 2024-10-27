@@ -90,6 +90,7 @@ async fn get_file_checksum(p: &path::Path) -> Result<String, MonorailError> {
         if num == 0 {
             break;
         }
+
         hasher.update(&buffer[..num]);
     }
 
@@ -247,12 +248,14 @@ pub fn log_show<'a>(
     }
 
     // map all targets to their shas for filtering and prefixing log lines
-    let targets = cfg.targets.as_ref().ok_or(MonorailError::from(
-        "No configured targets, cannot tail logs",
-    ))?;
+    if cfg.targets.is_empty() {
+        return Err(MonorailError::from(
+            "No configured targets, cannot tail logs",
+        ));
+    }
     let mut hasher = sha2::Sha256::new();
     let mut hash2target = HashMap::new();
-    for target in targets {
+    for target in &cfg.targets {
         hasher.update(&target.path);
         hash2target.insert(format!("{:x}", hasher.finalize_reset()), &target.path);
     }
@@ -349,10 +352,9 @@ pub async fn handle_run<'a>(
     work_dir: &'a path::Path,
 ) -> Result<RunOutput, MonorailError> {
     let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
-    let targets = cfg
-        .targets
-        .as_ref()
-        .ok_or(MonorailError::from("No configured targets"))?;
+    if cfg.targets.is_empty() {
+        return Err(MonorailError::from("No configured targets"));
+    }
 
     match input.targets.len() {
         0 => {
@@ -382,7 +384,6 @@ pub async fn handle_run<'a>(
                 &lookups,
                 work_dir,
                 &input.commands,
-                targets.clone(),
                 &target_groups,
                 input.fail_on_undefined,
                 invocation_args,
@@ -413,7 +414,6 @@ pub async fn handle_run<'a>(
                 &lookups,
                 work_dir,
                 &input.commands,
-                targets.clone(),
                 &target_groups,
                 input.fail_on_undefined,
                 invocation_args,
@@ -975,7 +975,6 @@ async fn run<'a>(
     lookups: &Lookups<'_>,
     work_dir: &path::Path,
     commands: &'a [&'a String],
-    targets: Vec<Target>,
     target_groups: &[Vec<String>],
     fail_on_undefined: bool,
     invocation_args: &'a str,
@@ -988,11 +987,9 @@ async fn run<'a>(
         }
     };
 
-    let mut o = RunOutput {
-        failed: false,
-        invocation_args: invocation_args.to_owned(),
-        results: vec![],
-    };
+    let mut failed = false;
+    let mut results = vec![];
+
     let log_dir = {
         // obtain current log info counter and increment it before using
         let mut log_info = match tracking_table.open_log_info() {
@@ -1018,7 +1015,7 @@ async fn run<'a>(
     let (initial_run_output, run_data_groups) = get_run_data_groups(
         lookups,
         commands,
-        &targets,
+        &cfg.targets,
         target_groups,
         work_dir,
         &log_dir,
@@ -1058,7 +1055,7 @@ async fn run<'a>(
                     runtime_secs: 0.0,
                 });
             }
-            o.results.push(CommandRunResult {
+            results.push(CommandRunResult {
                 command: command.to_string(),
                 successes: vec![],
                 failures: vec![],
@@ -1259,10 +1256,16 @@ async fn run<'a>(
         // will get propagated.
         compressor_handle.join().unwrap()?;
         if !crr.failures.is_empty() {
-            o.failed = true;
+            failed = true;
         }
-        o.results.push(crr);
+        results.push(crr);
     }
+
+    let o = RunOutput {
+        failed,
+        invocation_args: invocation_args.to_owned(),
+        results,
+    };
 
     // Update the run output with final results
     store_run_output(&o, &log_dir)?;
@@ -1364,15 +1367,6 @@ pub struct AnalyzeOutput {
     target_groups: Option<Vec<Vec<String>>>,
 }
 
-#[derive(Serialize, Debug)]
-pub struct AnalysisShowOutput {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    changes: Option<Vec<AnalyzedChange>>,
-    targets: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target_groups: Option<Vec<Vec<String>>>,
-}
-
 #[derive(Serialize, Debug, Eq, PartialEq)]
 pub struct AnalyzedChange {
     path: String,
@@ -1414,7 +1408,7 @@ pub async fn handle_analyze<'a>(
     cfg: &'a Config,
     input: &HandleAnalyzeInput<'a>,
     work_dir: &'a path::Path,
-) -> Result<AnalysisShowOutput, MonorailError> {
+) -> Result<AnalyzeOutput, MonorailError> {
     let (mut lookups, changes) = match input.targets.len() {
         0 => {
             let changes = match cfg.change_provider.r#use {
@@ -1550,16 +1544,14 @@ fn analyze(
     input: &AnalyzeInput,
     lookups: &mut Lookups<'_>,
     changes: Option<Vec<Change>>,
-) -> Result<AnalysisShowOutput, MonorailError> {
-    let mut output = AnalysisShowOutput {
-        changes: if input.show_changes {
-            Some(vec![])
-        } else {
-            None
-        },
-        targets: vec![],
-        target_groups: None,
+) -> Result<AnalyzeOutput, MonorailError> {
+    let mut analyzed_changes = if input.show_changes {
+        Some(vec![])
+    } else {
+        None
     };
+    let mut targets = vec![];
+    let mut target_groups = None;
     let output_targets = match changes {
         Some(changes) => {
             let mut output_targets = HashSet::new();
@@ -1662,7 +1654,7 @@ fn analyze(
                     change_targets.sort();
                 }
 
-                if let Some(output_changes) = output.changes.as_mut() {
+                if let Some(output_changes) = analyzed_changes.as_mut() {
                     output_changes.push(AnalyzedChange {
                         path: c.name.to_owned(),
                         targets: change_targets,
@@ -1678,7 +1670,7 @@ fn analyze(
     if let Some(output_targets) = output_targets {
         // copy the hashmap into the output vector
         for t in output_targets.iter() {
-            output.targets.push(t.clone());
+            targets.push(t.clone());
         }
         if input.show_target_groups {
             let groups = lookups.dag.get_groups()?;
@@ -1699,20 +1691,24 @@ fn analyze(
                     pruned_groups.push(pg);
                 }
             }
-            output.target_groups = Some(pruned_groups);
+            target_groups = Some(pruned_groups);
         }
     } else {
         // use config targets and all target groups
         for t in &lookups.targets {
-            output.targets.push(t.to_string());
+            targets.push(t.to_string());
         }
         if input.show_target_groups {
-            output.target_groups = Some(lookups.dag.get_labeled_groups()?);
+            target_groups = Some(lookups.dag.get_labeled_groups()?);
         }
     }
-    output.targets.sort();
+    targets.sort();
 
-    Ok(output)
+    Ok(AnalyzeOutput {
+        changes: analyzed_changes,
+        targets,
+        target_groups,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -1721,7 +1717,7 @@ pub struct TargetShowInput {
 }
 #[derive(Debug, Serialize)]
 pub struct TargetShowOutput {
-    targets: Option<Vec<Target>>,
+    targets: Vec<Target>,
     target_groups: Option<Vec<Vec<String>>>,
 }
 
@@ -1730,15 +1726,15 @@ pub fn target_show(
     input: TargetShowInput,
     work_dir: &path::Path,
 ) -> Result<TargetShowOutput, MonorailError> {
-    let mut o = TargetShowOutput {
-        targets: cfg.targets.clone(),
-        target_groups: None,
-    };
+    let mut target_groups = None;
     if input.show_target_groups {
         let mut lookups = Lookups::new(cfg, &cfg.get_target_path_set(), work_dir)?;
-        o.target_groups = Some(lookups.dag.get_labeled_groups()?);
+        target_groups = Some(lookups.dag.get_labeled_groups()?);
     }
-    Ok(o)
+    Ok(TargetShowOutput {
+        targets: cfg.targets.clone(),
+        target_groups,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -1972,94 +1968,84 @@ impl<'a> Lookups<'a> {
         let mut use2targets = HashMap::<&str, Vec<&str>>::new();
         let mut ignore2targets = HashMap::<&str, Vec<&str>>::new();
 
-        let num_targets = match cfg.targets.as_ref() {
-            Some(targets) => targets.len(),
-            None => 0,
-        };
-        let mut dag = graph::Dag::new(num_targets);
+        let mut dag = graph::Dag::new(cfg.targets.len());
 
-        if let Some(cfg_targets) = cfg.targets.as_ref() {
-            cfg_targets.iter().enumerate().try_for_each(|(i, target)| {
-                targets.push(target.path.to_owned());
-                let target_path_str = target.path.as_str();
-                require_existence(work_dir, target_path_str)?;
-                if dag.label2node.contains_key(target_path_str) {
-                    return Err(MonorailError::DependencyGraph(GraphError::DuplicateLabel(
-                        target.path.to_owned(),
-                    )));
-                }
-                dag.set_label(&target.path, i);
-                targets_builder.push(&target.path);
+        cfg.targets.iter().enumerate().try_for_each(|(i, target)| {
+            targets.push(target.path.to_owned());
+            let target_path_str = target.path.as_str();
+            require_existence(work_dir, target_path_str)?;
+            if dag.label2node.contains_key(target_path_str) {
+                return Err(MonorailError::DependencyGraph(GraphError::DuplicateLabel(
+                    target.path.to_owned(),
+                )));
+            }
+            dag.set_label(&target.path, i);
+            targets_builder.push(&target.path);
 
-                if let Some(ignores) = target.ignores.as_ref() {
-                    ignores.iter().for_each(|s| {
-                        ignores_builder.push(s);
-                        ignore2targets
-                            .entry(s.as_str())
-                            .or_default()
-                            .push(target_path_str);
-                    });
-                }
-                Ok(())
-            })?;
-        }
+            if let Some(ignores) = target.ignores.as_ref() {
+                ignores.iter().for_each(|s| {
+                    ignores_builder.push(s);
+                    ignore2targets
+                        .entry(s.as_str())
+                        .or_default()
+                        .push(target_path_str);
+                });
+            }
+            Ok(())
+        })?;
 
         let targets_trie = targets_builder.build();
 
         // process target uses and build up both the dependency graph, and the direct mapping of non-target uses to the affected targets
-        if let Some(cfg_targets) = cfg.targets.as_ref() {
-            cfg_targets.iter().enumerate().try_for_each(|(i, target)| {
-                let target_path_str = target.path.as_str();
-                // if this target is under an existing target, add it as a dep
-                let mut nodes = targets_trie
-                    .common_prefix_search(target_path_str)
-                    .filter(|t: &String| t != &target.path)
-                    .map(|t| {
-                        dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
-                            MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t))
-                        })
+        cfg.targets.iter().enumerate().try_for_each(|(i, target)| {
+            let target_path_str = target.path.as_str();
+            // if this target is under an existing target, add it as a dep
+            let mut nodes = targets_trie
+                .common_prefix_search(target_path_str)
+                .filter(|t: &String| t != &target.path)
+                .map(|t| {
+                    dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                        MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t))
                     })
-                    .collect::<Result<Vec<usize>, MonorailError>>()?;
+                })
+                .collect::<Result<Vec<usize>, MonorailError>>()?;
 
-                if let Some(uses) = &target.uses {
-                    for s in uses {
-                        let uses_path_str = s.as_str();
-                        uses_builder.push(uses_path_str);
-                        let matching_targets: Vec<String> =
-                            targets_trie.common_prefix_search(uses_path_str).collect();
-                        use2targets.entry(s).or_default().push(target_path_str);
-                        // a dependency has been established between this target and some
-                        // number of targets, so we update the graph
-                        nodes.extend(
-                            matching_targets
-                                .iter()
-                                .filter(|&t| t != &target.path)
-                                .map(|t| {
-                                    dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
-                                        MonorailError::DependencyGraph(
-                                            GraphError::LabelNodeNotFound(t.to_owned()),
-                                        )
-                                    })
+            if let Some(uses) = &target.uses {
+                for s in uses {
+                    let uses_path_str = s.as_str();
+                    uses_builder.push(uses_path_str);
+                    let matching_targets: Vec<String> =
+                        targets_trie.common_prefix_search(uses_path_str).collect();
+                    use2targets.entry(s).or_default().push(target_path_str);
+                    // a dependency has been established between this target and some
+                    // number of targets, so we update the graph
+                    nodes.extend(
+                        matching_targets
+                            .iter()
+                            .filter(|&t| t != &target.path)
+                            .map(|t| {
+                                dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                                    MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(
+                                        t.to_owned(),
+                                    ))
                                 })
-                                .collect::<Result<Vec<usize>, MonorailError>>()?,
-                        );
-                    }
+                            })
+                            .collect::<Result<Vec<usize>, MonorailError>>()?,
+                    );
                 }
-                nodes.sort();
-                nodes.dedup();
-                dag.set(i, nodes);
-                Ok::<(), MonorailError>(())
-            })?;
-
-            // now that the graph is fully constructed, set subtree visibility
-            for t in visible_targets {
-                let node = dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
-                    MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(
-                        t.to_owned().clone(),
-                    ))
-                })?;
-                dag.set_subtree_visibility(node, true);
             }
+            nodes.sort();
+            nodes.dedup();
+            dag.set(i, nodes);
+            Ok::<(), MonorailError>(())
+        })?;
+
+        // now that the graph is fully constructed, set subtree visibility
+        for t in visible_targets {
+            let node = dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
+                MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t.to_owned().clone()))
+            })?;
+            dag.set_subtree_visibility(node, true);
         }
 
         targets.sort();
@@ -2113,8 +2099,8 @@ pub struct Config {
     max_retained_runs: usize,
     #[serde(default)]
     change_provider: ChangeProvider,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    targets: Option<Vec<Target>>,
+    #[serde(default)]
+    targets: Vec<Target>,
 }
 impl Config {
     pub fn new(file_path: &path::Path) -> Result<Config, MonorailError> {
@@ -2125,10 +2111,8 @@ impl Config {
     }
     pub fn get_target_path_set(&self) -> HashSet<&String> {
         let mut o = HashSet::new();
-        if let Some(targets) = &self.targets {
-            for t in targets {
-                o.insert(&t.path);
-            }
+        for t in &self.targets {
+            o.insert(&t.path);
         }
         o
     }

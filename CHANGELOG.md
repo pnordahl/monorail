@@ -54,3 +54,14 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 ### Changed
 
 - Removed serialization of null fields in `monorail config show`
+
+
+## [3.0.1] - 2024-10-27
+
+### Added
+
+- A RFC3339 timestamp to all success and error output structs
+
+### Changed
+
+- Verbose logging timestamp format adheres strictly to RFC3339
