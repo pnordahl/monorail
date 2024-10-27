@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::io::Write;
 use std::result::Result;
 use std::{env, path};
+use tokio::runtime::Runtime;
 
 pub const CMD_MONORAIL: &str = "monorail";
 pub const CMD_CONFIG: &str = "config";
@@ -309,7 +310,7 @@ pub struct OutputOptions<'a> {
 }
 
 #[tracing::instrument]
-pub async fn handle<'a>(
+pub fn handle<'a>(
     matches: &ArgMatches,
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
@@ -331,63 +332,39 @@ pub async fn handle<'a>(
             }
             if let Some(checkpoint_matches) = matches.subcommand_matches(CMD_CHECKPOINT) {
                 if let Some(update_matches) = checkpoint_matches.subcommand_matches(CMD_UPDATE) {
-                    // return handle_checkpoint_update(&config, update_matches, output_format, work_path);
-                    let i = core::CheckpointUpdateInput::try_from(update_matches)?;
-                    let res = core::handle_checkpoint_update(&config, &i, work_path).await;
-                    write_result(&res, output_options)?;
-                    return Ok(get_code(res.is_err()));
+                    return handle_checkpoint_update(
+                        &config,
+                        update_matches,
+                        output_options,
+                        work_path,
+                    );
                 }
                 if checkpoint_matches.subcommand_matches(CMD_DELETE).is_some() {
-                    let res = core::handle_checkpoint_delete(&config, work_path).await;
-                    write_result(&res, output_options)?;
-                    return Ok(get_code(res.is_err()));
+                    return handle_checkpoint_delete(&config, output_options, work_path);
                 }
                 if checkpoint_matches.subcommand_matches(CMD_SHOW).is_some() {
-                    let res = core::handle_checkpoint_show(&config, work_path).await;
-                    write_result(&res, output_options)?;
-                    return Ok(get_code(res.is_err()));
+                    return handle_checkpoint_show(&config, output_options, work_path);
                 }
             }
-
             if let Some(result_matches) = matches.subcommand_matches(CMD_RESULT) {
                 if result_matches.subcommand_matches(CMD_SHOW).is_some() {
                     return handle_result_show(&config, result_matches, output_options, work_path);
                 }
             }
-
             if let Some(target_matches) = matches.subcommand_matches(CMD_TARGET) {
                 if let Some(list_matches) = target_matches.subcommand_matches(CMD_SHOW) {
                     return handle_target_list(&config, list_matches, output_options, work_path);
                 }
             }
-
-            if let Some(analyze) = matches.subcommand_matches(CMD_ANALYZE) {
-                let i = core::HandleAnalyzeInput::from(analyze);
-                let res = core::handle_analyze(&config, &i, work_path).await;
-                write_result(&res, output_options)?;
-                return Ok(get_code(res.is_err()));
+            if let Some(analyze_matches) = matches.subcommand_matches(CMD_ANALYZE) {
+                return handle_analyze(&config, analyze_matches, output_options, work_path);
             }
-
-            if let Some(run) = matches.subcommand_matches(CMD_RUN) {
-                let i = core::RunInput::try_from(run).unwrap();
-                let invocation_args = env::args().skip(1).collect::<Vec<_>>().join(" ");
-                match core::handle_run(&config, &i, &invocation_args, work_path).await {
-                    Ok(o) => {
-                        let mut code = HANDLE_OK;
-                        if o.failed {
-                            code = HANDLE_ERR;
-                        }
-                        write_result(&Ok(o), output_options)?;
-                        return Ok(code);
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+            if let Some(run_matches) = matches.subcommand_matches(CMD_RUN) {
+                return handle_run(&config, run_matches, output_options, work_path);
             }
             if let Some(log_matches) = matches.subcommand_matches(CMD_LOG) {
                 if let Some(tail_matches) = log_matches.subcommand_matches(CMD_TAIL) {
-                    return handle_log_tail(&config, tail_matches, output_options).await;
+                    return handle_log_tail(&config, tail_matches, output_options);
                 }
                 if let Some(show_matches) = log_matches.subcommand_matches(CMD_SHOW) {
                     return handle_log_show(&config, show_matches, output_options, work_path);
@@ -399,18 +376,85 @@ pub async fn handle<'a>(
     }
 }
 
-async fn handle_log_tail<'a>(
+fn handle_analyze<'a>(
+    config: &'a core::Config,
+    matches: &'a ArgMatches,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let rt = Runtime::new()?;
+    let i = core::HandleAnalyzeInput::from(matches);
+    let res = rt.block_on(core::handle_analyze(config, &i, work_path));
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
+}
+
+fn handle_run<'a>(
+    config: &'a core::Config,
+    matches: &'a ArgMatches,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let rt = Runtime::new()?;
+    let i = core::RunInput::try_from(matches).unwrap();
+    let invocation_args = env::args().skip(1).collect::<Vec<_>>().join(" ");
+    let o = rt.block_on(core::handle_run(config, &i, &invocation_args, work_path))?;
+    let mut code = HANDLE_OK;
+    if o.failed {
+        code = HANDLE_ERR;
+    }
+    write_result(&Ok(o), output_options)?;
+    Ok(code)
+}
+
+fn handle_checkpoint_update<'a>(
+    config: &'a core::Config,
+    matches: &'a ArgMatches,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let rt = Runtime::new()?;
+    let i = core::CheckpointUpdateInput::try_from(matches)?;
+    let res = rt.block_on(core::handle_checkpoint_update(config, &i, work_path));
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
+}
+
+fn handle_checkpoint_show<'a>(
+    config: &'a core::Config,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let rt = Runtime::new()?;
+    let res = rt.block_on(core::handle_checkpoint_show(config, work_path));
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
+}
+
+fn handle_checkpoint_delete<'a>(
+    config: &'a core::Config,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let rt = Runtime::new()?;
+    let res = rt.block_on(core::handle_checkpoint_delete(config, work_path));
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
+}
+
+fn handle_log_tail<'a>(
     config: &'a core::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
+    let rt = Runtime::new()?;
     let i = core::LogTailInput::try_from(matches)?;
-    match core::log_tail(config, &i).await {
+    match rt.block_on(core::log_tail(config, &i)) {
+        Ok(_) => Ok(HANDLE_OK),
         Err(e) => {
             write_result(&Err::<(), MonorailError>(e), output_options)?;
             Ok(HANDLE_ERR)
         }
-        Ok(_) => Ok(HANDLE_OK),
     }
 }
 
@@ -422,11 +466,11 @@ fn handle_log_show<'a>(
 ) -> Result<i32, MonorailError> {
     let i = core::LogShowInput::try_from(matches)?;
     match core::log_show(config, &i, work_path) {
+        Ok(_) => Ok(HANDLE_OK),
         Err(e) => {
             write_result(&Err::<(), MonorailError>(e), output_options)?;
             Ok(HANDLE_ERR)
         }
-        Ok(_) => Ok(HANDLE_OK),
     }
 }
 
@@ -458,6 +502,21 @@ fn handle_result_show<'a>(
     Ok(get_code(res.is_err()))
 }
 
+#[derive(Serialize)]
+struct TimestampWrapper<T: Serialize> {
+    timestamp: String,
+    #[serde(flatten)]
+    data: T,
+}
+impl<T: Serialize> TimestampWrapper<T> {
+    fn new(data: T) -> Self {
+        Self {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            data,
+        }
+    }
+}
+
 pub fn write_result<T>(
     value: &Result<T, MonorailError>,
     opts: &OutputOptions<'_>,
@@ -470,12 +529,12 @@ where
             match value {
                 Ok(t) => {
                     let mut writer = std::io::stdout();
-                    serde_json::to_writer(&mut writer, &t)?;
+                    serde_json::to_writer(&mut writer, &TimestampWrapper::new(t))?;
                     writeln!(writer)?;
                 }
                 Err(e) => {
                     let mut writer = std::io::stderr();
-                    serde_json::to_writer(&mut writer, &e)?;
+                    serde_json::to_writer(&mut writer, &TimestampWrapper::new(e))?;
                     writeln!(writer)?;
                 }
             }

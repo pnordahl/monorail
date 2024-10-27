@@ -1,8 +1,7 @@
 use monorail::cli;
 use monorail::tracing;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let app = cli::get_app();
     let matches = app.get_matches();
     let format = matches.get_one::<String>(cli::ARG_OUTPUT_FORMAT).unwrap();
@@ -11,7 +10,7 @@ async fn main() {
 
     tracing::setup(format, *verbosity).unwrap();
 
-    match cli::handle(&matches, &output_options).await {
+    match cli::handle(&matches, &output_options) {
         Ok(code) => {
             std::process::exit(code);
         }
