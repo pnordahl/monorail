@@ -1773,6 +1773,7 @@ pub async fn handle_checkpoint_show(
 
 #[derive(Debug)]
 pub struct CheckpointUpdateInput<'a> {
+    pub(crate) id: Option<&'a str>,
     pub(crate) pending: bool,
     pub(crate) git_opts: GitOptions<'a>,
 }
@@ -1788,25 +1789,16 @@ pub async fn handle_checkpoint_update(
     work_dir: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
     match cfg.change_provider.r#use {
-        ChangeProviderKind::Git => {
-            checkpoint_update_git(
-                input.pending,
-                &input.git_opts,
-                work_dir,
-                &cfg.get_tracking_path(work_dir),
-            )
-            .await
-        }
+        ChangeProviderKind::Git => checkpoint_update_git(cfg, input, work_dir).await,
     }
 }
 
 async fn checkpoint_update_git<'a>(
-    include_pending: bool,
-    git_opts: &'a GitOptions<'a>,
+    cfg: &Config,
+    input: &CheckpointUpdateInput<'a>,
     work_dir: &path::Path,
-    tracking_path: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
-    let tracking = tracking::Table::new(tracking_path)?;
+    let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
     let mut checkpoint = match tracking.open_checkpoint() {
         Ok(cp) => cp,
         Err(MonorailError::TrackingCheckpointNotFound(_)) => tracking.new_checkpoint(),
@@ -1815,10 +1807,15 @@ async fn checkpoint_update_git<'a>(
             return Err(e);
         }
     };
-    checkpoint.id = "head".to_string();
-    if include_pending {
+
+    checkpoint.id = match input.id {
+        Some(id) => id.to_string(),
+        None => git_cmd_rev_parse(input.git_opts.git_path, work_dir, "HEAD").await?,
+    };
+
+    if input.pending {
         // get all changes with no checkpoint, so diff will return [HEAD, staging area]
-        let pending_changes = get_git_all_changes(git_opts, &None, work_dir).await?;
+        let pending_changes = get_git_all_changes(&input.git_opts, &None, work_dir).await?;
         if let Some(pending_changes) = pending_changes {
             if !pending_changes.is_empty() {
                 let mut pending = HashMap::new();
@@ -1836,17 +1833,60 @@ async fn checkpoint_update_git<'a>(
     Ok(CheckpointUpdateOutput { checkpoint })
 }
 
-async fn git_cmd_other_changes(
+async fn get_git_cmd_child(
     git_path: &str,
     work_dir: &path::Path,
-) -> Result<Vec<Change>, MonorailError> {
-    let mut child = tokio::process::Command::new(git_path)
-        .args(["ls-files", "--others", "--exclude-standard"])
+    args: &[&str],
+) -> Result<tokio::process::Child, MonorailError> {
+    tokio::process::Command::new(git_path)
+        .args(args)
         .current_dir(work_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(MonorailError::from)?;
+        .map_err(MonorailError::from)
+}
+
+async fn git_cmd_rev_parse(
+    git_path: &str,
+    work_dir: &path::Path,
+    reference: &str,
+) -> Result<String, MonorailError> {
+    let mut child = get_git_cmd_child(git_path, work_dir, &["rev-parse", reference]).await?;
+    let mut stdout_string = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        stdout.read_to_string(&mut stdout_string).await?;
+    }
+    let mut stderr_string = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        stderr.read_to_string(&mut stderr_string).await?;
+    }
+    let status = child.wait().await.map_err(|e| {
+        MonorailError::Generic(format!(
+            "Error resolving git reference; error: {}, reason: {}",
+            e, &stderr_string
+        ))
+    })?;
+    if status.success() {
+        Ok(stdout_string.trim().to_string())
+    } else {
+        Err(MonorailError::Generic(format!(
+            "Error resolving git reference: {}",
+            stderr_string
+        )))
+    }
+}
+
+async fn git_cmd_other_changes(
+    git_path: &str,
+    work_dir: &path::Path,
+) -> Result<Vec<Change>, MonorailError> {
+    let mut child = get_git_cmd_child(
+        git_path,
+        work_dir,
+        &["ls-files", "--others", "--exclude-standard"],
+    )
+    .await?;
     let mut out = vec![];
     if let Some(stdout) = child.stdout.take() {
         let reader = tokio::io::BufReader::new(stdout);
@@ -1888,13 +1928,7 @@ async fn git_cmd_diff_changes(
     if let Some(end) = end {
         args.push(end);
     }
-    let mut child = tokio::process::Command::new(git_path)
-        .args(&args)
-        .current_dir(work_dir)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(MonorailError::from)?;
+    let mut child = get_git_cmd_child(git_path, work_dir, &args).await?;
     let mut out = vec![];
     if let Some(stdout) = child.stdout.take() {
         let reader = tokio::io::BufReader::new(stdout);

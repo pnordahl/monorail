@@ -56,7 +56,7 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 - Removed serialization of null fields in `monorail config show`
 
 
-## [3.0.1] - 2024-10-27
+## [3.0.2] - 2024-10-27
 
 ### Added
 
@@ -65,3 +65,15 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 ### Changed
 
 - Verbose logging timestamp format adheres strictly to RFC3339
+
+
+## [3.0.3] - 2024-10-27
+
+### Added
+
+- An optional `--id` (`-i`) can be provided to `checkpoint update` to provide and id to use, instead of inferring one from end of history
+
+### Changed
+
+- `checkpoint update` now always stores inferred references fully resolved instead of the HEAD alias
+

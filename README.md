@@ -515,7 +515,7 @@ wait
 EOF
 ```
 
-This will run for a moment, printing output from stdout and stderr for us to observe. Now, run the command again with and additional flag `-v` to print useful workflow statements, and ensure that your log tailing window is in view:
+This will run for a moment, printing output from stdout and stderr for us to observe. Now, run the command again with and additional flag `-v` to print useful workflow statements (`-vv` and `-vvv` print even more), and ensure that your log tailing window is in view:
 
 ```sh
 monorail -v run -c hello -t rust
@@ -724,7 +724,7 @@ monorail checkpoint update | jq
 {
   "timestamp": "2024-10-27T11:19:34.929320+00:00",
   "checkpoint": {
-    "id": "head",
+    "id": "40f5a4e3e01bdd2bc8f1053d9158e25cf274ca99",
     "pending": null
   }
 }
@@ -746,7 +746,25 @@ monorail analyze | jq
 }
 ```
 
-The key is to add `--pending` or `-p` when updating the checkpoint, which will include those files and their SHA2 checksums in the checkpoint:
+Before we resolve this, let's delete the checkpoint:
+
+```sh
+monorail checkpoint delete | jq
+```
+```json
+{
+  "timestamp": "2024-10-27T13:32:54.968691+00:00",
+  "checkpoint": {
+    "id": "",
+    "pending": null
+  }
+}
+```
+
+By deleting the checkpoint, we have told `monorail` to treat every target in our repository as changed bypassing change detection entirely.
+
+In this tutorial, where all of our changes are "pending" (i.e. we haven't committed anything thus far), the key is to add `--pending` or `-p` when updating the checkpoint. This will include those files and their SHA2 checksums in the checkpoint.
+
 
 ```sh
 monorail checkpoint update --pending | jq
@@ -755,7 +773,7 @@ monorail checkpoint update --pending | jq
 {
   "timestamp": "2024-10-27T11:19:58.311279+00:00",
   "checkpoint": {
-    "id": "head",
+    "id": "40f5a4e3e01bdd2bc8f1053d9158e25cf274ca99",
     "pending": {
       "proto/LICENSE.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "rust/app1/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9",
@@ -797,7 +815,23 @@ monorail -v run -c hello build
 {"timestamp":"2024-10-27T11:20:21.500453+00:00","failed":false,"invocation_args":"-v run -c hello build","results":[]}
 ```
 
-The `checkpoint` is a powerful way to control the behaviors of `analyze` and guided `run`. One of the most valuable ways to use it is to avoid executing the same commands for the same changeset. E.g. if all commands succeed in this hypothetical CI job, update the checkpoint to avoid running these commands for targets until they change again; `monorail run -c prep check build unit-test integration-test package && monorail checkpoint update -p`
+The `checkpoint` is a powerful way to control the behaviors of `analyze` and guided `run`. Since the checkpoint controls `monorail`s view of what has changed in the repository, and you can set the checkpoint id to any valid change provider reference, you can `analyze` and `run` for any point in history.
+
+For example, this useful one-liner will perform a graph-guided run of the provided commands, and if successful, update the checkpoint to avoid running any commands for the involved targets until they change again: `monorail run -c <cmd1> <cmd2> ... <cmdN> && monorail checkpoint update -p`. This is most useful when the sequence of commands you provide covers everything you want to execute for a target in order for it to be considered "complete".
+
+Locally, that might just be a bare minimum of commands; `monorail run prep check test integration-test && monorail checkpoint update -p`. In CI/CD, it might be more comprehensive: `monorail run prep check test integration-test package smoke dry-deploy && monorail checkpoint update -p`.
+
+### Checkpointing in CI/CD
+
+In a CI/CD environment, the id returned by `checkpoint update` or `checkpoint show` can be stored as a build artifact for one build and restored for the next one. This provides a means to do incremental command execution for builds, tests, packaging, deploys, and more.
+
+To restore a checkpoint, provide `--id` or `-i` with a valid ID (sourced from a previous `checkpoint update` invocation) when updating the checkpoint:
+
+```sh
+monorail checkpoint update -p -i <id from previous checkpoint>
+```
+
+Additionally, using `monorail` with CI/CD it can be advantageous to retain state from previous builds (e.g. mounting a snapshot of a volume that is being used for builds for the current branch). This can make checkpoint restoration more useful, as you carry forward state from previous builds that have already been completed.
 
 ## Conclusion
 This concludes the tutorial on the fundamentals of `monorail`. For most of what was covered here, additional options and configuration exists but are outside the scope of an introductory tutorial. For more information, use `monorail help` or pass the `--help` flag to subcommands.
