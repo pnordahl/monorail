@@ -154,6 +154,14 @@ pub fn get_app() -> clap::Command {
                     .help("Add pending changes to the checkpoint. E.g. for git, this means the paths and content checksums of uncommitted and unstaged changes since the last commit.")
                     .action(ArgAction::SetTrue),
             )
+            .arg(
+                Arg::new(ARG_ID)
+                    .long(ARG_ID)
+                    .short('i')
+                    .required(false)
+                    .num_args(1)
+                    .help("ID to use for the updated checkpoint. If not provided, this will default to the beginning of history for the current change provider."),
+            )
         )
         .subcommand(
         Command::new(CMD_DELETE)
@@ -558,6 +566,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::CheckpointUpdateInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
+            id: cmd.get_one::<String>(ARG_ID).map(|x: &String| x.as_str()),
             git_opts: core::GitOptions {
                 start: None,
                 end: None,
