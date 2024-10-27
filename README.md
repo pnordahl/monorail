@@ -158,28 +158,27 @@ monorail config show | jq
 {
   "output_dir": "monorail-out",
   "max_retained_runs": 10,
-  "change_provider": "git",
+  "change_provider": {
+    "use": "git"
+  },
   "targets": [
     {
       "path": "rust",
-      "uses": null,
-      "ignores": null,
-      "commands_path": "monorail",
-      "commands": null
+      "commands": {
+        "path": "monorail"
+      }
     },
     {
       "path": "python/app3",
-      "uses": null,
-      "ignores": null,
-      "commands_path": "monorail",
-      "commands": null
+      "commands": {
+        "path": "monorail"
+      }
     },
     {
       "path": "proto",
-      "uses": null,
-      "ignores": null,
-      "commands_path": "monorail",
-      "commands": null
+      "commands": {
+        "path": "monorail"
+      }
     }
   ]
 }
@@ -785,7 +784,7 @@ monorail -v run -c hello build
 {"failed":false,"invocation_args":"-v run -c hello build","results":[]}
 ```
 
-The `checkpoint` is a powerful way to control the behaviors of `analyze` and guided `run`. One of the most valuable ways to use it is to avoid executing the same commands for the same changeset. E.g. if all commands succeed in this hypothetical CI job, update the checkpoint to avoid running these commands for targets that haven't changed since the last push; `monorail run -c prep check build unit-test integration-test package && monorail checkpoint update -p`
+The `checkpoint` is a powerful way to control the behaviors of `analyze` and guided `run`. One of the most valuable ways to use it is to avoid executing the same commands for the same changeset. E.g. if all commands succeed in this hypothetical CI job, update the checkpoint to avoid running these commands for targets until they change again; `monorail run -c prep check build unit-test integration-test package && monorail checkpoint update -p`
 
 ## Conclusion
 This concludes the tutorial on the fundamentals of `monorail`. For most of what was covered here, additional options and configuration exists but are outside the scope of an introductory tutorial. For more information, use `monorail help` or pass the `--help` flag to subcommands.

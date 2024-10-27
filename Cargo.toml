@@ -1,13 +1,13 @@
 [package]
 name = "monorail"
-description = "An overlay for effective monorepo development."
+description = "A fast and composable command execution tool optimized for monorepos."
 license = "MIT"
 homepage = "https://github.com/pnordahl/monorail"
 repository = "https://github.com/pnordahl/monorail"
-version = "3.0.0"
+version = "3.0.1"
 authors = ["Patrick Nordahl <plnordahl@gmail.com>"]
 edition = "2021"
-keywords = ["monorail", "monorepo"]
+keywords = ["monorail", "monorepo", "build", "cli", "build-tool"]
 
 [dependencies]
 clap = "4.5"
