@@ -77,3 +77,8 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 
 - `checkpoint update` now always stores inferred references fully resolved instead of the HEAD alias
 
+## [3.0.4] - 2024-10-28
+
+### Added
+
+- `monorail out delete --all` for purging all run, result, log, and tracking data

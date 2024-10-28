@@ -22,6 +22,7 @@ pub const CMD_ANALYZE: &str = "analyze";
 pub const CMD_RESULT: &str = "result";
 pub const CMD_LOG: &str = "log";
 pub const CMD_TAIL: &str = "tail";
+pub const CMD_OUT: &str = "out";
 
 pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_START: &str = "start";
@@ -298,6 +299,19 @@ pub fn get_app() -> clap::Command {
                 .value_delimiter(' ')
                 .action(ArgAction::Append)
                 .help("Scope analysis to only the provided targets.")))
+    .subcommand(
+        Command::new(CMD_OUT)
+        .about("Manipulate data in the monorail output directory")
+        .subcommand(
+            Command::new(CMD_DELETE).about("Display run logs")
+                .after_help(r#""#)
+                .arg(
+                Arg::new(ARG_ALL)
+                    .long(ARG_ALL)
+                    .help("Delete all subdirectories")
+                    .action(ArgAction::SetTrue),
+            )
+    ))
 }
 
 pub const HANDLE_OK: i32 = 0;
@@ -378,10 +392,26 @@ pub fn handle<'a>(
                     return handle_log_show(&config, show_matches, output_options, work_path);
                 }
             }
+            if let Some(out_matches) = matches.subcommand_matches(CMD_OUT) {
+                if let Some(delete_matches) = out_matches.subcommand_matches(CMD_DELETE) {
+                    return handle_out_delete(&config, delete_matches, output_options);
+                }
+            }
             Err(MonorailError::from("Command not recognized"))
         }
         None => Err(MonorailError::from("No configuration specified")),
     }
+}
+
+fn handle_out_delete<'a>(
+    config: &'a core::Config,
+    matches: &'a ArgMatches,
+    output_options: &OutputOptions<'a>,
+) -> Result<i32, MonorailError> {
+    let i = core::out::DeleteInput::try_from(matches)?;
+    let res = core::out::delete(&config.output_dir, &i);
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
 }
 
 fn handle_analyze<'a>(
@@ -404,7 +434,7 @@ fn handle_run<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let i = core::RunInput::try_from(matches).unwrap();
+    let i = core::HandleRunInput::try_from(matches).unwrap();
     let invocation_args = env::args().skip(1).collect::<Vec<_>>().join(" ");
     let o = rt.block_on(core::handle_run(config, &i, &invocation_args, work_path))?;
     let mut code = HANDLE_OK;
@@ -578,7 +608,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::CheckpointUpdateInput<'a> {
         })
     }
 }
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::RunInput<'a> {
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::HandleRunInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -636,12 +666,12 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogTailInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            filter_input: core::LogFilterInput::try_from(cmd)?,
+            filter_input: core::log::FilterInput::try_from(cmd)?,
         })
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogFilterInput {
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::log::FilterInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -667,8 +697,17 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogShowInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            filter_input: core::LogFilterInput::try_from(cmd)?,
+            filter_input: core::log::FilterInput::try_from(cmd)?,
             id: cmd.get_one::<usize>(ARG_ID),
+        })
+    }
+}
+
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::out::DeleteInput {
+    type Error = MonorailError;
+    fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
+        Ok(Self {
+            all: cmd.get_flag(ARG_ALL),
         })
     }
 }

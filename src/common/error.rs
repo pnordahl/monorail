@@ -40,7 +40,7 @@ pub enum MonorailError {
     DependencyGraph(GraphError),
     Join(tokio::task::JoinError),
     TrackingCheckpointNotFound(io::Error),
-    TrackingLogInfoNotFound(io::Error),
+    TrackingRunNotFound(io::Error),
     MissingArg(String),
     TaskCancelled,
     ChannelSend(String),
@@ -111,7 +111,7 @@ impl fmt::Display for MonorailError {
             MonorailError::TrackingCheckpointNotFound(error) => {
                 write!(f, "Tracking checkpoint open error; {}", error)
             }
-            MonorailError::TrackingLogInfoNotFound(error) => {
+            MonorailError::TrackingRunNotFound(error) => {
                 write!(f, "Tracking log info open error; {}", error)
             }
             MonorailError::TaskCancelled => {
@@ -177,7 +177,7 @@ impl Serialize for MonorailError {
                 state.serialize_field("type", "tracking_checkpoint_not_found")?;
                 state.serialize_field("message", &self.to_string())?;
             }
-            MonorailError::TrackingLogInfoNotFound(_) => {
+            MonorailError::TrackingRunNotFound(_) => {
                 state.serialize_field("type", "tracking_log_info_not_found")?;
                 state.serialize_field("message", &self.to_string())?;
             }
