@@ -1,29 +1,32 @@
-use std::cmp::Ordering;
-use std::{io, path, sync, time};
-
-use std::collections::HashMap;
 use std::collections::HashSet;
-
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::os::unix::fs::PermissionsExt;
-
+use std::io::Write;
 use std::result::Result;
-use std::str::FromStr;
+use std::{path, sync};
 
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
-use tokio_stream::StreamExt;
-use tracing::{debug, error, info, instrument, trace};
-use trie_rs::{Trie, TrieBuilder};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tracing::{debug, info, instrument, trace};
 
-use crate::common::error::{GraphError, MonorailError};
+use crate::common::error::MonorailError;
 
 pub(crate) const STDOUT_FILE: &str = "stdout.zst";
 pub(crate) const STDERR_FILE: &str = "stderr.zst";
 pub(crate) const RESET_COLOR: &str = "\x1b[0m";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct Config {
+    // Tick frequency for flushing accumulated logs to stream
+    // and compression tasks
+    flush_interval_ms: u64,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            flush_interval_ms: 500,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct FilterInput {
@@ -130,6 +133,7 @@ impl StreamClient {
 }
 
 pub(crate) async fn process_reader<R>(
+    config: &Config,
     mut reader: tokio::io::BufReader<R>,
     compressor_client: CompressorClient,
     header: String,
@@ -139,7 +143,8 @@ pub(crate) async fn process_reader<R>(
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
+    let mut interval =
+        tokio::time::interval(tokio::time::Duration::from_millis(config.flush_interval_ms));
     loop {
         let mut bufs = Vec::new();
         loop {

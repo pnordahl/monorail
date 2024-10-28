@@ -7,12 +7,12 @@ use std::result::Result;
 use std::{fs, io, path};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub(crate) struct LogInfo {
+pub(crate) struct Run {
     #[serde(skip)]
     pub(crate) path: path::PathBuf,
     pub(crate) id: usize,
 }
-impl LogInfo {
+impl Run {
     pub(crate) fn new(file_path: &path::Path) -> Self {
         Self {
             path: file_path.to_path_buf(),
@@ -25,7 +25,7 @@ impl LogInfo {
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .open(file_path)
-            .map_err(MonorailError::TrackingLogInfoNotFound)?;
+            .map_err(MonorailError::TrackingRunNotFound)?;
         let mut data = vec![];
         file.read_to_end(&mut data)?;
         let mut cp: Self = serde_json::from_slice(&data)?;
@@ -91,7 +91,7 @@ impl Checkpoint {
 }
 #[derive(Debug)]
 pub(crate) struct Table {
-    log_info_path: path::PathBuf,
+    run_path: path::PathBuf,
     checkpoint_path: path::PathBuf,
 }
 impl<'a> Table {
@@ -99,7 +99,7 @@ impl<'a> Table {
     pub(crate) fn new(dir_path: &'a path::Path) -> Result<Self, MonorailError> {
         std::fs::create_dir_all(dir_path)?;
         Ok(Self {
-            log_info_path: dir_path.join("log_info.json"),
+            run_path: dir_path.join("run.json"),
             checkpoint_path: dir_path.join("checkpoint.json.zst"),
         })
     }
@@ -109,10 +109,10 @@ impl<'a> Table {
     pub(crate) fn open_checkpoint(&'a self) -> Result<Checkpoint, MonorailError> {
         Checkpoint::open(&self.checkpoint_path)
     }
-    pub(crate) fn new_log_info(&'a self) -> LogInfo {
-        LogInfo::new(&self.log_info_path)
+    pub(crate) fn new_run(&'a self) -> Run {
+        Run::new(&self.run_path)
     }
-    pub(crate) fn open_log_info(&'a self) -> Result<LogInfo, MonorailError> {
-        LogInfo::open(&self.log_info_path)
+    pub(crate) fn open_run(&'a self) -> Result<Run, MonorailError> {
+        Run::open(&self.run_path)
     }
 }

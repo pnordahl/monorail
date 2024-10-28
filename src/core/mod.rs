@@ -1,5 +1,6 @@
 mod graph;
 pub(crate) mod log;
+pub(crate) mod out;
 mod tracking;
 
 use std::cmp::Ordering;
@@ -18,14 +19,14 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio_stream::StreamExt;
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument};
 use trie_rs::{Trie, TrieBuilder};
 
 use crate::common::error::{GraphError, MonorailError};
 
-const RUN_OUTPUT_FILE_NAME: &str = "run.json.zst";
+const RESULT_OUTPUT_FILE_NAME: &str = "result.json.zst";
 
 #[derive(Debug)]
 pub struct GitOptions<'a> {
@@ -173,8 +174,6 @@ async fn get_git_all_changes<'a>(
     checkpoint: &'a Option<tracking::Checkpoint>,
     work_path: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
-    // let diff_changes = get_git_diff_changes(git_opts, checkpoint, work_path).await?;
-    // let mut other_changes = git_cmd_other_changes(git_opts.git_path, work_path).await?;
     let (diff_changes, mut other_changes) = tokio::try_join!(
         get_git_diff_changes(git_opts, checkpoint, work_path),
         git_cmd_other_changes(git_opts.git_path, work_path)
@@ -235,8 +234,8 @@ pub(crate) fn log_show<'a>(
         Some(id) => *id,
         None => {
             let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
-            let log_info = tracking_table.open_log_info()?;
-            log_info.id
+            let run = tracking_table.open_run()?;
+            run.id
         }
     };
 
@@ -590,6 +589,7 @@ impl CommandTask {
         token: sync::Arc<tokio_util::sync::CancellationToken>,
         target: String,
         command: String,
+        log_config: log::Config,
         stdout_client: log::CompressorClient,
         stderr_client: log::CompressorClient,
         log_stream_client: Option<log::StreamClient>,
@@ -617,6 +617,7 @@ impl CommandTask {
         };
         let stdout_header = log::get_header(&stdout_client.file_name, &target, &command, true);
         let stdout_fut = log::process_reader(
+            &log_config,
             tokio::io::BufReader::new(child.stdout.take().unwrap()),
             stdout_client,
             stdout_header,
@@ -625,6 +626,7 @@ impl CommandTask {
         );
         let stderr_header = log::get_header(&stderr_client.file_name, &target, &command, true);
         let stderr_fut = log::process_reader(
+            &log_config,
             tokio::io::BufReader::new(child.stderr.take().unwrap()),
             stderr_client,
             stderr_header,
@@ -665,20 +667,20 @@ async fn run<'a>(
 
     let log_dir = {
         // obtain current log info counter and increment it before using
-        let mut log_info = match tracking_table.open_log_info() {
-            Ok(log_info) => log_info,
-            Err(MonorailError::TrackingLogInfoNotFound(_)) => tracking_table.new_log_info(),
+        let mut run = match tracking_table.open_run() {
+            Ok(run) => run,
+            Err(MonorailError::TrackingRunNotFound(_)) => tracking_table.new_run(),
             Err(e) => {
                 return Err(e);
             }
         };
-        if log_info.id >= cfg.max_retained_runs {
-            log_info.id = 0;
+        if run.id >= cfg.max_retained_runs {
+            run.id = 0;
         }
-        log_info.id += 1;
+        run.id += 1;
 
-        log_info.save()?;
-        let log_dir = cfg.get_log_path(work_path).join(format!("{}", log_info.id));
+        run.save()?;
+        let log_dir = cfg.get_log_path(work_path).join(format!("{}", run.id));
         // remove the log_dir path if it exists, and create a new one
         std::fs::remove_dir_all(&log_dir).unwrap_or(());
         std::fs::create_dir_all(&log_dir)?;
@@ -774,12 +776,14 @@ async fn run<'a>(
                     let child = spawn_task(&rd.command_work_path, command_path, &rd.command_args)?;
                     let token2 = token.clone();
                     let log_stream_client2 = log_stream_client.clone();
+                    let log_config = cfg.log.clone();
                     let handle = js.spawn(async move {
                         ft.run(
                             child,
                             token2,
                             target2,
                             command2,
+                            log_config,
                             stdout_client,
                             stderr_client,
                             log_stream_client2,
@@ -952,7 +956,7 @@ fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), 
         .create(true)
         .write(true)
         .truncate(true)
-        .open(log_dir.join(RUN_OUTPUT_FILE_NAME))
+        .open(log_dir.join(RESULT_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let bw = BufWriter::new(run_result_file);
     let mut encoder = zstd::stream::write::Encoder::new(bw, 3).unwrap(); // todo unwrap
@@ -993,14 +997,14 @@ pub fn result_show<'a>(
     work_path: &'a path::Path,
     _input: &'a ResultShowInput,
 ) -> Result<RunOutput, MonorailError> {
-    // open tracking and get log_info
+    // open tracking and get run
     let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
-    // use log_info to get results.json file in id dir
-    let log_info = tracking_table.open_log_info()?;
-    let log_dir = cfg.get_log_path(work_path).join(format!("{}", log_info.id));
+    // use run to get results.json file in id dir
+    let run = tracking_table.open_run()?;
+    let log_dir = cfg.get_log_path(work_path).join(format!("{}", run.id));
     let run_output_file = std::fs::OpenOptions::new()
         .read(true)
-        .open(log_dir.join(RUN_OUTPUT_FILE_NAME))
+        .open(log_dir.join(RESULT_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let br = BufReader::new(run_output_file);
     let mut decoder = zstd::stream::read::Decoder::new(br)?;
@@ -1801,13 +1805,15 @@ impl FromStr for ChangeProviderKind {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     #[serde(default = "Config::default_output_path")]
-    output_dir: String,
+    pub output_dir: String,
     #[serde(default = "Config::default_max_retained_runs")]
     max_retained_runs: usize,
     #[serde(default)]
     change_provider: ChangeProvider,
     #[serde(default)]
     targets: Vec<Target>,
+    #[serde(default)]
+    log: log::Config,
 }
 impl Config {
     pub fn new(file_path: &path::Path) -> Result<Config, MonorailError> {
@@ -1827,7 +1833,7 @@ impl Config {
         work_path.join(&self.output_dir).join("tracking")
     }
     pub fn get_log_path(&self, work_path: &path::Path) -> path::PathBuf {
-        work_path.join(&self.output_dir).join("log")
+        work_path.join(&self.output_dir).join("run")
     }
     fn default_output_path() -> String {
         "monorail-out".to_string()
