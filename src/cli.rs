@@ -404,7 +404,7 @@ fn handle_run<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let i = core::RunInput::try_from(matches).unwrap();
+    let i = core::HandleRunInput::try_from(matches).unwrap();
     let invocation_args = env::args().skip(1).collect::<Vec<_>>().join(" ");
     let o = rt.block_on(core::handle_run(config, &i, &invocation_args, work_path))?;
     let mut code = HANDLE_OK;
@@ -578,7 +578,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::CheckpointUpdateInput<'a> {
         })
     }
 }
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::RunInput<'a> {
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::HandleRunInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -636,12 +636,12 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogTailInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            filter_input: core::LogFilterInput::try_from(cmd)?,
+            filter_input: core::log::FilterInput::try_from(cmd)?,
         })
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogFilterInput {
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::log::FilterInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -667,7 +667,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogShowInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            filter_input: core::LogFilterInput::try_from(cmd)?,
+            filter_input: core::log::FilterInput::try_from(cmd)?,
             id: cmd.get_one::<usize>(ARG_ID),
         })
     }

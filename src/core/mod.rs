@@ -1,4 +1,5 @@
 mod graph;
+pub(crate) mod log;
 mod tracking;
 
 use std::cmp::Ordering;
@@ -25,9 +26,6 @@ use trie_rs::{Trie, TrieBuilder};
 use crate::common::error::{GraphError, MonorailError};
 
 const RUN_OUTPUT_FILE_NAME: &str = "run.json.zst";
-const STDOUT_FILE: &str = "stdout.zst";
-const STDERR_FILE: &str = "stderr.zst";
-const RESET_COLOR: &str = "\x1b[0m";
 
 #[derive(Debug)]
 pub struct GitOptions<'a> {
@@ -37,7 +35,7 @@ pub struct GitOptions<'a> {
 }
 
 #[derive(Debug)]
-pub struct RunInput<'a> {
+pub struct HandleRunInput<'a> {
     pub(crate) git_opts: GitOptions<'a>,
     pub(crate) commands: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
@@ -99,13 +97,13 @@ async fn get_file_checksum(p: &path::Path) -> Result<String, MonorailError> {
 
 async fn checksum_is_equal(
     pending: &HashMap<String, String>,
-    work_dir: &path::Path,
+    work_path: &path::Path,
     name: &str,
 ) -> bool {
     match pending.get(name) {
         Some(checksum) => {
             // compute checksum of x.name and check not equal
-            get_file_checksum(&work_dir.join(name))
+            get_file_checksum(&work_path.join(name))
                 .await
                 // Note that any error here is ignored; the reason for this is that checkpoints
                 // can reference stale or deleted paths, and it's not in our best interest to
@@ -119,11 +117,11 @@ async fn checksum_is_equal(
 async fn get_filtered_changes(
     changes: Vec<Change>,
     pending: &HashMap<String, String>,
-    work_dir: &path::Path,
+    work_path: &path::Path,
 ) -> Vec<Change> {
     tokio_stream::iter(changes)
         .then(|x| async {
-            if checksum_is_equal(pending, work_dir, &x.name).await {
+            if checksum_is_equal(pending, work_path, &x.name).await {
                 None
             } else {
                 Some(x)
@@ -138,7 +136,7 @@ async fn get_filtered_changes(
 async fn get_git_diff_changes<'a>(
     git_opts: &'a GitOptions<'a>,
     checkpoint: &'a Option<tracking::Checkpoint>,
-    work_dir: &path::Path,
+    work_path: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
     let start = git_opts.start.or_else(|| {
         // otherwise, check checkpoint.id; if provided, use that
@@ -159,7 +157,7 @@ async fn get_git_diff_changes<'a>(
         None => None,
     };
 
-    let diff_changes = git_cmd_diff_changes(git_opts.git_path, work_dir, start, end).await?;
+    let diff_changes = git_cmd_diff_changes(git_opts.git_path, work_path, start, end).await?;
     if start.is_none() && end.is_none() && diff_changes.is_empty() {
         // no pending changes and diff range is ok, but signficant in that it
         // means change detection is impossible and other processes should consider
@@ -173,13 +171,13 @@ async fn get_git_diff_changes<'a>(
 async fn get_git_all_changes<'a>(
     git_opts: &'a GitOptions<'a>,
     checkpoint: &'a Option<tracking::Checkpoint>,
-    work_dir: &path::Path,
+    work_path: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
-    // let diff_changes = get_git_diff_changes(git_opts, checkpoint, work_dir).await?;
-    // let mut other_changes = git_cmd_other_changes(git_opts.git_path, work_dir).await?;
+    // let diff_changes = get_git_diff_changes(git_opts, checkpoint, work_path).await?;
+    // let mut other_changes = git_cmd_other_changes(git_opts.git_path, work_path).await?;
     let (diff_changes, mut other_changes) = tokio::try_join!(
-        get_git_diff_changes(git_opts, checkpoint, work_dir),
-        git_cmd_other_changes(git_opts.git_path, work_dir)
+        get_git_diff_changes(git_opts, checkpoint, work_path),
+        git_cmd_other_changes(git_opts.git_path, work_path)
     )?;
     if let Some(diff_changes) = diff_changes {
         other_changes.extend(diff_changes);
@@ -188,7 +186,7 @@ async fn get_git_all_changes<'a>(
         Some(checkpoint) => {
             if let Some(pending) = &checkpoint.pending {
                 if !pending.is_empty() {
-                    get_filtered_changes(other_changes, pending, work_dir).await
+                    get_filtered_changes(other_changes, pending, work_path).await
                 } else {
                     other_changes
                 }
@@ -210,36 +208,39 @@ async fn get_git_all_changes<'a>(
 }
 
 #[derive(Serialize)]
-pub struct LogTailInput {
-    pub filter_input: LogFilterInput,
+pub(crate) struct LogTailInput {
+    pub(crate) filter_input: log::FilterInput,
 }
 
-pub async fn log_tail<'a>(_cfg: &'a Config, input: &LogTailInput) -> Result<(), MonorailError> {
-    let mut lss = LogStreamServer::new("127.0.0.1:9201", &input.filter_input);
+pub(crate) async fn log_tail<'a>(
+    _cfg: &'a Config,
+    input: &LogTailInput,
+) -> Result<(), MonorailError> {
+    let mut lss = log::StreamServer::new("127.0.0.1:9201", &input.filter_input);
     lss.listen().await
 }
 
 #[derive(Serialize)]
-pub struct LogShowInput<'a> {
-    pub id: Option<&'a usize>,
-    pub filter_input: LogFilterInput,
+pub(crate) struct LogShowInput<'a> {
+    pub(crate) id: Option<&'a usize>,
+    pub(crate) filter_input: log::FilterInput,
 }
 
-pub fn log_show<'a>(
+pub(crate) fn log_show<'a>(
     cfg: &'a Config,
     input: &'a LogShowInput<'a>,
-    work_dir: &'a path::Path,
+    work_path: &'a path::Path,
 ) -> Result<(), MonorailError> {
     let log_id = match input.id {
         Some(id) => *id,
         None => {
-            let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
+            let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
             let log_info = tracking_table.open_log_info()?;
             log_info.id
         }
     };
 
-    let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_id));
+    let log_dir = cfg.get_log_path(work_path).join(format!("{}", log_id));
     if !log_dir.try_exists()? {
         return Err(MonorailError::Generic(format!(
             "Log path {} does not exist",
@@ -292,10 +293,10 @@ pub fn log_show<'a>(
                             &input.filter_input.commands,
                             target,
                             command,
-                        ) && (filename == STDOUT_FILE && input.filter_input.include_stdout
-                            || filename == STDERR_FILE && input.filter_input.include_stderr)
+                        ) && (filename == log::STDOUT_FILE && input.filter_input.include_stdout
+                            || filename == log::STDERR_FILE && input.filter_input.include_stderr)
                         {
-                            let header = get_log_header(filename, target, command, true);
+                            let header = log::get_header(filename, target, command, true);
                             let header_bytes = header.as_bytes();
                             stream_archive_file_to_stdout(header_bytes, &p, &mut stdout)?;
                         }
@@ -306,19 +307,6 @@ pub fn log_show<'a>(
     }
 
     Ok(())
-}
-
-fn get_log_header(filename: &str, target: &str, command: &str, color: bool) -> String {
-    if color {
-        let filename_color = match filename {
-            STDOUT_FILE => "\x1b[38;5;81m",
-            STDERR_FILE => "\x1b[38;5;214m",
-            _ => "",
-        };
-        format!("[monorail | {filename_color}{filename}{RESET_COLOR} | {target} | {command}]\n")
-    } else {
-        format!("[monorail | {filename} | {target} | {command}]\n")
-    }
 }
 
 fn stream_archive_file_to_stdout(
@@ -347,11 +335,11 @@ fn stream_archive_file_to_stdout(
 #[instrument]
 pub async fn handle_run<'a>(
     cfg: &'a Config,
-    input: &'a RunInput<'a>,
+    input: &'a HandleRunInput<'a>,
     invocation_args: &'a str,
-    work_dir: &'a path::Path,
+    work_path: &'a path::Path,
 ) -> Result<RunOutput, MonorailError> {
-    let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
+    let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
     if cfg.targets.is_empty() {
         return Err(MonorailError::from("No configured targets"));
     }
@@ -359,7 +347,7 @@ pub async fn handle_run<'a>(
     match input.targets.len() {
         0 => {
             let ths = cfg.get_target_path_set();
-            let mut lookups = Lookups::new(cfg, &ths, work_dir)?;
+            let mut lookups = Lookups::new(cfg, &ths, work_path)?;
             let checkpoint = match tracking_table.open_checkpoint() {
                 Ok(checkpoint) => Some(checkpoint),
                 Err(MonorailError::TrackingCheckpointNotFound(_)) => None,
@@ -370,7 +358,7 @@ pub async fn handle_run<'a>(
 
             let changes = match cfg.change_provider.r#use {
                 ChangeProviderKind::Git => {
-                    get_git_all_changes(&input.git_opts, &checkpoint, work_dir).await?
+                    get_git_all_changes(&input.git_opts, &checkpoint, work_path).await?
                 }
             };
             let ai = AnalyzeInput::new(false, false, true);
@@ -382,7 +370,7 @@ pub async fn handle_run<'a>(
                 cfg,
                 &tracking_table,
                 &lookups,
-                work_dir,
+                work_path,
                 &input.commands,
                 &target_groups,
                 input.fail_on_undefined,
@@ -391,7 +379,7 @@ pub async fn handle_run<'a>(
             .await
         }
         _ => {
-            let mut lookups = Lookups::new(cfg, &input.targets, work_dir)?;
+            let mut lookups = Lookups::new(cfg, &input.targets, work_path)?;
             let target_groups = if input.include_deps {
                 let ai = AnalyzeInput::new(false, false, true);
                 let ao = analyze(&ai, &mut lookups, None)?;
@@ -412,7 +400,7 @@ pub async fn handle_run<'a>(
                 cfg,
                 &tracking_table,
                 &lookups,
-                work_dir,
+                work_path,
                 &input.commands,
                 &target_groups,
                 input.fail_on_undefined,
@@ -425,7 +413,7 @@ pub async fn handle_run<'a>(
 #[derive(Serialize)]
 struct RunData {
     target_path: String,
-    command_work_dir: path::PathBuf,
+    command_work_path: path::PathBuf,
     command_path: Option<path::PathBuf>,
     command_args: Option<Vec<String>>,
     #[serde(skip)]
@@ -477,7 +465,7 @@ fn get_run_data_groups<'a>(
     commands: &'a [&'a String],
     targets: &[Target],
     target_groups: &[Vec<String>],
-    work_dir: &path::Path,
+    work_path: &path::Path,
     log_dir: &path::Path,
     invocation_args: &'a str,
 ) -> Result<(RunOutput, RunDataGroups), MonorailError> {
@@ -511,7 +499,7 @@ fn get_run_data_groups<'a>(
                 let target = targets
                     .get(target_index)
                     .ok_or(MonorailError::from("Target not found"))?;
-                let commands_path = work_dir.join(target_path).join(&target.commands.path);
+                let commands_path = work_path.join(target_path).join(&target.commands.path);
                 let mut command_args = None;
                 let command_path = match &target.commands.definitions {
                     Some(definitions) => match definitions.get(c.as_str()) {
@@ -525,7 +513,7 @@ fn get_run_data_groups<'a>(
                 };
                 run_data.push(RunData {
                     target_path: target_path.to_owned(),
-                    command_work_dir: work_dir.join(target_path),
+                    command_work_path: work_path.join(target_path),
                     command_path,
                     command_args,
                     logs,
@@ -556,7 +544,7 @@ fn get_run_data_groups<'a>(
 }
 
 pub fn spawn_task(
-    command_work_dir: &path::Path,
+    command_work_path: &path::Path,
     command_path: &path::Path,
     command_args: &Option<Vec<String>>,
 ) -> Result<tokio::process::Child, MonorailError> {
@@ -566,7 +554,7 @@ pub fn spawn_task(
         "Spawn task"
     );
     let mut cmd = tokio::process::Command::new(command_path);
-    cmd.current_dir(command_work_dir)
+    cmd.current_dir(command_work_path)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         // parallel execution makes use of stdin impractical
@@ -602,9 +590,9 @@ impl CommandTask {
         token: sync::Arc<tokio_util::sync::CancellationToken>,
         target: String,
         command: String,
-        stdout_client: CompressorClient,
-        stderr_client: CompressorClient,
-        log_stream_client: Option<LogStreamClient>,
+        stdout_client: log::CompressorClient,
+        stderr_client: log::CompressorClient,
+        log_stream_client: Option<log::StreamClient>,
     ) -> Result<
         (usize, std::process::ExitStatus, time::Duration),
         (usize, time::Duration, MonorailError),
@@ -627,16 +615,16 @@ impl CommandTask {
             }
             None => (None, None),
         };
-        let stdout_header = get_log_header(&stdout_client.file_name, &target, &command, true);
-        let stdout_fut = process_reader(
+        let stdout_header = log::get_header(&stdout_client.file_name, &target, &command, true);
+        let stdout_fut = log::process_reader(
             tokio::io::BufReader::new(child.stdout.take().unwrap()),
             stdout_client,
             stdout_header,
             stdout_log_stream_client,
             token.clone(),
         );
-        let stderr_header = get_log_header(&stderr_client.file_name, &target, &command, true);
-        let stderr_fut = process_reader(
+        let stderr_header = log::get_header(&stderr_client.file_name, &target, &command, true);
+        let stderr_fut = log::process_reader(
             tokio::io::BufReader::new(child.stderr.take().unwrap()),
             stderr_client,
             stderr_header,
@@ -652,334 +640,19 @@ impl CommandTask {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct LogFilterInput {
-    pub commands: HashSet<String>,
-    pub targets: HashSet<String>,
-    pub include_stdout: bool,
-    pub include_stderr: bool,
-}
-
-struct LogStreamServer<'a> {
-    address: &'a str,
-    args: &'a LogFilterInput,
-}
-impl<'a> LogStreamServer<'a> {
-    fn new(address: &'a str, args: &'a LogFilterInput) -> Self {
-        Self { address, args }
-    }
-    async fn listen(&mut self) -> Result<(), MonorailError> {
-        let listener = tokio::net::TcpListener::bind(self.address).await?;
-        let args_data = serde_json::to_vec(&self.args)?;
-        debug!("Log stream server listening");
-        loop {
-            let (mut socket, _) = listener.accept().await?;
-            debug!("Client connected");
-            // first, write to the client what we're interested in receiving
-            socket.write_all(&args_data).await?;
-            _ = socket.write(b"\n").await?;
-            debug!("Sent log stream arguments");
-            Self::process(socket).await?;
-        }
-    }
-    #[instrument]
-    async fn process(socket: tokio::net::TcpStream) -> Result<(), MonorailError> {
-        let br = tokio::io::BufReader::new(socket);
-        let mut lines = br.lines();
-        let mut stdout = tokio::io::stdout();
-        while let Some(line) = lines.next_line().await? {
-            stdout.write_all(line.as_bytes()).await?;
-            _ = stdout.write(b"\n").await?;
-            stdout.flush().await?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-struct LogStreamClient {
-    stream: sync::Arc<tokio::sync::Mutex<tokio::net::TcpStream>>,
-    args: LogFilterInput,
-}
-impl LogStreamClient {
-    #[instrument]
-    async fn data(
-        &mut self,
-        data: sync::Arc<Vec<Vec<u8>>>,
-        header: &[u8],
-    ) -> Result<(), MonorailError> {
-        let mut guard = self.stream.lock().await;
-        guard.write_all(header).await.map_err(MonorailError::from)?;
-        for v in data.iter() {
-            guard.write_all(v).await.map_err(MonorailError::from)?;
-        }
-        Ok(())
-    }
-    #[instrument]
-    async fn connect(addr: &str) -> Result<Self, MonorailError> {
-        let mut stream = tokio::net::TcpStream::connect(addr).await?;
-        info!(address = addr, "Connected to log stream server");
-        let mut args_data = Vec::new();
-        // pull arg preferences from the server on connect
-        let mut br = tokio::io::BufReader::new(&mut stream);
-        br.read_until(b'\n', &mut args_data).await?;
-        let args: LogFilterInput = serde_json::from_slice(args_data.as_slice())?;
-        debug!("Received log stream arguments");
-        if args.include_stdout || args.include_stderr {
-            let targets = if args.targets.is_empty() {
-                String::from("(any target)")
-            } else {
-                args.targets.iter().cloned().collect::<Vec<_>>().join(", ")
-            };
-            let commands = if args.commands.is_empty() {
-                String::from("(any command)")
-            } else {
-                args.commands.iter().cloned().collect::<Vec<_>>().join(", ")
-            };
-            let mut files = vec![];
-            if args.include_stdout {
-                files.push(STDOUT_FILE);
-            }
-            if args.include_stderr {
-                files.push(STDERR_FILE);
-            }
-            stream
-                .write_all(get_log_header(&files.join(", "), &targets, &commands, false).as_bytes())
-                .await
-                .map_err(MonorailError::from)?;
-        }
-
-        Ok(Self {
-            stream: sync::Arc::new(tokio::sync::Mutex::new(stream)),
-            args,
-        })
-    }
-}
-
-async fn process_reader<R>(
-    mut reader: tokio::io::BufReader<R>,
-    compressor_client: CompressorClient,
-    header: String,
-    mut log_stream_client: Option<LogStreamClient>,
-    token: sync::Arc<tokio_util::sync::CancellationToken>,
-) -> Result<(), MonorailError>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
-    loop {
-        let mut bufs = Vec::new();
-        loop {
-            let mut buf = Vec::new();
-            tokio::select! {
-                _ = token.cancelled() => {
-                    process_bufs(&header, bufs, &compressor_client, &mut log_stream_client, true).await?;
-                    return Err(MonorailError::TaskCancelled);
-                }
-                res = reader.read_until(b'\n', &mut buf) => {
-                    match res {
-                        Ok(0) => {
-                            process_bufs(&header, bufs, &compressor_client, &mut log_stream_client, true).await?;
-                            return Ok(());
-                        },
-                        Ok(_n) => {
-                            bufs.push(buf);
-                        }
-                        Err(e) => {
-                            process_bufs(&header, bufs, &compressor_client, &mut log_stream_client, true).await?;
-                            return Err(MonorailError::from(e));
-                        }
-                    }
-                }
-                _ = interval.tick() => {
-                    process_bufs(&header, bufs, &compressor_client, &mut log_stream_client, false).await?;
-                    break;
-                }
-            }
-        }
-    }
-}
-
-#[instrument]
-async fn process_bufs(
-    header: &str,
-    bufs: Vec<Vec<u8>>,
-    compressor_client: &CompressorClient,
-    log_stream_client: &mut Option<LogStreamClient>,
-    should_end: bool,
-) -> Result<(), MonorailError> {
-    if !bufs.is_empty() {
-        let bufs_arc = sync::Arc::new(bufs);
-        let bufs_arc2 = bufs_arc.clone();
-        let lsc_fut = async {
-            if let Some(ref mut lsc) = log_stream_client {
-                lsc.data(bufs_arc2, header.as_bytes()).await
-            } else {
-                Ok(())
-            }
-        };
-        let cc_fut = async { compressor_client.data(bufs_arc).await };
-        let (_, _) = tokio::try_join!(lsc_fut, cc_fut)?;
-    }
-    if should_end {
-        compressor_client.end().await?;
-    }
-
-    Ok(())
-}
-
-#[derive(Debug)]
-enum CompressRequest {
-    Data(usize, sync::Arc<Vec<Vec<u8>>>),
-    End(usize),
-    Shutdown,
-}
-#[derive(Debug)]
-struct Compressor {
-    index: usize,
-    num_threads: usize,
-    req_channels: Vec<(
-        flume::Sender<CompressRequest>,
-        Option<flume::Receiver<CompressRequest>>,
-    )>,
-    registrations: Vec<Vec<path::PathBuf>>,
-    shutdown: sync::Arc<sync::atomic::AtomicBool>,
-}
-#[derive(Debug, Clone)]
-struct CompressorClient {
-    file_name: String,
-    encoder_index: usize,
-    req_tx: flume::Sender<CompressRequest>,
-}
-impl CompressorClient {
-    async fn data(&self, data: sync::Arc<Vec<Vec<u8>>>) -> Result<(), MonorailError> {
-        self.req_tx
-            .send_async(CompressRequest::Data(self.encoder_index, data))
-            .await
-            .map_err(MonorailError::from)
-    }
-    async fn end(&self) -> Result<(), MonorailError> {
-        self.req_tx
-            .send_async(CompressRequest::End(self.encoder_index))
-            .await
-            .map_err(MonorailError::from)
-    }
-    fn shutdown(&self) -> Result<(), MonorailError> {
-        self.req_tx
-            .send(CompressRequest::Shutdown)
-            .map_err(MonorailError::from)
-    }
-}
-
-impl Compressor {
-    fn new(num_threads: usize, shutdown: sync::Arc<sync::atomic::AtomicBool>) -> Self {
-        let mut req_channels = vec![];
-        let mut registrations = vec![];
-        for _ in 0..num_threads {
-            let (req_tx, req_rx) = flume::bounded(1000);
-            req_channels.push((req_tx, Some(req_rx)));
-            registrations.push(vec![]);
-        }
-        Self {
-            index: 0,
-            num_threads,
-            req_channels,
-            registrations,
-            shutdown,
-        }
-    }
-    // Register the provided path and return a CompressorClient
-    // that can be used to schedule operations on the underlying encoder.
-    fn register(&mut self, p: &path::Path) -> Result<CompressorClient, MonorailError> {
-        // todo; check path not already seen
-        let thread_index = self.index % self.num_threads;
-        let encoder_index = self.registrations[thread_index].len();
-        self.registrations[thread_index].push(p.to_path_buf());
-        self.index += 1;
-
-        let file_name = p.file_name().unwrap().to_str().unwrap().to_string(); // todo; monorailerror
-
-        Ok(CompressorClient {
-            file_name,
-            encoder_index,
-            req_tx: self.req_channels[thread_index].0.clone(),
-        })
-    }
-    fn run(&mut self) -> Result<(), MonorailError> {
-        std::thread::scope(|s| {
-            for x in 0..self.num_threads {
-                let regs = &self.registrations[x];
-                let req_rx =
-                    self.req_channels[x]
-                        .1
-                        .take()
-                        .ok_or(MonorailError::Generic(format!(
-                            "Missing channel for index {}",
-                            x
-                        )))?;
-                let shutdown = &self.shutdown;
-                s.spawn(move || {
-                    let mut encoders = vec![];
-                    for r in regs.iter() {
-                        let f = std::fs::OpenOptions::new()
-                            .create(true)
-                            .write(true)
-                            .truncate(true)
-                            .open(r)
-                            .map_err(|e| MonorailError::Generic(e.to_string()))?;
-                        let bw = std::io::BufWriter::new(f);
-                        encoders.push(zstd::stream::write::Encoder::new(bw, 3)?);
-                    }
-                    loop {
-                        if shutdown.load(sync::atomic::Ordering::Relaxed) {
-                            break;
-                        };
-                        match req_rx.recv()? {
-                            CompressRequest::End(encoder_index) => {
-                                trace!(
-                                    encoder_index = encoder_index,
-                                    thread_id = x,
-                                    "encoder finish"
-                                );
-                                encoders[encoder_index].do_finish()?;
-                            }
-                            CompressRequest::Shutdown => {
-                                trace!("compressor shutdown");
-                                break;
-                            }
-                            CompressRequest::Data(encoder_index, data) => {
-                                trace!(lines = data.len(), thread_id = x, "encoder write");
-                                for v in data.iter() {
-                                    encoders[encoder_index].write_all(v)?;
-                                }
-                            }
-                        }
-                    }
-                    for mut enc in encoders {
-                        trace!(thread_id = x, "encoder finish");
-                        enc.do_finish()?;
-                    }
-                    Ok::<(), MonorailError>(())
-                });
-            }
-            Ok(())
-        })
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 #[instrument]
 async fn run<'a>(
     cfg: &'a Config,
     tracking_table: &tracking::Table,
     lookups: &Lookups<'_>,
-    work_dir: &path::Path,
+    work_path: &path::Path,
     commands: &'a [&'a String],
     target_groups: &[Vec<String>],
     fail_on_undefined: bool,
     invocation_args: &'a str,
 ) -> Result<RunOutput, MonorailError> {
-    let log_stream_client = match LogStreamClient::connect("127.0.0.1:9201").await {
+    let log_stream_client = match log::StreamClient::connect("127.0.0.1:9201").await {
         Ok(lsc) => Some(lsc),
         Err(e) => {
             debug!(error = e.to_string(), "Log streaming disabled");
@@ -1005,7 +678,7 @@ async fn run<'a>(
         log_info.id += 1;
 
         log_info.save()?;
-        let log_dir = cfg.get_log_path(work_dir).join(format!("{}", log_info.id));
+        let log_dir = cfg.get_log_path(work_path).join(format!("{}", log_info.id));
         // remove the log_dir path if it exists, and create a new one
         std::fs::remove_dir_all(&log_dir).unwrap_or(());
         std::fs::create_dir_all(&log_dir)?;
@@ -1017,7 +690,7 @@ async fn run<'a>(
         commands,
         &cfg.targets,
         target_groups,
-        work_dir,
+        work_path,
         &log_dir,
         invocation_args,
     )?;
@@ -1074,7 +747,7 @@ async fn run<'a>(
         let token = sync::Arc::new(tokio_util::sync::CancellationToken::new());
         let mut abort_table = HashMap::new();
         let compressor_shutdown = sync::Arc::new(sync::atomic::AtomicBool::new(false));
-        let mut compressor = Compressor::new(2, compressor_shutdown.clone());
+        let mut compressor = log::Compressor::new(2, compressor_shutdown.clone());
         let mut compressor_clients = vec![];
         for id in 0..run_data_group.datas.len() {
             let rd = &mut run_data_group.datas[id];
@@ -1098,7 +771,7 @@ async fn run<'a>(
                         target = &rd.target_path,
                         "task"
                     );
-                    let child = spawn_task(&rd.command_work_dir, command_path, &rd.command_args)?;
+                    let child = spawn_task(&rd.command_work_path, command_path, &rd.command_args)?;
                     let token2 = token.clone();
                     let log_stream_client2 = log_stream_client.clone();
                     let handle = js.spawn(async move {
@@ -1306,8 +979,8 @@ impl Logs {
             .join(format!("{:x}", hasher.finalize_reset()));
         std::fs::create_dir_all(&dir_path)?;
         Ok(Self {
-            stdout_path: dir_path.clone().join(STDOUT_FILE),
-            stderr_path: dir_path.clone().join(STDERR_FILE),
+            stdout_path: dir_path.clone().join(log::STDOUT_FILE),
+            stderr_path: dir_path.clone().join(log::STDERR_FILE),
         })
     }
 }
@@ -1407,14 +1080,14 @@ enum AnalyzedChangeTargetReason {
 pub async fn handle_analyze<'a>(
     cfg: &'a Config,
     input: &HandleAnalyzeInput<'a>,
-    work_dir: &'a path::Path,
+    work_path: &'a path::Path,
 ) -> Result<AnalyzeOutput, MonorailError> {
     let (mut lookups, changes) = match input.targets.len() {
         0 => {
             let changes = match cfg.change_provider.r#use {
                 ChangeProviderKind::Git => match cfg.change_provider.r#use {
                     ChangeProviderKind::Git => {
-                        let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
+                        let tracking = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
                         let checkpoint = match tracking.open_checkpoint() {
                             Ok(checkpoint) => Some(checkpoint),
                             Err(MonorailError::TrackingCheckpointNotFound(_)) => None,
@@ -1422,16 +1095,16 @@ pub async fn handle_analyze<'a>(
                                 return Err(e);
                             }
                         };
-                        get_git_all_changes(&input.git_opts, &checkpoint, work_dir).await?
+                        get_git_all_changes(&input.git_opts, &checkpoint, work_path).await?
                     }
                 },
             };
             (
-                Lookups::new(cfg, &cfg.get_target_path_set(), work_dir)?,
+                Lookups::new(cfg, &cfg.get_target_path_set(), work_path)?,
                 changes,
             )
         }
-        _ => (Lookups::new(cfg, &input.targets, work_dir)?, None),
+        _ => (Lookups::new(cfg, &input.targets, work_path)?, None),
     };
 
     analyze(&input.analyze_input, &mut lookups, changes)
@@ -1724,11 +1397,11 @@ pub struct TargetShowOutput {
 pub fn target_show(
     cfg: &Config,
     input: TargetShowInput,
-    work_dir: &path::Path,
+    work_path: &path::Path,
 ) -> Result<TargetShowOutput, MonorailError> {
     let mut target_groups = None;
     if input.show_target_groups {
-        let mut lookups = Lookups::new(cfg, &cfg.get_target_path_set(), work_dir)?;
+        let mut lookups = Lookups::new(cfg, &cfg.get_target_path_set(), work_path)?;
         target_groups = Some(lookups.dag.get_labeled_groups()?);
     }
     Ok(TargetShowOutput {
@@ -1744,9 +1417,9 @@ pub struct CheckpointDeleteOutput {
 
 pub async fn handle_checkpoint_delete(
     cfg: &Config,
-    work_dir: &path::Path,
+    work_path: &path::Path,
 ) -> Result<CheckpointDeleteOutput, MonorailError> {
-    let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
+    let tracking = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
     let mut checkpoint = tracking.open_checkpoint()?;
     checkpoint.id = "".to_string();
     checkpoint.pending = None;
@@ -1763,9 +1436,9 @@ pub struct CheckpointShowOutput {
 
 pub async fn handle_checkpoint_show(
     cfg: &Config,
-    work_dir: &path::Path,
+    work_path: &path::Path,
 ) -> Result<CheckpointShowOutput, MonorailError> {
-    let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
+    let tracking = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
     Ok(CheckpointShowOutput {
         checkpoint: tracking.open_checkpoint()?,
     })
@@ -1786,19 +1459,19 @@ pub struct CheckpointUpdateOutput {
 pub async fn handle_checkpoint_update(
     cfg: &Config,
     input: &CheckpointUpdateInput<'_>,
-    work_dir: &path::Path,
+    work_path: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
     match cfg.change_provider.r#use {
-        ChangeProviderKind::Git => checkpoint_update_git(cfg, input, work_dir).await,
+        ChangeProviderKind::Git => checkpoint_update_git(cfg, input, work_path).await,
     }
 }
 
 async fn checkpoint_update_git<'a>(
     cfg: &Config,
     input: &CheckpointUpdateInput<'a>,
-    work_dir: &path::Path,
+    work_path: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
-    let tracking = tracking::Table::new(&cfg.get_tracking_path(work_dir))?;
+    let tracking = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
     let mut checkpoint = match tracking.open_checkpoint() {
         Ok(cp) => cp,
         Err(MonorailError::TrackingCheckpointNotFound(_)) => tracking.new_checkpoint(),
@@ -1810,17 +1483,17 @@ async fn checkpoint_update_git<'a>(
 
     checkpoint.id = match input.id {
         Some(id) => id.to_string(),
-        None => git_cmd_rev_parse(input.git_opts.git_path, work_dir, "HEAD").await?,
+        None => git_cmd_rev_parse(input.git_opts.git_path, work_path, "HEAD").await?,
     };
 
     if input.pending {
         // get all changes with no checkpoint, so diff will return [HEAD, staging area]
-        let pending_changes = get_git_all_changes(&input.git_opts, &None, work_dir).await?;
+        let pending_changes = get_git_all_changes(&input.git_opts, &None, work_path).await?;
         if let Some(pending_changes) = pending_changes {
             if !pending_changes.is_empty() {
                 let mut pending = HashMap::new();
                 for change in pending_changes.iter() {
-                    let p = work_dir.join(&change.name);
+                    let p = work_path.join(&change.name);
 
                     pending.insert(change.name.clone(), get_file_checksum(&p).await?);
                 }
@@ -1835,12 +1508,12 @@ async fn checkpoint_update_git<'a>(
 
 async fn get_git_cmd_child(
     git_path: &str,
-    work_dir: &path::Path,
+    work_path: &path::Path,
     args: &[&str],
 ) -> Result<tokio::process::Child, MonorailError> {
     tokio::process::Command::new(git_path)
         .args(args)
-        .current_dir(work_dir)
+        .current_dir(work_path)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -1849,10 +1522,10 @@ async fn get_git_cmd_child(
 
 async fn git_cmd_rev_parse(
     git_path: &str,
-    work_dir: &path::Path,
+    work_path: &path::Path,
     reference: &str,
 ) -> Result<String, MonorailError> {
-    let mut child = get_git_cmd_child(git_path, work_dir, &["rev-parse", reference]).await?;
+    let mut child = get_git_cmd_child(git_path, work_path, &["rev-parse", reference]).await?;
     let mut stdout_string = String::new();
     if let Some(mut stdout) = child.stdout.take() {
         stdout.read_to_string(&mut stdout_string).await?;
@@ -1879,11 +1552,11 @@ async fn git_cmd_rev_parse(
 
 async fn git_cmd_other_changes(
     git_path: &str,
-    work_dir: &path::Path,
+    work_path: &path::Path,
 ) -> Result<Vec<Change>, MonorailError> {
     let mut child = get_git_cmd_child(
         git_path,
-        work_dir,
+        work_path,
         &["ls-files", "--others", "--exclude-standard"],
     )
     .await?;
@@ -1917,7 +1590,7 @@ async fn git_cmd_other_changes(
 
 async fn git_cmd_diff_changes(
     git_path: &str,
-    work_dir: &path::Path,
+    work_path: &path::Path,
     start: Option<&str>,
     end: Option<&str>,
 ) -> Result<Vec<Change>, MonorailError> {
@@ -1928,7 +1601,7 @@ async fn git_cmd_diff_changes(
     if let Some(end) = end {
         args.push(end);
     }
-    let mut child = get_git_cmd_child(git_path, work_dir, &args).await?;
+    let mut child = get_git_cmd_child(git_path, work_path, &args).await?;
     let mut out = vec![];
     if let Some(stdout) = child.stdout.take() {
         let reader = tokio::io::BufReader::new(stdout);
@@ -1958,8 +1631,8 @@ async fn git_cmd_diff_changes(
 }
 
 #[inline(always)]
-fn require_existence(work_dir: &path::Path, path: &str) -> Result<(), MonorailError> {
-    let p = work_dir.join(path);
+fn require_existence(work_path: &path::Path, path: &str) -> Result<(), MonorailError> {
+    let p = work_path.join(path);
     if p.is_file() {
         return Ok(());
     }
@@ -1993,7 +1666,7 @@ impl<'a> Lookups<'a> {
     fn new(
         cfg: &'a Config,
         visible_targets: &HashSet<&String>,
-        work_dir: &path::Path,
+        work_path: &path::Path,
     ) -> Result<Self, MonorailError> {
         let mut targets = vec![];
         let mut targets_builder = TrieBuilder::new();
@@ -2007,7 +1680,7 @@ impl<'a> Lookups<'a> {
         cfg.targets.iter().enumerate().try_for_each(|(i, target)| {
             targets.push(target.path.to_owned());
             let target_path_str = target.path.as_str();
-            require_existence(work_dir, target_path_str)?;
+            require_existence(work_path, target_path_str)?;
             if dag.label2node.contains_key(target_path_str) {
                 return Err(MonorailError::DependencyGraph(GraphError::DuplicateLabel(
                     target.path.to_owned(),
@@ -2150,11 +1823,11 @@ impl Config {
         }
         o
     }
-    pub fn get_tracking_path(&self, work_dir: &path::Path) -> path::PathBuf {
-        work_dir.join(&self.output_dir).join("tracking")
+    pub fn get_tracking_path(&self, work_path: &path::Path) -> path::PathBuf {
+        work_path.join(&self.output_dir).join("tracking")
     }
-    pub fn get_log_path(&self, work_dir: &path::Path) -> path::PathBuf {
-        work_dir.join(&self.output_dir).join("log")
+    pub fn get_log_path(&self, work_path: &path::Path) -> path::PathBuf {
+        work_path.join(&self.output_dir).join("log")
     }
     fn default_output_path() -> String {
         "monorail-out".to_string()
@@ -2780,8 +2453,8 @@ mod tests {
     #[tokio::test]
     async fn test_analyze_empty() {
         let changes = vec![];
-        let (c, work_dir) = prep_raw_config_repo().await;
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
+        let (c, work_path) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, false, false);
         let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
@@ -2801,8 +2474,8 @@ mod tests {
             targets: Some(vec![]),
         }];
 
-        let (c, work_dir) = prep_raw_config_repo().await;
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
+        let (c, work_path) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
@@ -2828,8 +2501,8 @@ mod tests {
             }]),
         }];
 
-        let (c, work_dir) = prep_raw_config_repo().await;
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
+        let (c, work_path) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
@@ -2854,8 +2527,8 @@ mod tests {
             }]),
         }];
 
-        let (c, work_dir) = prep_raw_config_repo().await;
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
+        let (c, work_path) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
@@ -2892,8 +2565,8 @@ mod tests {
             ]),
         }];
 
-        let (c, work_dir) = prep_raw_config_repo().await;
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
+        let (c, work_path) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
@@ -2926,8 +2599,8 @@ mod tests {
             ]),
         }];
 
-        let (c, work_dir) = prep_raw_config_repo().await;
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
+        let (c, work_path) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
@@ -2959,8 +2632,8 @@ mod tests {
             ]),
         }];
 
-        let (c, work_dir) = prep_raw_config_repo().await;
-        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
+        let (c, work_path) = prep_raw_config_repo().await;
+        let mut lookups = Lookups::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut lookups, Some(changes)).unwrap();
 
@@ -2971,8 +2644,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_lookups() {
-        let (c, work_dir) = prep_raw_config_repo().await;
-        let l = Lookups::new(&c, &c.get_target_path_set(), &work_dir).unwrap();
+        let (c, work_path) = prep_raw_config_repo().await;
+        let l = Lookups::new(&c, &c.get_target_path_set(), &work_path).unwrap();
 
         assert_eq!(
             l.targets_trie
@@ -3011,7 +2684,7 @@ mod tests {
 }
 "#;
         let c: Config = serde_json::from_str(config_str).unwrap();
-        let work_dir = std::env::current_dir().unwrap();
-        assert!(Lookups::new(&c, &c.get_target_path_set(), &work_dir).is_err());
+        let work_path = std::env::current_dir().unwrap();
+        assert!(Lookups::new(&c, &c.get_target_path_set(), &work_path).is_err());
     }
 }
