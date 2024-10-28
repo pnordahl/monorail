@@ -1,5 +1,5 @@
 # monorail
-> A fast and composable command execution tool optimized for monorepos.
+> A fast and composable build tool optimized for monorepos.
 
 ![Build Status](https://github.com/pnordahl/monorail/actions/workflows/branch.yml/badge.svg?branch=main)
 [![Cargo](https://img.shields.io/crates/v/monorail.svg)](https://crates.io/crates/monorail)
