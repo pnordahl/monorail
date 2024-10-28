@@ -1,6 +1,6 @@
 [package]
 name = "monorail"
-description = "A fast and composable build tool optimized for monorepos."
+description = "A tool for effective polyglot, multi-project monorepo development."
 license = "MIT"
 homepage = "https://github.com/pnordahl/monorail"
 repository = "https://github.com/pnordahl/monorail"
