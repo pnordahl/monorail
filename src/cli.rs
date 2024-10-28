@@ -308,7 +308,7 @@ pub fn get_app() -> clap::Command {
                 .arg(
                 Arg::new(ARG_ALL)
                     .long(ARG_ALL)
-                    .help("Delete all run and tracking data")
+                    .help("Delete all subdirectories")
                     .action(ArgAction::SetTrue),
             )
     ))
