@@ -1,4 +1,4 @@
-use crate::common::error::MonorailError;
+use crate::core::error::MonorailError;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

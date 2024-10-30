@@ -1,6 +1,10 @@
+pub(crate) mod app;
+pub(crate) mod error;
 mod graph;
 pub(crate) mod log;
 pub(crate) mod out;
+#[cfg(test)]
+mod testing;
 mod tracking;
 
 use std::cmp::Ordering;
@@ -22,21 +26,71 @@ use sha2::Digest;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument};
+use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{fmt, Registry};
 use trie_rs::{Trie, TrieBuilder};
 
-use crate::common::error::{GraphError, MonorailError};
-
+use crate::core::app::{
+    Change, ChangeProvider, ChangeProviderKind, CommandDefinition, Target, TargetCommands,
+};
+use crate::core::error::{GraphError, MonorailError};
 const RESULT_OUTPUT_FILE_NAME: &str = "result.json.zst";
 
+// Custom formatter to match chrono's strict RFC3339 compliance.
+struct UtcTimestampWithOffset;
+
+impl fmt::time::FormatTime for UtcTimestampWithOffset {
+    fn format_time(&self, w: &mut fmt::format::Writer<'_>) -> std::fmt::Result {
+        let now = chrono::Utc::now();
+        // Format the timestamp as "YYYY-MM-DDTHH:MM:SS.f+00:00"
+        write!(w, "{}", now.format("%Y-%m-%dT%H:%M:%S%.f+00:00"))
+    }
+}
+
+pub(crate) fn setup_tracing(format: &str, level: u8) -> Result<(), MonorailError> {
+    let env_filter = EnvFilter::default();
+    let level_filter = match level {
+        0 => LevelFilter::OFF,
+        1 => LevelFilter::INFO,
+        2 => LevelFilter::DEBUG,
+        _ => LevelFilter::TRACE,
+    };
+
+    let registry = Registry::default().with(env_filter.add_directive(level_filter.into()));
+    match format {
+        "json" => {
+            let json_fmt_layer = tracing_subscriber::fmt::layer()
+                .json()
+                .with_current_span(false)
+                .with_span_list(false)
+                .with_target(false)
+                .flatten_event(true)
+                .with_timer(UtcTimestampWithOffset);
+            tracing::subscriber::set_global_default(registry.with(json_fmt_layer))
+                .map_err(|e| MonorailError::from(e.to_string()))?;
+        }
+        _ => {
+            let plain_fmt_layer = tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_thread_names(true)
+                .with_timer(UtcTimestampWithOffset);
+            tracing::subscriber::set_global_default(registry.with(plain_fmt_layer))
+                .map_err(|e| MonorailError::from(e.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
-pub struct GitOptions<'a> {
+pub(crate) struct GitOptions<'a> {
     pub(crate) start: Option<&'a str>,
     pub(crate) end: Option<&'a str>,
     pub(crate) git_path: &'a str,
 }
 
 #[derive(Debug)]
-pub struct HandleRunInput<'a> {
+pub(crate) struct HandleRunInput<'a> {
     pub(crate) git_opts: GitOptions<'a>,
     pub(crate) commands: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
@@ -45,13 +99,13 @@ pub struct HandleRunInput<'a> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RunOutput {
+pub(crate) struct RunOutput {
     pub(crate) failed: bool,
     invocation_args: String,
     results: Vec<CommandRunResult>,
 }
 #[derive(Debug, Serialize, Deserialize)]
-pub struct CommandRunResult {
+pub(crate) struct CommandRunResult {
     command: String,
     successes: Vec<TargetRunResult>,
     failures: Vec<TargetRunResult>,
@@ -59,7 +113,7 @@ pub struct CommandRunResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TargetRunResult {
+pub(crate) struct TargetRunResult {
     target: String,
     code: Option<i32>,
     stdout_path: Option<path::PathBuf>,
@@ -206,134 +260,9 @@ async fn get_git_all_changes<'a>(
     Ok(Some(filtered_changes))
 }
 
-#[derive(Serialize)]
-pub(crate) struct LogTailInput {
-    pub(crate) filter_input: log::FilterInput,
-}
-
-pub(crate) async fn log_tail<'a>(
-    _cfg: &'a Config,
-    input: &LogTailInput,
-) -> Result<(), MonorailError> {
-    let mut lss = log::StreamServer::new("127.0.0.1:9201", &input.filter_input);
-    lss.listen().await
-}
-
-#[derive(Serialize)]
-pub(crate) struct LogShowInput<'a> {
-    pub(crate) id: Option<&'a usize>,
-    pub(crate) filter_input: log::FilterInput,
-}
-
-pub(crate) fn log_show<'a>(
-    cfg: &'a Config,
-    input: &'a LogShowInput<'a>,
-    work_path: &'a path::Path,
-) -> Result<(), MonorailError> {
-    let log_id = match input.id {
-        Some(id) => *id,
-        None => {
-            let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
-            let run = tracking_table.open_run()?;
-            run.id
-        }
-    };
-
-    let log_dir = cfg.get_log_path(work_path).join(format!("{}", log_id));
-    if !log_dir.try_exists()? {
-        return Err(MonorailError::Generic(format!(
-            "Log path {} does not exist",
-            &log_dir.display().to_string()
-        )));
-    }
-
-    // map all targets to their shas for filtering and prefixing log lines
-    if cfg.targets.is_empty() {
-        return Err(MonorailError::from(
-            "No configured targets, cannot tail logs",
-        ));
-    }
-    let mut hasher = sha2::Sha256::new();
-    let mut hash2target = HashMap::new();
-    for target in &cfg.targets {
-        hasher.update(&target.path);
-        hash2target.insert(format!("{:x}", hasher.finalize_reset()), &target.path);
-    }
-
-    let mut stdout = std::io::stdout();
-    // open directory at log_dir
-    for fn_entry in log_dir.read_dir()? {
-        let fn_path = fn_entry?.path();
-        if fn_path.is_dir() {
-            let command = fn_path.file_name().unwrap().to_str().unwrap();
-            for t_entry in fn_path.read_dir()? {
-                let t_path = t_entry?.path();
-                if t_path.is_dir() {
-                    let target_hash = t_path.file_name().unwrap().to_str().unwrap();
-                    for e in t_path.read_dir()? {
-                        let target =
-                            hash2target
-                                .get(target_hash)
-                                .ok_or(MonorailError::Generic(format!(
-                                    "Target not found for {}",
-                                    &target_hash
-                                )))?;
-                        let p = e?.path();
-                        let filename = p
-                            .file_name()
-                            .ok_or(MonorailError::Generic(format!(
-                                "Bad path file name: {:?}",
-                                &p
-                            )))?
-                            .to_str()
-                            .ok_or(MonorailError::from("Bad file name string"))?;
-                        if is_log_allowed(
-                            &input.filter_input.targets,
-                            &input.filter_input.commands,
-                            target,
-                            command,
-                        ) && (filename == log::STDOUT_FILE && input.filter_input.include_stdout
-                            || filename == log::STDERR_FILE && input.filter_input.include_stderr)
-                        {
-                            let header = log::get_header(filename, target, command, true);
-                            let header_bytes = header.as_bytes();
-                            stream_archive_file_to_stdout(header_bytes, &p, &mut stdout)?;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn stream_archive_file_to_stdout(
-    header: &[u8],
-    path: &path::Path,
-    stdout: &mut std::io::Stdout,
-) -> Result<(), MonorailError> {
-    let file = std::fs::File::open(path)?;
-    let reader = std::io::BufReader::new(file);
-    let decoder = zstd::stream::read::Decoder::new(reader)?;
-    let mut line_reader = std::io::BufReader::new(decoder);
-    let mut line: Vec<u8> = Vec::new();
-    let mut wrote_header = false;
-    while line_reader.read_until(b'\n', &mut line)? > 0 {
-        if !wrote_header {
-            stdout.write_all(header)?;
-            wrote_header = true;
-        }
-        stdout.write_all(&line)?;
-        line.clear();
-    }
-
-    Ok(())
-}
-
 #[instrument]
-pub async fn handle_run<'a>(
-    cfg: &'a Config,
+pub(crate) async fn handle_run<'a>(
+    cfg: &'a app::Config,
     input: &'a HandleRunInput<'a>,
     invocation_args: &'a str,
     work_path: &'a path::Path,
@@ -542,7 +471,7 @@ fn get_run_data_groups<'a>(
     ))
 }
 
-pub fn spawn_task(
+pub(crate) fn spawn_task(
     command_work_path: &path::Path,
     command_path: &path::Path,
     command_args: &Option<Vec<String>>,
@@ -562,17 +491,6 @@ pub fn spawn_task(
         cmd.args(ca);
     }
     cmd.spawn().map_err(MonorailError::from)
-}
-
-fn is_log_allowed(
-    targets: &HashSet<String>,
-    commands: &HashSet<String>,
-    target: &str,
-    command: &str,
-) -> bool {
-    let target_allowed = targets.is_empty() || targets.contains(target);
-    let command_allowed = commands.is_empty() || commands.contains(command);
-    target_allowed && command_allowed
 }
 
 #[derive(Debug)]
@@ -600,7 +518,7 @@ impl CommandTask {
         let (stdout_log_stream_client, stderr_log_stream_client) = match log_stream_client {
             Some(lsc) => {
                 let allowed =
-                    is_log_allowed(&lsc.args.targets, &lsc.args.commands, &target, &command);
+                    log::is_log_allowed(&lsc.args.targets, &lsc.args.commands, &target, &command);
                 let stdout_lsc = if allowed && lsc.args.include_stdout {
                     Some(lsc.clone())
                 } else {
@@ -645,7 +563,7 @@ impl CommandTask {
 #[allow(clippy::too_many_arguments)]
 #[instrument]
 async fn run<'a>(
-    cfg: &'a Config,
+    cfg: &'a app::Config,
     tracking_table: &tracking::Table,
     lookups: &Lookups<'_>,
     work_path: &path::Path,
@@ -966,7 +884,7 @@ fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), 
 }
 
 #[derive(Serialize)]
-pub struct Logs {
+pub(crate) struct Logs {
     stdout_path: path::PathBuf,
     stderr_path: path::PathBuf,
 }
@@ -990,10 +908,10 @@ impl Logs {
 }
 
 #[derive(Debug)]
-pub struct ResultShowInput {}
+pub(crate) struct ResultShowInput {}
 
-pub fn result_show<'a>(
-    cfg: &'a Config,
+pub(crate) fn result_show<'a>(
+    cfg: &'a app::Config,
     work_path: &'a path::Path,
     _input: &'a ResultShowInput,
 ) -> Result<RunOutput, MonorailError> {
@@ -1013,14 +931,14 @@ pub fn result_show<'a>(
 }
 
 #[derive(Debug)]
-pub struct HandleAnalyzeInput<'a> {
+pub(crate) struct HandleAnalyzeInput<'a> {
     pub(crate) git_opts: GitOptions<'a>,
     pub(crate) analyze_input: AnalyzeInput,
     pub(crate) targets: HashSet<&'a String>,
 }
 
 #[derive(Debug)]
-pub struct AnalyzeInput {
+pub(crate) struct AnalyzeInput {
     pub(crate) show_changes: bool,
     pub(crate) show_change_targets: bool,
     pub(crate) show_target_groups: bool,
@@ -1036,7 +954,7 @@ impl AnalyzeInput {
 }
 
 #[derive(Serialize, Debug)]
-pub struct AnalyzeOutput {
+pub(crate) struct AnalyzeOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     changes: Option<Vec<AnalyzedChange>>,
     targets: Vec<String>,
@@ -1045,14 +963,14 @@ pub struct AnalyzeOutput {
 }
 
 #[derive(Serialize, Debug, Eq, PartialEq)]
-pub struct AnalyzedChange {
+pub(crate) struct AnalyzedChange {
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     targets: Option<Vec<AnalyzedChangeTarget>>,
 }
 
 #[derive(Serialize, Debug, Eq, PartialEq)]
-pub struct AnalyzedChangeTarget {
+pub(crate) struct AnalyzedChangeTarget {
     path: String,
     reason: AnalyzedChangeTargetReason,
 }
@@ -1081,8 +999,8 @@ enum AnalyzedChangeTargetReason {
     Ignores,
 }
 
-pub async fn handle_analyze<'a>(
-    cfg: &'a Config,
+pub(crate) async fn handle_analyze<'a>(
+    cfg: &'a app::Config,
     input: &HandleAnalyzeInput<'a>,
     work_path: &'a path::Path,
 ) -> Result<AnalyzeOutput, MonorailError> {
@@ -1389,17 +1307,17 @@ fn analyze(
 }
 
 #[derive(Debug, Serialize)]
-pub struct TargetShowInput {
-    pub show_target_groups: bool,
+pub(crate) struct TargetShowInput {
+    pub(crate) show_target_groups: bool,
 }
 #[derive(Debug, Serialize)]
-pub struct TargetShowOutput {
+pub(crate) struct TargetShowOutput {
     targets: Vec<Target>,
     target_groups: Option<Vec<Vec<String>>>,
 }
 
-pub fn target_show(
-    cfg: &Config,
+pub(crate) fn target_show(
+    cfg: &app::Config,
     input: TargetShowInput,
     work_path: &path::Path,
 ) -> Result<TargetShowOutput, MonorailError> {
@@ -1415,12 +1333,12 @@ pub fn target_show(
 }
 
 #[derive(Debug, Serialize)]
-pub struct CheckpointDeleteOutput {
+pub(crate) struct CheckpointDeleteOutput {
     checkpoint: tracking::Checkpoint,
 }
 
-pub async fn handle_checkpoint_delete(
-    cfg: &Config,
+pub(crate) async fn handle_checkpoint_delete(
+    cfg: &app::Config,
     work_path: &path::Path,
 ) -> Result<CheckpointDeleteOutput, MonorailError> {
     let tracking = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
@@ -1434,12 +1352,12 @@ pub async fn handle_checkpoint_delete(
 }
 
 #[derive(Debug, Serialize)]
-pub struct CheckpointShowOutput {
+pub(crate) struct CheckpointShowOutput {
     checkpoint: tracking::Checkpoint,
 }
 
-pub async fn handle_checkpoint_show(
-    cfg: &Config,
+pub(crate) async fn handle_checkpoint_show(
+    cfg: &app::Config,
     work_path: &path::Path,
 ) -> Result<CheckpointShowOutput, MonorailError> {
     let tracking = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
@@ -1449,19 +1367,19 @@ pub async fn handle_checkpoint_show(
 }
 
 #[derive(Debug)]
-pub struct CheckpointUpdateInput<'a> {
+pub(crate) struct CheckpointUpdateInput<'a> {
     pub(crate) id: Option<&'a str>,
     pub(crate) pending: bool,
     pub(crate) git_opts: GitOptions<'a>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct CheckpointUpdateOutput {
+pub(crate) struct CheckpointUpdateOutput {
     checkpoint: tracking::Checkpoint,
 }
 
-pub async fn handle_checkpoint_update(
-    cfg: &Config,
+pub(crate) async fn handle_checkpoint_update(
+    cfg: &app::Config,
     input: &CheckpointUpdateInput<'_>,
     work_path: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
@@ -1471,7 +1389,7 @@ pub async fn handle_checkpoint_update(
 }
 
 async fn checkpoint_update_git<'a>(
-    cfg: &Config,
+    cfg: &app::Config,
     input: &CheckpointUpdateInput<'a>,
     work_path: &path::Path,
 ) -> Result<CheckpointUpdateOutput, MonorailError> {
@@ -1657,7 +1575,7 @@ fn require_existence(work_path: &path::Path, path: &str) -> Result<(), MonorailE
     Err(MonorailError::PathDNE(path.to_owned()))
 }
 #[derive(Debug)]
-pub struct Lookups<'a> {
+pub(crate) struct Lookups<'a> {
     targets: Vec<String>,
     targets_trie: Trie<u8>,
     ignores: Trie<u8>,
@@ -1668,7 +1586,7 @@ pub struct Lookups<'a> {
 }
 impl<'a> Lookups<'a> {
     fn new(
-        cfg: &'a Config,
+        cfg: &'a app::Config,
         visible_targets: &HashSet<&String>,
         work_path: &path::Path,
     ) -> Result<Self, MonorailError> {
@@ -1772,124 +1690,10 @@ impl<'a> Lookups<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Change {
-    name: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-enum ChangeProviderKind {
-    #[serde(rename = "git")]
-    #[default]
-    Git,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-struct ChangeProvider {
-    r#use: ChangeProviderKind,
-}
-
-impl FromStr for ChangeProviderKind {
-    type Err = MonorailError;
-    fn from_str(s: &str) -> Result<ChangeProviderKind, Self::Err> {
-        match s {
-            "git" => Ok(ChangeProviderKind::Git),
-            _ => Err(MonorailError::Generic(format!(
-                "Unrecognized change provider kind: {}",
-                s
-            ))),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Config {
-    #[serde(default = "Config::default_output_path")]
-    pub output_dir: String,
-    #[serde(default = "Config::default_max_retained_runs")]
-    max_retained_runs: usize,
-    #[serde(default)]
-    change_provider: ChangeProvider,
-    #[serde(default)]
-    targets: Vec<Target>,
-    #[serde(default)]
-    log: log::Config,
-}
-impl Config {
-    pub fn new(file_path: &path::Path) -> Result<Config, MonorailError> {
-        let file = File::open(file_path)?;
-        let mut buf_reader = BufReader::new(file);
-        let buf = buf_reader.fill_buf()?;
-        Ok(serde_json::from_str(std::str::from_utf8(buf)?)?)
-    }
-    pub fn get_target_path_set(&self) -> HashSet<&String> {
-        let mut o = HashSet::new();
-        for t in &self.targets {
-            o.insert(&t.path);
-        }
-        o
-    }
-    pub fn get_tracking_path(&self, work_path: &path::Path) -> path::PathBuf {
-        work_path.join(&self.output_dir).join("tracking")
-    }
-    pub fn get_log_path(&self, work_path: &path::Path) -> path::PathBuf {
-        work_path.join(&self.output_dir).join("run")
-    }
-    fn default_output_path() -> String {
-        "monorail-out".to_string()
-    }
-    fn default_max_retained_runs() -> usize {
-        10
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CommandDefinition {
-    exec: String,
-    args: Vec<String>,
-}
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Target {
-    // The filesystem path, relative to the repository root.
-    path: String,
-    // Out-of-path directories that should affect this target. If this
-    // path lies within a target, then a dependency for this target
-    // on the other target.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    uses: Option<Vec<String>>,
-    // Paths that should not affect this target; has the highest
-    // precedence when evaluating a change.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ignores: Option<Vec<String>>,
-    // Configuration and optional overrides for commands.
-    #[serde(default)]
-    commands: TargetCommands,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct TargetCommands {
-    // Relative path from this target's `path` to a directory containing
-    // commands that can be executed by `monorail run`.
-    path: String,
-    // Mappings of command names to executable statements; these
-    // statements will be used when spawning tasks, and if unspecified
-    // monorail will try to use an executable named {{command}}*.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    definitions: Option<HashMap<String, CommandDefinition>>,
-}
-impl Default for TargetCommands {
-    fn default() -> Self {
-        Self {
-            path: "monorail".into(),
-            definitions: None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::testing::*;
+    use crate::core::testing::*;
 
     const RAW_CONFIG: &str = r#"
 {
@@ -2435,9 +2239,9 @@ mod tests {
         // TODO
     }
 
-    async fn prep_raw_config_repo() -> (Config, path::PathBuf) {
+    async fn prep_raw_config_repo() -> (app::Config, path::PathBuf) {
         let repo_path = init(false).await;
-        let c: Config = serde_json::from_str(RAW_CONFIG).unwrap();
+        let c: app::Config = serde_json::from_str(RAW_CONFIG).unwrap();
 
         create_file(
             &repo_path,
@@ -2689,7 +2493,7 @@ mod tests {
     ]
 }
 "#;
-        let c: Config = serde_json::from_str(config_str).unwrap();
+        let c: app::Config = serde_json::from_str(config_str).unwrap();
         let work_path = std::env::current_dir().unwrap();
         assert!(Lookups::new(&c, &c.get_target_path_set(), &work_path).is_err());
     }

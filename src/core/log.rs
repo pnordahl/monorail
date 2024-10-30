@@ -1,14 +1,16 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::result::Result;
 use std::{path, sync};
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
+use std::io::BufRead;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tracing::{debug, info, instrument, trace};
 
-use crate::common::error::MonorailError;
+use crate::core::{app, error::MonorailError, tracking};
 
 pub(crate) const STDOUT_FILE: &str = "stdout.zst";
 pub(crate) const STDERR_FILE: &str = "stderr.zst";
@@ -34,6 +36,142 @@ pub(crate) struct FilterInput {
     pub(crate) targets: HashSet<String>,
     pub(crate) include_stdout: bool,
     pub(crate) include_stderr: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct LogTailInput {
+    pub(crate) filter_input: FilterInput,
+}
+
+pub(crate) async fn log_tail<'a>(
+    _cfg: &'a app::Config,
+    input: &LogTailInput,
+) -> Result<(), MonorailError> {
+    let mut lss = StreamServer::new("127.0.0.1:9201", &input.filter_input);
+    lss.listen().await
+}
+
+#[derive(Serialize)]
+pub(crate) struct LogShowInput<'a> {
+    pub(crate) id: Option<&'a usize>,
+    pub(crate) filter_input: FilterInput,
+}
+
+pub(crate) fn log_show<'a>(
+    cfg: &'a app::Config,
+    input: &'a LogShowInput<'a>,
+    work_path: &'a path::Path,
+) -> Result<(), MonorailError> {
+    let log_id = match input.id {
+        Some(id) => *id,
+        None => {
+            let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
+            let run = tracking_table.open_run()?;
+            run.id
+        }
+    };
+
+    let log_dir = cfg.get_log_path(work_path).join(format!("{}", log_id));
+    if !log_dir.try_exists()? {
+        return Err(MonorailError::Generic(format!(
+            "Log path {} does not exist",
+            &log_dir.display().to_string()
+        )));
+    }
+
+    // map all targets to their shas for filtering and prefixing log lines
+    if cfg.targets.is_empty() {
+        return Err(MonorailError::from(
+            "No configured targets, cannot tail logs",
+        ));
+    }
+    let mut hasher = sha2::Sha256::new();
+    let mut hash2target = HashMap::new();
+    for target in &cfg.targets {
+        hasher.update(&target.path);
+        hash2target.insert(format!("{:x}", hasher.finalize_reset()), &target.path);
+    }
+
+    let mut stdout = std::io::stdout();
+    // open directory at log_dir
+    for fn_entry in log_dir.read_dir()? {
+        let fn_path = fn_entry?.path();
+        if fn_path.is_dir() {
+            let command = fn_path.file_name().unwrap().to_str().unwrap();
+            for t_entry in fn_path.read_dir()? {
+                let t_path = t_entry?.path();
+                if t_path.is_dir() {
+                    let target_hash = t_path.file_name().unwrap().to_str().unwrap();
+                    for e in t_path.read_dir()? {
+                        let target =
+                            hash2target
+                                .get(target_hash)
+                                .ok_or(MonorailError::Generic(format!(
+                                    "Target not found for {}",
+                                    &target_hash
+                                )))?;
+                        let p = e?.path();
+                        let filename = p
+                            .file_name()
+                            .ok_or(MonorailError::Generic(format!(
+                                "Bad path file name: {:?}",
+                                &p
+                            )))?
+                            .to_str()
+                            .ok_or(MonorailError::from("Bad file name string"))?;
+                        if is_log_allowed(
+                            &input.filter_input.targets,
+                            &input.filter_input.commands,
+                            target,
+                            command,
+                        ) && (filename == STDOUT_FILE && input.filter_input.include_stdout
+                            || filename == STDERR_FILE && input.filter_input.include_stderr)
+                        {
+                            let header = get_header(filename, target, command, true);
+                            let header_bytes = header.as_bytes();
+                            stream_archive_file_to_stdout(header_bytes, &p, &mut stdout)?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn is_log_allowed(
+    targets: &HashSet<String>,
+    commands: &HashSet<String>,
+    target: &str,
+    command: &str,
+) -> bool {
+    let target_allowed = targets.is_empty() || targets.contains(target);
+    let command_allowed = commands.is_empty() || commands.contains(command);
+    target_allowed && command_allowed
+}
+
+fn stream_archive_file_to_stdout(
+    header: &[u8],
+    path: &path::Path,
+    stdout: &mut std::io::Stdout,
+) -> Result<(), MonorailError> {
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let decoder = zstd::stream::read::Decoder::new(reader)?;
+    let mut line_reader = std::io::BufReader::new(decoder);
+    let mut line: Vec<u8> = Vec::new();
+    let mut wrote_header = false;
+    while line_reader.read_until(b'\n', &mut line)? > 0 {
+        if !wrote_header {
+            stdout.write_all(header)?;
+            wrote_header = true;
+        }
+        stdout.write_all(&line)?;
+        line.clear();
+    }
+
+    Ok(())
 }
 
 pub(crate) struct StreamServer<'a> {

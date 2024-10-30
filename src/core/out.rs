@@ -1,4 +1,4 @@
-use crate::common::error::MonorailError;
+use crate::core::error::MonorailError;
 use serde::Serialize;
 use std::path;
 

@@ -1,5 +1,5 @@
-use crate::common::error::MonorailError;
 use crate::core;
+use crate::core::error::MonorailError;
 
 use clap::builder::ArgPredicate;
 use clap::{Arg, ArgAction, ArgMatches, Command};
@@ -58,7 +58,7 @@ fn default_config_path() -> &'static str {
     })
 }
 
-pub fn get_app() -> clap::Command {
+pub fn build() -> clap::Command {
     let arg_git_path = Arg::new(ARG_GIT_PATH)
         .long(ARG_GIT_PATH)
         .help("Absolute path to a `git` binary to use for certain operations. If unspecified, default value uses PATH to resolve.")
@@ -336,6 +336,9 @@ pub fn handle<'a>(
     matches: &ArgMatches,
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
+    let verbosity = matches.get_one::<u8>(ARG_VERBOSE).unwrap_or(&0);
+    core::setup_tracing(output_options.format, *verbosity)?;
+
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
         Some(config_file) => {
             let config_path = path::Path::new(config_file);
@@ -345,7 +348,7 @@ pub fn handle<'a>(
                     "Config file {} has no parent directory",
                     config_path.display()
                 )))?;
-            let config = core::Config::new(config_path)?;
+            let config = core::app::Config::new(config_path)?;
             if let Some(config_matches) = matches.subcommand_matches(CMD_CONFIG) {
                 if config_matches.subcommand_matches(CMD_SHOW).is_some() {
                     write_result(&Ok(config), output_options)?;
@@ -404,7 +407,7 @@ pub fn handle<'a>(
 }
 
 fn handle_out_delete<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
@@ -415,7 +418,7 @@ fn handle_out_delete<'a>(
 }
 
 fn handle_analyze<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
@@ -428,7 +431,7 @@ fn handle_analyze<'a>(
 }
 
 fn handle_run<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
@@ -446,7 +449,7 @@ fn handle_run<'a>(
 }
 
 fn handle_checkpoint_update<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
@@ -459,7 +462,7 @@ fn handle_checkpoint_update<'a>(
 }
 
 fn handle_checkpoint_show<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
@@ -470,7 +473,7 @@ fn handle_checkpoint_show<'a>(
 }
 
 fn handle_checkpoint_delete<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
@@ -481,13 +484,13 @@ fn handle_checkpoint_delete<'a>(
 }
 
 fn handle_log_tail<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let i = core::LogTailInput::try_from(matches)?;
-    match rt.block_on(core::log_tail(config, &i)) {
+    let i = core::log::LogTailInput::try_from(matches)?;
+    match rt.block_on(core::log::log_tail(config, &i)) {
         Ok(_) => Ok(HANDLE_OK),
         Err(e) => {
             write_result(&Err::<(), MonorailError>(e), output_options)?;
@@ -497,13 +500,13 @@ fn handle_log_tail<'a>(
 }
 
 fn handle_log_show<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
-    let i = core::LogShowInput::try_from(matches)?;
-    match core::log_show(config, &i, work_path) {
+    let i = core::log::LogShowInput::try_from(matches)?;
+    match core::log::log_show(config, &i, work_path) {
         Ok(_) => Ok(HANDLE_OK),
         Err(e) => {
             write_result(&Err::<(), MonorailError>(e), output_options)?;
@@ -513,7 +516,7 @@ fn handle_log_show<'a>(
 }
 
 fn handle_target_list<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
@@ -529,7 +532,7 @@ fn handle_target_list<'a>(
     Ok(get_code(res.is_err()))
 }
 fn handle_result_show<'a>(
-    config: &'a core::Config,
+    config: &'a core::app::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
@@ -662,7 +665,7 @@ impl<'a> From<&'a clap::ArgMatches> for core::HandleAnalyzeInput<'a> {
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogTailInput {
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::log::LogTailInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -693,7 +696,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::log::FilterInput {
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogShowInput<'a> {
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::log::LogShowInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
