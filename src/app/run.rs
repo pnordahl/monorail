@@ -4,8 +4,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use std::fs::OpenOptions;
-use std::io::{BufReader, BufWriter};
-use std::os::unix::fs::PermissionsExt;
+use std::io::{BufWriter};
 
 use std::result::Result;
 
@@ -13,9 +12,6 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use tracing::{debug, error, info, instrument};
-use tracing_subscriber::filter::{EnvFilter, LevelFilter};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::{fmt, Registry};
 
 use crate::app::{analyze, log, result};
 use crate::core::error::{GraphError, MonorailError};

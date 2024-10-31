@@ -96,7 +96,7 @@ impl From<tokio::task::JoinError> for MonorailError {
 impl fmt::Display for MonorailError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MonorailError::Generic(error) => write!(f, "Error; {}", error),
+            MonorailError::Generic(error) => write!(f, "{}", error),
             MonorailError::Git(error) => write!(f, "Git error; {}", error),
             MonorailError::Io(error) => write!(f, "IO error; {}", error),
             MonorailError::PathDNE(error) => write!(f, "Path does not exist: {}", error),
