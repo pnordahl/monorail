@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use std::fs::OpenOptions;
-use std::io::{BufWriter};
+use std::io::BufWriter;
 
 use std::result::Result;
 
@@ -197,9 +197,9 @@ fn get_run_data_groups<'a>(
                             command_args = Some(def.args.clone());
                             Some(commands_path.join(&def.exec))
                         }
-                        None => file::find_command_executable(c, &commands_path),
+                        None => file::find_file_by_stem(c, &commands_path),
                     },
-                    None => file::find_command_executable(c, &commands_path),
+                    None => file::find_file_by_stem(c, &commands_path),
                 };
                 run_data.push(RunData {
                     target_path: target_path.to_owned(),

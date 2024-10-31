@@ -6,17 +6,13 @@ pub(crate) mod result;
 pub(crate) mod run;
 pub(crate) mod target;
 
-
-
-
 use std::result::Result;
-
 
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{fmt, Registry};
 
-use crate::core::error::{MonorailError};
+use crate::core::error::MonorailError;
 
 // Custom formatter to match chrono's strict RFC3339 compliance.
 struct UtcTimestampWithOffset;

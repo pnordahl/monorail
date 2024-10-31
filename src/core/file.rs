@@ -55,7 +55,7 @@ pub(crate) async fn checksum_is_equal(
     }
 }
 
-pub(crate) fn find_command_executable(name: &str, dir: &path::Path) -> Option<path::PathBuf> {
+pub(crate) fn find_file_by_stem(name: &str, dir: &path::Path) -> Option<path::PathBuf> {
     debug!(
         name = name,
         dir = dir.display().to_string(),
@@ -88,6 +88,10 @@ pub(crate) fn is_executable(p: &path::Path) -> bool {
 mod tests {
     use super::*;
     use crate::core::testing::*;
+    use std::fs::{set_permissions, File};
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_checksum_is_equal() {
@@ -128,5 +132,96 @@ mod tests {
         // write file and compare checksums
         let checksum = write_with_checksum(p, &[1, 2, 3]).await.unwrap();
         assert_eq!(get_file_checksum(p).await.unwrap(), checksum);
+    }
+
+    #[test]
+    fn test_executable_file() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let file_path = dir.path().join("executable_file");
+
+        File::create(&file_path).expect("Failed to create file");
+        let mut permissions = std::fs::metadata(&file_path)
+            .expect("Failed to get metadata")
+            .permissions();
+        permissions.set_mode(0o755); // rwxr-xr-x
+        set_permissions(&file_path, permissions).expect("Failed to set permissions");
+
+        assert!(is_executable(&file_path));
+    }
+
+    #[test]
+    fn test_non_executable_file() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let file_path = dir.path().join("non_executable_file");
+
+        File::create(&file_path).expect("Failed to create file");
+        let mut permissions = std::fs::metadata(&file_path)
+            .expect("Failed to get metadata")
+            .permissions();
+        permissions.set_mode(0o644); // rw-r--r--
+        set_permissions(&file_path, permissions).expect("Failed to set permissions");
+
+        assert!(!is_executable(&file_path));
+    }
+
+    #[test]
+    fn test_nonexistent_path() {
+        let non_existent_path = Path::new("/non_existent_path");
+
+        assert!(!is_executable(non_existent_path));
+    }
+
+    #[test]
+    fn test_find_existing_file_by_stem() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let file_path = dir.path().join("example.txt");
+
+        File::create(&file_path).expect("Failed to create file");
+
+        let result = find_file_by_stem("example", dir.path());
+        assert_eq!(result, Some(file_path));
+    }
+
+    #[test]
+    fn test_find_nonexistent_file_by_stem() {
+        let dir = tempdir().expect("Failed to create temp dir");
+
+        let result = find_file_by_stem("nonexistent", dir.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_file_with_different_stem() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let file_path = dir.path().join("example.txt");
+
+        File::create(file_path).expect("Failed to create file");
+
+        let result = find_file_by_stem("different_stem", dir.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_multiple_files_same_stem() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let file1 = dir.path().join("example.txt");
+        let file2 = dir.path().join("example.log");
+
+        File::create(&file1).expect("Failed to create file1");
+        File::create(&file2).expect("Failed to create file2");
+
+        let result = find_file_by_stem("example", dir.path());
+        assert!(result == Some(file1) || result == Some(file2));
+    }
+
+    #[test]
+    fn test_find_ignores_directories() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let subdir = dir.path().join("example");
+
+        std::fs::create_dir(subdir).expect("Failed to create subdirectory");
+
+        let result = find_file_by_stem("example", dir.path());
+        assert!(result.is_none());
     }
 }
