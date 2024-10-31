@@ -33,6 +33,12 @@ pub(crate) async fn log_tail<'a>(
     _cfg: &'a core::Config,
     input: &LogTailInput,
 ) -> Result<(), MonorailError> {
+    // require at least one of the log types be opted into
+    if !input.filter_input.include_stdout && !input.filter_input.include_stderr {
+        return Err(MonorailError::from(
+            "No stream selected; provide one or both of: --stdout, --stderr",
+        ));
+    }
     let mut lss = StreamServer::new("127.0.0.1:9201", &input.filter_input);
     lss.listen().await
 }
