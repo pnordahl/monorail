@@ -83,7 +83,7 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 
 - `monorail out delete --all` for purging all run, result, log, and tracking data
 
-## [3.0.5] - 2024-10-30
+## [3.0.6] - 2024-10-30
 
 ### Changed
 
