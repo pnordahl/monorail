@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
 use std::result::Result;
 use std::{io, path};
 
 use sha2::Digest;
 use tokio::io::AsyncReadExt;
+use tracing::debug;
 
 use crate::core::error::MonorailError;
 
@@ -53,11 +55,11 @@ pub(crate) async fn checksum_is_equal(
     }
 }
 
-fn find_command_executable(name: &str, dir: &path::Path) -> Option<path::PathBuf> {
+pub(crate) fn find_command_executable(name: &str, dir: &path::Path) -> Option<path::PathBuf> {
     debug!(
         name = name,
         dir = dir.display().to_string(),
-        "Command search"
+        "Executable search"
     );
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -74,7 +76,7 @@ fn find_command_executable(name: &str, dir: &path::Path) -> Option<path::PathBuf
     None
 }
 
-fn is_executable(p: &path::Path) -> bool {
+pub(crate) fn is_executable(p: &path::Path) -> bool {
     if let Ok(metadata) = std::fs::metadata(p) {
         let permissions = metadata.permissions();
         return permissions.mode() & 0o111 != 0;

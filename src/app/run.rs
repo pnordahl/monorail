@@ -1,3 +1,26 @@
+use std::{path, sync, time};
+
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use std::fs::OpenOptions;
+use std::io::{BufReader, BufWriter};
+use std::os::unix::fs::PermissionsExt;
+
+use std::result::Result;
+
+use serde::{Deserialize, Serialize};
+use sha2::Digest;
+
+use tracing::{debug, error, info, instrument};
+use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{fmt, Registry};
+
+use crate::app::{analyze, log, result};
+use crate::core::error::{GraphError, MonorailError};
+use crate::core::{self, file, git, tracking, ChangeProviderKind, Target};
+
 #[derive(Debug)]
 pub(crate) struct HandleRunInput<'a> {
     pub(crate) git_opts: git::GitOptions<'a>,
@@ -178,9 +201,9 @@ fn get_run_data_groups<'a>(
                             command_args = Some(def.args.clone());
                             Some(commands_path.join(&def.exec))
                         }
-                        None => find_command_executable(c, &commands_path),
+                        None => file::find_command_executable(c, &commands_path),
                     },
-                    None => find_command_executable(c, &commands_path),
+                    None => file::find_command_executable(c, &commands_path),
                 };
                 run_data.push(RunData {
                     target_path: target_path.to_owned(),
@@ -427,7 +450,7 @@ async fn run<'a>(
 
             if let Some(command_path) = &rd.command_path {
                 // check that the command path is executable before proceeding
-                if is_executable(command_path) {
+                if file::is_executable(command_path) {
                     info!(
                         status = "scheduled",
                         command = command,
@@ -617,7 +640,7 @@ fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), 
         .create(true)
         .write(true)
         .truncate(true)
-        .open(log_dir.join(RESULT_OUTPUT_FILE_NAME))
+        .open(log_dir.join(result::RESULT_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let bw = BufWriter::new(run_result_file);
     let mut encoder = zstd::stream::write::Encoder::new(bw, 3).unwrap(); // todo unwrap

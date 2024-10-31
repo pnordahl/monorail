@@ -437,9 +437,14 @@ fn handle_run<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let i = app::HandleRunInput::try_from(matches).unwrap();
+    let i = app::run::HandleRunInput::try_from(matches).unwrap();
     let invocation_args = env::args().skip(1).collect::<Vec<_>>().join(" ");
-    let o = rt.block_on(app::handle_run(config, &i, &invocation_args, work_path))?;
+    let o = rt.block_on(app::run::handle_run(
+        config,
+        &i,
+        &invocation_args,
+        work_path,
+    ))?;
     let mut code = HANDLE_OK;
     if o.failed {
         code = HANDLE_ERR;
@@ -455,8 +460,10 @@ fn handle_checkpoint_update<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let i = app::CheckpointUpdateInput::try_from(matches)?;
-    let res = rt.block_on(app::handle_checkpoint_update(config, &i, work_path));
+    let i = app::checkpoint::CheckpointUpdateInput::try_from(matches)?;
+    let res = rt.block_on(app::checkpoint::handle_checkpoint_update(
+        config, &i, work_path,
+    ));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -467,7 +474,7 @@ fn handle_checkpoint_show<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let res = rt.block_on(app::handle_checkpoint_show(config, work_path));
+    let res = rt.block_on(app::checkpoint::handle_checkpoint_show(config, work_path));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -478,7 +485,7 @@ fn handle_checkpoint_delete<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let res = rt.block_on(app::handle_checkpoint_delete(config, work_path));
+    let res = rt.block_on(app::checkpoint::handle_checkpoint_delete(config, work_path));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -521,9 +528,9 @@ fn handle_target_list<'a>(
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
-    let res = app::target_show(
+    let res = app::target::target_show(
         config,
-        app::TargetShowInput {
+        app::target::TargetShowInput {
             show_target_groups: matches.get_flag(ARG_TARGET_GROUPS),
         },
         work_path,
@@ -537,8 +544,8 @@ fn handle_result_show<'a>(
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
-    let i = app::ResultShowInput::try_from(matches)?;
-    let res = app::result_show(config, work_path, &i);
+    let i = app::result::ResultShowInput::try_from(matches)?;
+    let res = app::result::result_show(config, work_path, &i);
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -588,14 +595,14 @@ where
     }
 }
 
-impl TryFrom<&clap::ArgMatches> for app::ResultShowInput {
+impl TryFrom<&clap::ArgMatches> for app::result::ResultShowInput {
     type Error = MonorailError;
     fn try_from(_cmd: &clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {})
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for app::CheckpointUpdateInput<'a> {
+impl<'a> TryFrom<&'a clap::ArgMatches> for app::checkpoint::CheckpointUpdateInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -611,7 +618,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::CheckpointUpdateInput<'a> {
         })
     }
 }
-impl<'a> TryFrom<&'a clap::ArgMatches> for app::HandleRunInput<'a> {
+impl<'a> TryFrom<&'a clap::ArgMatches> for app::run::HandleRunInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
