@@ -1,4 +1,4 @@
-use crate::common::error::{GraphError, MonorailError};
+use crate::core::error::{GraphError, MonorailError};
 use std::cmp::{Eq, PartialEq};
 use std::collections::{HashMap, VecDeque};
 

@@ -1,14 +1,10 @@
-use monorail::cli;
-use monorail::tracing;
+use monorail::api::cli;
 
 fn main() {
-    let app = cli::get_app();
+    let app = cli::build();
     let matches = app.get_matches();
     let format = matches.get_one::<String>(cli::ARG_OUTPUT_FORMAT).unwrap();
-    let verbosity = matches.get_one::<u8>(cli::ARG_VERBOSE).unwrap_or(&0);
     let output_options = cli::OutputOptions { format };
-
-    tracing::setup(format, *verbosity).unwrap();
 
     match cli::handle(&matches, &output_options) {
         Ok(code) => {

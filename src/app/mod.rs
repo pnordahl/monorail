@@ -1,10 +1,31 @@
-use crate::common::error::MonorailError;
+pub(crate) mod analyze;
+pub(crate) mod checkpoint;
+pub(crate) mod log;
+pub(crate) mod out;
+pub(crate) mod result;
+pub(crate) mod run;
+pub(crate) mod target;
+
+use std::result::Result;
 
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{fmt, Registry};
 
-pub fn setup(format: &str, level: u8) -> Result<(), MonorailError> {
+use crate::core::error::MonorailError;
+
+// Custom formatter to match chrono's strict RFC3339 compliance.
+struct UtcTimestampWithOffset;
+
+impl fmt::time::FormatTime for UtcTimestampWithOffset {
+    fn format_time(&self, w: &mut fmt::format::Writer<'_>) -> std::fmt::Result {
+        let now = chrono::Utc::now();
+        // Format the timestamp as "YYYY-MM-DDTHH:MM:SS.f+00:00"
+        write!(w, "{}", now.format("%Y-%m-%dT%H:%M:%S%.f+00:00"))
+    }
+}
+
+pub(crate) fn setup_tracing(format: &str, level: u8) -> Result<(), MonorailError> {
     let env_filter = EnvFilter::default();
     let level_filter = match level {
         0 => LevelFilter::OFF,
@@ -36,15 +57,4 @@ pub fn setup(format: &str, level: u8) -> Result<(), MonorailError> {
         }
     }
     Ok(())
-}
-
-// Custom formatter to match chrono's strict RFC3339 compliance.
-struct UtcTimestampWithOffset;
-
-impl fmt::time::FormatTime for UtcTimestampWithOffset {
-    fn format_time(&self, w: &mut fmt::format::Writer<'_>) -> std::fmt::Result {
-        let now = chrono::Utc::now();
-        // Format the timestamp as "YYYY-MM-DDTHH:MM:SS.f+00:00"
-        write!(w, "{}", now.format("%Y-%m-%dT%H:%M:%S%.f+00:00"))
-    }
 }

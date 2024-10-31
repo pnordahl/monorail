@@ -1,4 +1,3 @@
-pub mod cli;
-pub mod common;
+pub mod api;
+pub mod app;
 pub mod core;
-pub mod tracing;

@@ -1,5 +1,5 @@
-use crate::common::error::MonorailError;
-use crate::core;
+use crate::app;
+use crate::core::{self, error::MonorailError};
 
 use clap::builder::ArgPredicate;
 use clap::{Arg, ArgAction, ArgMatches, Command};
@@ -58,7 +58,7 @@ fn default_config_path() -> &'static str {
     })
 }
 
-pub fn get_app() -> clap::Command {
+pub fn build() -> clap::Command {
     let arg_git_path = Arg::new(ARG_GIT_PATH)
         .long(ARG_GIT_PATH)
         .help("Absolute path to a `git` binary to use for certain operations. If unspecified, default value uses PATH to resolve.")
@@ -336,6 +336,9 @@ pub fn handle<'a>(
     matches: &ArgMatches,
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
+    let verbosity = matches.get_one::<u8>(ARG_VERBOSE).unwrap_or(&0);
+    app::setup_tracing(output_options.format, *verbosity)?;
+
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
         Some(config_file) => {
             let config_path = path::Path::new(config_file);
@@ -408,8 +411,8 @@ fn handle_out_delete<'a>(
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
-    let i = core::out::DeleteInput::try_from(matches)?;
-    let res = core::out::delete(&config.output_dir, &i);
+    let i = app::out::OutDeleteInput::try_from(matches)?;
+    let res = app::out::out_delete(&config.output_dir, &i);
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -421,8 +424,8 @@ fn handle_analyze<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let i = core::HandleAnalyzeInput::from(matches);
-    let res = rt.block_on(core::handle_analyze(config, &i, work_path));
+    let i = app::analyze::HandleAnalyzeInput::from(matches);
+    let res = rt.block_on(app::analyze::handle_analyze(config, &i, work_path));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -434,9 +437,14 @@ fn handle_run<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let i = core::HandleRunInput::try_from(matches).unwrap();
+    let i = app::run::HandleRunInput::try_from(matches).unwrap();
     let invocation_args = env::args().skip(1).collect::<Vec<_>>().join(" ");
-    let o = rt.block_on(core::handle_run(config, &i, &invocation_args, work_path))?;
+    let o = rt.block_on(app::run::handle_run(
+        config,
+        &i,
+        &invocation_args,
+        work_path,
+    ))?;
     let mut code = HANDLE_OK;
     if o.failed {
         code = HANDLE_ERR;
@@ -452,8 +460,10 @@ fn handle_checkpoint_update<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let i = core::CheckpointUpdateInput::try_from(matches)?;
-    let res = rt.block_on(core::handle_checkpoint_update(config, &i, work_path));
+    let i = app::checkpoint::CheckpointUpdateInput::try_from(matches)?;
+    let res = rt.block_on(app::checkpoint::handle_checkpoint_update(
+        config, &i, work_path,
+    ));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -464,7 +474,7 @@ fn handle_checkpoint_show<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let res = rt.block_on(core::handle_checkpoint_show(config, work_path));
+    let res = rt.block_on(app::checkpoint::handle_checkpoint_show(config, work_path));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -475,7 +485,7 @@ fn handle_checkpoint_delete<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let res = rt.block_on(core::handle_checkpoint_delete(config, work_path));
+    let res = rt.block_on(app::checkpoint::handle_checkpoint_delete(config, work_path));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -486,8 +496,8 @@ fn handle_log_tail<'a>(
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let i = core::LogTailInput::try_from(matches)?;
-    match rt.block_on(core::log_tail(config, &i)) {
+    let i = app::log::LogTailInput::try_from(matches)?;
+    match rt.block_on(app::log::log_tail(config, &i)) {
         Ok(_) => Ok(HANDLE_OK),
         Err(e) => {
             write_result(&Err::<(), MonorailError>(e), output_options)?;
@@ -502,8 +512,8 @@ fn handle_log_show<'a>(
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
-    let i = core::LogShowInput::try_from(matches)?;
-    match core::log_show(config, &i, work_path) {
+    let i = app::log::LogShowInput::try_from(matches)?;
+    match app::log::log_show(config, &i, work_path) {
         Ok(_) => Ok(HANDLE_OK),
         Err(e) => {
             write_result(&Err::<(), MonorailError>(e), output_options)?;
@@ -518,9 +528,9 @@ fn handle_target_list<'a>(
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
-    let res = core::target_show(
+    let res = app::target::target_show(
         config,
-        core::TargetShowInput {
+        app::target::TargetShowInput {
             show_target_groups: matches.get_flag(ARG_TARGET_GROUPS),
         },
         work_path,
@@ -534,8 +544,8 @@ fn handle_result_show<'a>(
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
-    let i = core::ResultShowInput::try_from(matches)?;
-    let res = core::result_show(config, work_path, &i);
+    let i = app::result::ResultShowInput::try_from(matches)?;
+    let res = app::result::result_show(config, work_path, &i);
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -585,19 +595,19 @@ where
     }
 }
 
-impl TryFrom<&clap::ArgMatches> for core::ResultShowInput {
+impl TryFrom<&clap::ArgMatches> for app::result::ResultShowInput {
     type Error = MonorailError;
     fn try_from(_cmd: &clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {})
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::CheckpointUpdateInput<'a> {
+impl<'a> TryFrom<&'a clap::ArgMatches> for app::checkpoint::CheckpointUpdateInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
             id: cmd.get_one::<String>(ARG_ID).map(|x: &String| x.as_str()),
-            git_opts: core::GitOptions {
+            git_opts: core::git::GitOptions {
                 start: None,
                 end: None,
                 git_path: cmd
@@ -608,11 +618,11 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::CheckpointUpdateInput<'a> {
         })
     }
 }
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::HandleRunInput<'a> {
+impl<'a> TryFrom<&'a clap::ArgMatches> for app::run::HandleRunInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            git_opts: core::GitOptions {
+            git_opts: core::git::GitOptions {
                 start: cmd
                     .get_one::<String>(ARG_START)
                     .map(|x: &String| x.as_str()),
@@ -638,10 +648,10 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::HandleRunInput<'a> {
     }
 }
 
-impl<'a> From<&'a clap::ArgMatches> for core::HandleAnalyzeInput<'a> {
+impl<'a> From<&'a clap::ArgMatches> for app::analyze::HandleAnalyzeInput<'a> {
     fn from(cmd: &'a clap::ArgMatches) -> Self {
         Self {
-            git_opts: core::GitOptions {
+            git_opts: core::git::GitOptions {
                 start: cmd
                     .get_one::<String>(ARG_START)
                     .map(|x: &String| x.as_str()),
@@ -653,7 +663,7 @@ impl<'a> From<&'a clap::ArgMatches> for core::HandleAnalyzeInput<'a> {
                 .into_iter()
                 .flatten()
                 .collect(),
-            analyze_input: core::AnalyzeInput {
+            analyze_input: app::analyze::AnalyzeInput {
                 show_changes: cmd.get_flag(ARG_CHANGES),
                 show_change_targets: cmd.get_flag(ARG_CHANGE_TARGETS),
                 show_target_groups: cmd.get_flag(ARG_TARGET_GROUPS),
@@ -662,16 +672,16 @@ impl<'a> From<&'a clap::ArgMatches> for core::HandleAnalyzeInput<'a> {
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogTailInput {
+impl<'a> TryFrom<&'a clap::ArgMatches> for app::log::LogTailInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            filter_input: core::log::FilterInput::try_from(cmd)?,
+            filter_input: app::log::LogFilterInput::try_from(cmd)?,
         })
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::log::FilterInput {
+impl<'a> TryFrom<&'a clap::ArgMatches> for app::log::LogFilterInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -693,17 +703,17 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for core::log::FilterInput {
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::LogShowInput<'a> {
+impl<'a> TryFrom<&'a clap::ArgMatches> for app::log::LogShowInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            filter_input: core::log::FilterInput::try_from(cmd)?,
+            filter_input: app::log::LogFilterInput::try_from(cmd)?,
             id: cmd.get_one::<usize>(ARG_ID),
         })
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for core::out::DeleteInput {
+impl<'a> TryFrom<&'a clap::ArgMatches> for app::out::OutDeleteInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {

@@ -82,3 +82,9 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 ### Added
 
 - `monorail out delete --all` for purging all run, result, log, and tracking data
+
+## [3.0.5] - 2024-10-30
+
+### Changed
+
+- `monorail log show` and `monorail log tail` now return an error if neither --stdout nor --stderr are provided

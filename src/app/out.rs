@@ -1,16 +1,19 @@
-use crate::common::error::MonorailError;
+use crate::core::error::MonorailError;
 use serde::Serialize;
 use std::path;
 
 #[derive(Debug)]
-pub(crate) struct DeleteInput {
+pub(crate) struct OutDeleteInput {
     pub(crate) all: bool,
 }
 #[derive(Debug, Serialize)]
-pub(crate) struct DeleteOutput {
+pub(crate) struct OutDeleteOutput {
     recovered_mb: f64,
 }
-pub(crate) fn delete(output_dir: &str, input: &DeleteInput) -> Result<DeleteOutput, MonorailError> {
+pub(crate) fn out_delete(
+    output_dir: &str,
+    input: &OutDeleteInput,
+) -> Result<OutDeleteOutput, MonorailError> {
     let recovered_mb = calculate_dir_size_in_mb(output_dir)?;
     if input.all {
         let tlds = get_tlds(output_dir)?;
@@ -19,7 +22,7 @@ pub(crate) fn delete(output_dir: &str, input: &DeleteInput) -> Result<DeleteOutp
         }
     }
 
-    Ok(DeleteOutput { recovered_mb })
+    Ok(OutDeleteOutput { recovered_mb })
 }
 
 // Calculate the dir size of all files nested at any depth of path
