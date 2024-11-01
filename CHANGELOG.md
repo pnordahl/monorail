@@ -88,3 +88,9 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 ### Changed
 
 - `monorail log show` and `monorail log tail` now return an error if neither --stdout nor --stderr are provided
+
+## [3.0.7] - 2024-10-31
+
+### Added
+
+- `--commands` flag for `monorail target show` for displaying available commands for targets

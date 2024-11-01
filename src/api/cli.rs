@@ -42,6 +42,7 @@ pub const ARG_STDOUT: &str = "stdout";
 pub const ARG_ID: &str = "id";
 pub const ARG_DEPS: &str = "deps";
 pub const ARG_FAIL_ON_UNDEFINED: &str = "fail-on-undefined";
+pub const ARG_COMMANDS: &str = "commands";
 
 pub const VAL_JSON: &str = "json";
 
@@ -186,6 +187,13 @@ pub fn build() -> clap::Command {
                     .short('g')
                     .long(ARG_TARGET_GROUPS)
                     .help("Display a representation of the 'depends on' relationship of targets. The array represents a topological ordering of the graph, with each element of the array being a set of targets that do not depend on each other at that position of the ordering.")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new(ARG_COMMANDS)
+                    .short('c')
+                    .long(ARG_COMMANDS)
+                    .help("Display information for the commands that are defined for this target.")
                     .action(ArgAction::SetTrue),
             )
     ))
@@ -532,6 +540,7 @@ fn handle_target_list<'a>(
         config,
         app::target::TargetShowInput {
             show_target_groups: matches.get_flag(ARG_TARGET_GROUPS),
+            show_commands: matches.get_flag(ARG_COMMANDS),
         },
         work_path,
     );
