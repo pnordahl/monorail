@@ -227,7 +227,8 @@ pub fn build() -> clap::Command {
         .group(
             ArgGroup::new("commands_and_or_sequences")
                 .args([ARG_COMMANDS, ARG_SEQUENCES])
-                .required(true),
+                .required(true)
+                .multiple(true),
         )
         .arg(
             Arg::new(ARG_TARGETS)
