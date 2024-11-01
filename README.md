@@ -715,7 +715,7 @@ cat <<EOF > Monorail.json
 EOF
 ```
 
-Now run the sequence:
+Now run the sequence with `--sequences` or `-s`:
 ```sh
 monorail run -s dev
 ```
