@@ -21,6 +21,7 @@ use crate::core::{self, file, git, tracking, ChangeProviderKind, Target};
 pub(crate) struct HandleRunInput<'a> {
     pub(crate) git_opts: git::GitOptions<'a>,
     pub(crate) commands: Vec<&'a String>,
+    pub(crate) sequences: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
     pub(crate) include_deps: bool,
     pub(crate) fail_on_undefined: bool,
@@ -85,12 +86,13 @@ pub(crate) async fn handle_run<'a>(
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
-            run(
+            run_internal(
                 cfg,
                 &tracking_table,
                 &index,
                 work_path,
                 &input.commands,
+                &input.sequences,
                 &target_groups,
                 input.fail_on_undefined,
                 invocation_args,
@@ -115,12 +117,13 @@ pub(crate) async fn handle_run<'a>(
                 tg
             };
 
-            run(
+            run_internal(
                 cfg,
                 &tracking_table,
                 &index,
                 work_path,
                 &input.commands,
+                &input.sequences,
                 &target_groups,
                 input.fail_on_undefined,
                 invocation_args,
@@ -324,12 +327,13 @@ impl CommandTask {
 
 #[allow(clippy::too_many_arguments)]
 #[instrument]
-async fn run<'a>(
+async fn run_internal<'a>(
     cfg: &'a core::Config,
     tracking_table: &tracking::Table,
     index: &core::Index<'_>,
     work_path: &path::Path,
     commands: &'a [&'a String],
+    sequences: &'a [&'a String],
     target_groups: &[Vec<String>],
     fail_on_undefined: bool,
     invocation_args: &'a str,
@@ -367,9 +371,29 @@ async fn run<'a>(
         log_dir
     };
 
+    // append provided commands to any expanded sequences provided
+    let mut all_commands = vec![];
+    if !sequences.is_empty() {
+        let cfg_sequences = cfg.sequences.as_ref().ok_or(MonorailError::from(
+            "No sequences are defined in configuration",
+        ))?;
+        for seq in sequences {
+            all_commands.extend(
+                cfg_sequences
+                    .get(seq.as_str())
+                    .ok_or(MonorailError::Generic(format!(
+                        "Sequence {} is not defined",
+                        seq
+                    )))?,
+            );
+        }
+    }
+
+    all_commands.extend_from_slice(commands);
+
     let (initial_run_output, run_data_groups) = get_run_data_groups(
         index,
-        commands,
+        &all_commands,
         &cfg.targets,
         target_groups,
         work_path,
@@ -386,7 +410,7 @@ async fn run<'a>(
 
     // Spawn concurrent tasks for each group of rundata
     for mut run_data_group in run_data_groups.groups {
-        let command = &commands[run_data_group.command_index];
+        let command = &all_commands[run_data_group.command_index];
         info!(
             num = run_data_group.datas.len(),
             command = command,

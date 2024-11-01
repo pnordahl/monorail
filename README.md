@@ -13,7 +13,7 @@ See the [tutorial](#tutorial) below for a practical walkthrough of how `monorail
 ### UNIX/Linux variants
 At present, only source builds are supported. Packages for popular managers will be provided at a later time.
 
-Ensure that Rust is installed and available on your system path:
+Ensure that Rust 1.63+ is installed and available on your system path:
 * [Rust](https://www.rust-lang.org/tools/install)
 
 Run `cargo install --path .`
@@ -36,11 +36,12 @@ Changes are mapped to affected targets, and a graph traversal powers various dep
 Monorail has a small lexicon:
 
 * `change`: a created, updated, or deleted filesystem path as reported by a change provider
-* `checkpoint`: a location in change provider history that marks the beginning of a sequence of changes
+* `checkpoint`: a location in change provider history that marks the beginning of an interval of changes
 * `target`: a unique container that can be referenced by change detection and command execution
 * `uses`: a set of paths that a target depends upon
 * `ignores`: a set of paths that should not affect a target during change detection
-* `command` executable code written in any language and invoked per target
+* `command`: executable code written in any language and invoked per target
+* `sequence`: a named list of commands
 
 The tutorial in the next section will elaborate on these concepts in a practical fashion.
 
@@ -580,7 +581,7 @@ First, is the log stream header:
 [monorail | stdout.zst, stderr.zst | (any target) | (any command)]
 ```
 
-Every `monorail run` will print this header once at the beginning of a new log stream, indicating what data will be shown in the stream. When you start the tail process, by default it will not filter any targets or commands; this is indicated by the `(any target)` and `(any command)` entries in the header. If we had provided `--target rust proto` and `--command hello test build` (which can also be provided to `monorail log show`), then the header would look like `[monorail | stdout.zst, stderr.zst | rust, proto | hello, test, build]`, and only those logs that match these filters would appear.
+Every `monorail run` will print this header once at the beginning of a new log stream, indicating what data will be shown in the stream. When you start the tail process, by default it will not filter any targets or commands; this is indicated by the `(any target)` and `(any command)` entries in the header. If we had provided `--targets rust proto` and `--commands hello test build` (which can also be provided to `monorail log show`), then the header would look like `[monorail | stdout.zst, stderr.zst | rust, proto | hello, test, build]`, and only those logs that match these filters would appear.
 
 Second, note how multiple log block headers (e.g. `[monorail | stderr.zst | rust | hello]`) are printed; this is because the output from multiple files is independently collected and flushed at regular intervals and interleaved in the stream. In practice, you will often use target and command filters to reduce noise, but even without them block headers make it possible to visually parse the combined log stream.
 
@@ -698,9 +699,49 @@ monorail -v run -c hello build
 
 You might notice the exit code of 0 and `"failed":false`, and that's because by default it is not required for a target to define a command. You can override this behavior with `--fail-on-undefined`, but in general this allows targets to define only the commands they need and eliminates the need for "stubs" that may never be implemented. One exception to this is when providing a list of targets to `run`, where `--fail-on-undefined` defaults to true. The reason for this is that when executing a command directly for targets, one expects that command to exist.
 
+### Running multiple commands with sequences
+
+While any number of commands may be specified with `-c`, you can define `sequences` of commands in your configuration file for convenience and consistency. Edit the configuration file to create a `"dev"` sequence:
+```sh
+cat <<EOF > Monorail.json
+{
+  "targets": [
+    { "path": "rust", "uses": ["proto"] },
+    { "path": "python/app3", "uses": ["proto"] },
+    { "path": "proto", "ignores": [ "proto/README.md" ] }
+  ],
+  "sequences": { "dev": ["hello", "build"] }
+}
+EOF
+```
+
+Now run the sequence with `--sequences` or `-s`:
+```sh
+monorail run -s dev
+```
+```json
+{"timestamp":"2024-11-01T11:13:03.550061+00:00","level":"INFO","message":"processing groups","num":4}
+{"timestamp":"2024-11-01T11:13:03.550115+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
+{"timestamp":"2024-11-01T11:13:03.550155+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"proto"}
+{"timestamp":"2024-11-01T11:13:03.552012+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"proto"}
+{"timestamp":"2024-11-01T11:13:03.554001+00:00","level":"INFO","message":"processing targets","num":2,"command":"hello"}
+{"timestamp":"2024-11-01T11:13:03.554036+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
+{"timestamp":"2024-11-01T11:13:03.554253+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"python/app3"}
+{"timestamp":"2024-11-01T11:13:03.575991+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"python/app3"}
+{"timestamp":"2024-11-01T11:13:04.125682+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
+{"timestamp":"2024-11-01T11:13:04.126924+00:00","level":"INFO","message":"processing targets","num":1,"command":"build"}
+{"timestamp":"2024-11-01T11:13:04.127075+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"proto"}
+{"timestamp":"2024-11-01T11:13:04.127920+00:00","level":"INFO","message":"processing targets","num":2,"command":"build"}
+{"timestamp":"2024-11-01T11:13:04.127978+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"rust"}
+{"timestamp":"2024-11-01T11:13:04.128022+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"python/app3"}
+{"timestamp":"2024-11-01T11:13:04.129937+00:00","failed":false,"invocation_args":"-v run -s dev","results":[{"command":"hello","successes":[{"target":"proto","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stderr.zst","runtime_secs":0.001837875}],"failures":[],"unknowns":[]},{"command":"hello","successes":[{"target":"python/app3","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stderr.zst","runtime_secs":0.021706708},{"target":"rust","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst","runtime_secs":0.57150763}],"failures":[],"unknowns":[]},{"command":"build","successes":[],"failures":[],"unknowns":[{"target":"proto","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0}]},{"command":"build","successes":[],"failures":[],"unknowns":[{"target":"rust","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0},{"target":"python/app3","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0}]}]}
+```
+
+When you run a sequence, it is first expanded into the commands it maps to. Then, any commands provided with `--commands` or `-c` are added to this list. For example, `monorail run -s dev -c foo bar` is equivalent to `monorail run -c hello build foo bar`. Sequences are useful for defining commands for use in specific contexts, such as setting up a repository for a new user, general development, and CI/CD.
+
 ### Viewing available commands
 
-Lastly, you can query targets and include information about the commands that are available for each target:
+Lastly, you can query targets and include information about the commands that are available for each target. The `commands` table is built by merging executables found on the filesystem with any definitions in your configuration file:
 
 ```sh
 monorail target show --commands
@@ -715,11 +756,6 @@ monorail target show --commands
         "proto"
       ],
       "commands": {
-        "all": {
-          "path": "monorail/all.sh",
-          "args": [],
-          "is_executable": true
-        },
         "hello": {
           "path": "monorail/hello.sh",
           "args": [],

@@ -91,5 +91,14 @@ const reference = {
 				}
 			}
 		}
-	]
+	],
+	// Mapping of sequence names to a list of commands. When used with `run`,
+	// a sequence is expanded into the list of commands it is mapped to.
+	"sequences": {
+		"<sequence name>": [
+			"<command name 1>",
+			"<command name 2>",
+			"<command name 3>"
+		]
+	}
 }

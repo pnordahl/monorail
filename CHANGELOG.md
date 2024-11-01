@@ -89,8 +89,15 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 
 - `monorail log show` and `monorail log tail` now return an error if neither --stdout nor --stderr are provided
 
-## [3.0.7] - 2024-10-31
+## [3.1.0] - 2024-10-31
 
 ### Added
 
 - `--commands` flag for `monorail target show` for displaying available commands for targets
+- Command sequence support and the `--sequences` (`-s`) flag for `monorail run`
+
+### Changed
+
+- The `--command` argument for `run` and `log show` has changed to `--commands` for consistency
+- The `--target` argument for `run`, `analyze`, and `log show` has changed to `--targets` for consistency
+- The `--start` (`-s`) argument for `run` and `analyze` has changed to `--begin` (`-b`)
