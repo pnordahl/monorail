@@ -66,7 +66,6 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 
 - Verbose logging timestamp format adheres strictly to RFC3339
 
-
 ## [3.0.3] - 2024-10-27
 
 ### Added

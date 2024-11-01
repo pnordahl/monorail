@@ -717,7 +717,7 @@ EOF
 
 Now run the sequence with `--sequences` or `-s`:
 ```sh
-monorail run -s dev
+monorail -v run -s dev
 ```
 ```json
 {"timestamp":"2024-11-01T11:13:03.550061+00:00","level":"INFO","message":"processing groups","num":4}
