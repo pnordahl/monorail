@@ -76,7 +76,7 @@ pub(crate) fn find_file_by_stem(name: &str, dir: &path::Path) -> Option<path::Pa
     None
 }
 
-pub(crate) fn is_executable(p: &path::Path) -> bool {
+pub(crate) fn is_executable(p: impl AsRef<path::Path>) -> bool {
     if let Ok(metadata) = std::fs::metadata(p) {
         let permissions = metadata.permissions();
         return permissions.mode() & 0o111 != 0;

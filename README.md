@@ -622,7 +622,7 @@ EOF
 chmod +x proto/monorail/hello.awk
 ```
 
-As mentioned earlier, commands can be written in any language, and need only be executable. We're using hashbangs to avoid cluttering the tutorial with compilation steps, but commands could be compiled to machine code, stored as something like `hello`, and executed just the same. Before we run this command, let's look at the output of analyze:
+As mentioned earlier, commands can be written in any language, and need only be executable. We're using hashbangs to avoid cluttering the tutorial with compilation steps, but commands could be compiled to machine code, stored as something like `hello`, and executed just the same (though this approach wouldn't be portable across OS/architectures). Before we run this command, let's look at the output of analyze:
 
 ```sh
 monorail analyze --target-groups | jq
@@ -697,6 +697,65 @@ monorail -v run -c hello build
 ```
 
 You might notice the exit code of 0 and `"failed":false`, and that's because by default it is not required for a target to define a command. You can override this behavior with `--fail-on-undefined`, but in general this allows targets to define only the commands they need and eliminates the need for "stubs" that may never be implemented. One exception to this is when providing a list of targets to `run`, where `--fail-on-undefined` defaults to true. The reason for this is that when executing a command directly for targets, one expects that command to exist.
+
+### Viewing available commands
+
+Lastly, you can query targets and include information about the commands that are available for each target:
+
+```sh
+monorail target show --commands
+```
+```json
+{
+  "timestamp": "2024-11-01T01:27:28.409154+00:00",
+  "targets": [
+    {
+      "path": "rust",
+      "uses": [
+        "proto"
+      ],
+      "commands": {
+        "all": {
+          "path": "monorail/all.sh",
+          "args": [],
+          "is_executable": true
+        },
+        "hello": {
+          "path": "monorail/hello.sh",
+          "args": [],
+          "is_executable": true
+        }
+      }
+    },
+    {
+      "path": "python/app3",
+      "uses": [
+        "proto"
+      ],
+      "commands": {
+        "hello": {
+          "path": "monorail/hello.py",
+          "args": [],
+          "is_executable": true
+        }
+      }
+    },
+    {
+      "path": "proto",
+      "ignores": [
+        "proto/README.md"
+      ],
+      "commands": {
+        "hello": {
+          "path": "monorail/hello.awk",
+          "args": [],
+          "is_executable": true
+        }
+      }
+    }
+  ],
+}
+```
 
 In the final section of this tutorial, we will manipulate the changes being used for `analyze` and guided `run` with the `checkpoint`.
 

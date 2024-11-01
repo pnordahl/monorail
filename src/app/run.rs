@@ -195,7 +195,7 @@ fn get_run_data_groups<'a>(
                     Some(definitions) => match definitions.get(c.as_str()) {
                         Some(def) => {
                             command_args = Some(def.args.clone());
-                            Some(commands_path.join(&def.exec))
+                            Some(commands_path.join(&def.path))
                         }
                         None => file::find_file_by_stem(c, &commands_path),
                     },

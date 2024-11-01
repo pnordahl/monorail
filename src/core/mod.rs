@@ -106,7 +106,7 @@ impl Config {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct CommandDefinition {
-    pub(crate) exec: String,
+    pub(crate) path: String,
     pub(crate) args: Vec<String>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -82,7 +82,7 @@ const reference = {
 					"<command_name>": {
 						// Path to an executable to use for this command.
 						// Required.
-						"exec": "path/relative/to/commands/path",
+						"path": "path/relative/to/commands/path",
 						// Array of flags, switches, and arguments to
 						// provide when running the command executable.
 						// Optional, default: []
