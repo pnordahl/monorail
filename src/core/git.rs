@@ -10,7 +10,7 @@ use crate::core::{file, tracking, Change};
 
 #[derive(Debug)]
 pub(crate) struct GitOptions<'a> {
-    pub(crate) start: Option<&'a str>,
+    pub(crate) begin: Option<&'a str>,
     pub(crate) end: Option<&'a str>,
     pub(crate) git_path: &'a str,
 }
@@ -39,7 +39,7 @@ pub(crate) async fn get_git_diff_changes<'a>(
     checkpoint: &'a Option<tracking::Checkpoint>,
     work_path: &path::Path,
 ) -> Result<Option<Vec<Change>>, MonorailError> {
-    let start = git_opts.start.or_else(|| {
+    let begin = git_opts.begin.or_else(|| {
         // otherwise, check checkpoint.id; if provided, use that
         if let Some(checkpoint) = checkpoint {
             if checkpoint.id.is_empty() {
@@ -48,18 +48,18 @@ pub(crate) async fn get_git_diff_changes<'a>(
                 Some(&checkpoint.id)
             }
         } else {
-            // if not then there's nowhere to start from, and we're done
+            // if not then there's nowhere to begin from, and we're done
             None
         }
     });
 
-    let end = match start {
+    let end = match begin {
         Some(_) => git_opts.end,
         None => None,
     };
 
-    let diff_changes = git_cmd_diff_changes(git_opts.git_path, work_path, start, end).await?;
-    if start.is_none() && end.is_none() && diff_changes.is_empty() {
+    let diff_changes = git_cmd_diff_changes(git_opts.git_path, work_path, begin, end).await?;
+    if begin.is_none() && end.is_none() && diff_changes.is_empty() {
         // no pending changes and diff range is ok, but signficant in that it
         // means change detection is impossible and other processes should consider
         // all targets changed
@@ -191,12 +191,12 @@ pub(crate) async fn git_cmd_other_changes(
 pub(crate) async fn git_cmd_diff_changes(
     git_path: &str,
     work_path: &path::Path,
-    start: Option<&str>,
+    begin: Option<&str>,
     end: Option<&str>,
 ) -> Result<Vec<Change>, MonorailError> {
     let mut args = vec!["diff", "--name-only", "--find-renames"];
-    if let Some(start) = start {
-        args.push(start);
+    if let Some(begin) = begin {
+        args.push(begin);
     }
     if let Some(end) = end {
         args.push(end);
@@ -239,15 +239,15 @@ mod tests {
     async fn test_get_git_diff_changes_ok() -> Result<(), Box<dyn std::error::Error>> {
         let repo_path = init(false).await;
         let mut git_opts = GitOptions {
-            start: None,
+            begin: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
         commit(&repo_path).await;
-        let start = get_head(&repo_path).await;
+        let begin = get_head(&repo_path).await;
 
-        // no start/end without a checkpoint or pending changes is ok(none)
+        // no begin/end without a checkpoint or pending changes is ok(none)
         assert_eq!(
             get_git_diff_changes(&git_opts, &None, &repo_path)
                 .await
@@ -255,9 +255,9 @@ mod tests {
             None
         );
 
-        // start == end is ok
-        git_opts.start = Some(&start);
-        git_opts.end = Some(&start);
+        // begin == end is ok
+        git_opts.begin = Some(&begin);
+        git_opts.end = Some(&begin);
         assert_eq!(
             get_git_diff_changes(&git_opts, &None, &repo_path)
                 .await
@@ -265,13 +265,13 @@ mod tests {
             Some(vec![])
         );
 
-        // start < end with changes is ok
+        // begin < end with changes is ok
         let foo_path = &repo_path.join("foo.txt");
         let _foo_checksum = write_with_checksum(foo_path, &[1]).await?;
         add("foo.txt", &repo_path).await;
         commit(&repo_path).await;
         let end = get_head(&repo_path).await;
-        git_opts.start = Some(&start);
+        git_opts.begin = Some(&begin);
         git_opts.end = Some(&end);
         assert_eq!(
             get_git_diff_changes(&git_opts, &None, &repo_path)
@@ -282,9 +282,9 @@ mod tests {
             }])
         );
 
-        // start > end with changes is ok
-        git_opts.start = Some(&end);
-        git_opts.end = Some(&start);
+        // begin > end with changes is ok
+        git_opts.begin = Some(&end);
+        git_opts.end = Some(&begin);
         assert_eq!(
             get_git_diff_changes(&git_opts, &None, &repo_path)
                 .await
@@ -302,7 +302,7 @@ mod tests {
     {
         let repo_path = init(false).await;
         let git_opts = GitOptions {
-            start: None,
+            begin: None,
             end: None,
             git_path: "git",
         };
@@ -323,7 +323,7 @@ mod tests {
             None
         );
 
-        // get initial start of repo
+        // get initial begin of repo
         commit(&repo_path).await;
         let first_head = get_head(&repo_path).await;
 
@@ -382,11 +382,11 @@ mod tests {
             .unwrap(),
             Some(vec![])
         );
-        // foo is visible if user passes start, since it has higher priority over checkpoint commit
+        // foo is visible if user passes begin, since it has higher priority over checkpoint commit
         assert_eq!(
             get_git_diff_changes(
                 &GitOptions {
-                    start: Some(&first_head),
+                    begin: Some(&first_head),
                     end: None,
                     git_path: "git",
                 },
@@ -411,15 +411,15 @@ mod tests {
     async fn test_get_git_diff_changes_err() -> Result<(), Box<dyn std::error::Error>> {
         let repo_path = init(false).await;
         let mut git_opts = GitOptions {
-            start: None,
+            begin: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
         commit(&repo_path).await;
-        let start = get_head(&repo_path).await;
+        let begin = get_head(&repo_path).await;
 
-        // no start/end, with invalid checkpoint commit is err
+        // no begin/end, with invalid checkpoint commit is err
         assert!(get_git_diff_changes(
             &git_opts,
             &Some(tracking::Checkpoint {
@@ -435,19 +435,19 @@ mod tests {
         .await
         .is_err());
 
-        // bad start is err
-        git_opts.start = Some("foo");
+        // bad begin is err
+        git_opts.begin = Some("foo");
         assert!(get_git_diff_changes(&git_opts, &None, &repo_path)
             .await
             .is_err());
 
         // bad end is err
-        git_opts.start = Some(&start);
+        git_opts.begin = Some(&begin);
         git_opts.end = Some("foo");
         assert!(get_git_diff_changes(&git_opts, &None, &repo_path)
             .await
             .is_err());
-        git_opts.start = None;
+        git_opts.begin = None;
         git_opts.end = None;
 
         Ok(())
@@ -459,7 +459,7 @@ mod tests {
         // no changes, no checkpoint is ok
         assert!(get_git_all_changes(
             &GitOptions {
-                start: None,
+                begin: None,
                 end: None,
                 git_path: "git",
             },
@@ -475,14 +475,14 @@ mod tests {
     async fn test_get_git_all_changes_ok2() {
         let repo_path = init(false).await;
         let mut git_opts = GitOptions {
-            start: None,
+            begin: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
         commit(&repo_path).await;
-        let start = get_head(&repo_path).await;
-        git_opts.start = Some(&start);
+        let begin = get_head(&repo_path).await;
+        git_opts.begin = Some(&begin);
 
         // no changes, with checkpoint is ok
         assert_eq!(
@@ -490,7 +490,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    id: start.clone(),
+                    id: begin.clone(),
                     pending: Some(HashMap::from([(
                         "foo.txt".to_string(),
                         "dsfksl".to_string()
@@ -510,14 +510,14 @@ mod tests {
     async fn test_get_git_all_changes_ok3() {
         let repo_path = init(false).await;
         let mut git_opts = GitOptions {
-            start: None,
+            begin: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
         commit(&repo_path).await;
-        let start = get_head(&repo_path).await;
-        git_opts.start = Some(&start);
+        let begin = get_head(&repo_path).await;
+        git_opts.begin = Some(&begin);
 
         // create a new file and check that it is seen
         let foo_path = &repo_path.join("foo.txt");
@@ -541,7 +541,7 @@ mod tests {
                 &git_opts,
                 &Some(tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
-                    id: start.clone(),
+                    id: begin.clone(),
                     pending: Some(HashMap::from([(
                         "foo.txt".to_string(),
                         foo_checksum.clone()

@@ -73,6 +73,8 @@ pub(crate) struct Config {
     pub(crate) change_provider: ChangeProvider,
     #[serde(default)]
     pub(crate) targets: Vec<Target>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sequences: Option<HashMap<String, Vec<String>>>,
     #[serde(default)]
     pub(crate) log: LogConfig,
 }

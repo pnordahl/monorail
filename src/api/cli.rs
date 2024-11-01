@@ -2,7 +2,7 @@ use crate::app;
 use crate::core::{self, error::MonorailError};
 
 use clap::builder::ArgPredicate;
-use clap::{Arg, ArgAction, ArgMatches, Command};
+use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command};
 use once_cell::sync::OnceCell;
 use serde::Serialize;
 use std::io::Write;
@@ -25,16 +25,17 @@ pub const CMD_TAIL: &str = "tail";
 pub const CMD_OUT: &str = "out";
 
 pub const ARG_GIT_PATH: &str = "git-path";
-pub const ARG_START: &str = "start";
+pub const ARG_BEGIN: &str = "begin";
 pub const ARG_END: &str = "end";
 pub const ARG_CONFIG_FILE: &str = "config-file";
 pub const ARG_OUTPUT_FORMAT: &str = "output-format";
 pub const ARG_PENDING: &str = "pending";
-pub const ARG_COMMAND: &str = "command";
-pub const ARG_TARGET: &str = "target";
+pub const ARG_COMMANDS: &str = "commands";
+pub const ARG_TARGETS: &str = "targets";
 pub const ARG_CHANGES: &str = "changes";
 pub const ARG_CHANGE_TARGETS: &str = "change-targets";
 pub const ARG_TARGET_GROUPS: &str = "target-groups";
+pub const ARG_SEQUENCES: &str = "sequences";
 pub const ARG_ALL: &str = "all";
 pub const ARG_VERBOSE: &str = "verbose";
 pub const ARG_STDERR: &str = "stderr";
@@ -42,7 +43,6 @@ pub const ARG_STDOUT: &str = "stdout";
 pub const ARG_ID: &str = "id";
 pub const ARG_DEPS: &str = "deps";
 pub const ARG_FAIL_ON_UNDEFINED: &str = "fail-on-undefined";
-pub const ARG_COMMANDS: &str = "commands";
 
 pub const VAL_JSON: &str = "json";
 
@@ -65,9 +65,9 @@ pub fn build() -> clap::Command {
         .help("Absolute path to a `git` binary to use for certain operations. If unspecified, default value uses PATH to resolve.")
         .num_args(1)
         .default_value("git");
-    let arg_start = Arg::new(ARG_START)
-        .short('s')
-        .long(ARG_START)
+    let arg_begin = Arg::new(ARG_BEGIN)
+        .short('b')
+        .long(ARG_BEGIN)
         .help("Start of the interval to consider for changes; if not provided, the checkpoint (or start of history, if no checkpoint exists) is used")
         .num_args(1)
         .required(false);
@@ -86,17 +86,17 @@ pub fn build() -> clap::Command {
         .value_parser(clap::value_parser!(usize))
         .num_args(1)
         .help("Result id to query; if not provided, the most recent will be used");
-    let arg_log_command = Arg::new(ARG_COMMAND)
+    let arg_log_command = Arg::new(ARG_COMMANDS)
         .short('c')
-        .long(ARG_COMMAND)
+        .long(ARG_COMMANDS)
         .required(false)
         .num_args(1..)
         .value_delimiter(' ')
         .action(ArgAction::Append)
         .help("A list commands for which to include logs");
-    let arg_log_target = Arg::new(ARG_TARGET)
+    let arg_log_target = Arg::new(ARG_TARGETS)
         .short('t')
-        .long(ARG_TARGET)
+        .long(ARG_TARGETS)
         .num_args(1..)
         .value_delimiter(' ')
         .required(false)
@@ -202,22 +202,37 @@ pub fn build() -> clap::Command {
         .about("Run target-defined commands.")
         .after_help(r#"Execute the provided commands for a graph traversal rooted at the targets specified (optional), or inferred target groups via change detection and graph analysis."#)
         .arg(arg_git_path.clone())
-        .arg(arg_start.clone())
+        .arg(arg_begin.clone())
         .arg(arg_end.clone())
         .arg(
-            Arg::new(ARG_COMMAND)
+            Arg::new(ARG_COMMANDS)
                 .short('c')
-                .long(ARG_COMMAND)
-                .required(true)
+                .long(ARG_COMMANDS)
+                .required(false)
                 .num_args(1..)
                 .value_delimiter(' ')
                 .action(ArgAction::Append)
-                .help("A list commands that will be executed, in the order specified.")
+                .help("A list of commands that will be executed, in the order specified. If one or more sequences are provided, they will be expanded and executed first.")
         )
         .arg(
-            Arg::new(ARG_TARGET)
+            Arg::new(ARG_SEQUENCES)
+                .short('s')
+                .long(ARG_SEQUENCES)
+                .required(false)
+                .num_args(1..)
+                .value_delimiter(' ')
+                .action(ArgAction::Append)
+                .help("A list of command sequences that will be expanded and executed in the order specified. If one or more commands are provided, they will be executed after all sequences.")
+        )
+        .group(
+            ArgGroup::new("commands_and_or_sequences")
+                .args([ARG_COMMANDS, ARG_SEQUENCES])
+                .required(true),
+        )
+        .arg(
+            Arg::new(ARG_TARGETS)
                 .short('t')
-                .long(ARG_TARGET)
+                .long(ARG_TARGETS)
                 .num_args(1..)
                 .value_delimiter(' ')
                 .required(false)
@@ -234,7 +249,7 @@ pub fn build() -> clap::Command {
             Arg::new(ARG_FAIL_ON_UNDEFINED)
                 .long(ARG_FAIL_ON_UNDEFINED)
                 .long_help("Fail commands that are undefined by targets. If --target is specified, this defaults to true.")
-                .default_value_if(ARG_TARGET, ArgPredicate::IsPresent, Some("true"))
+                .default_value_if(ARG_TARGETS, ArgPredicate::IsPresent, Some("true"))
                 .action(ArgAction::SetTrue),
         )
     )
@@ -268,7 +283,7 @@ pub fn build() -> clap::Command {
         Command::new(CMD_ANALYZE).about("Analyze repository changes and targets")
             .after_help(r#"This command performs an analysis of historical changes from the checkpoint to end of history in a change provider, as well as pending changes on the filesystem. By default, this command only outputs a list of affected targets."#)
             .arg(arg_git_path.clone())
-            .arg(arg_start.clone())
+            .arg(arg_begin.clone())
             .arg(arg_end.clone())
             .arg(
                 Arg::new(ARG_CHANGES)
@@ -299,9 +314,9 @@ pub fn build() -> clap::Command {
                     .action(ArgAction::SetTrue),
             )
             .arg(
-            Arg::new(ARG_TARGET)
+            Arg::new(ARG_TARGETS)
                 .short('t')
-                .long(ARG_TARGET)
+                .long(ARG_TARGETS)
                 .required(false)
                 .num_args(1..)
                 .value_delimiter(' ')
@@ -617,7 +632,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::checkpoint::CheckpointUpdateInpu
         Ok(Self {
             id: cmd.get_one::<String>(ARG_ID).map(|x: &String| x.as_str()),
             git_opts: core::git::GitOptions {
-                start: None,
+                begin: None,
                 end: None,
                 git_path: cmd
                     .get_one::<String>(ARG_GIT_PATH)
@@ -632,8 +647,8 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::run::HandleRunInput<'a> {
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
             git_opts: core::git::GitOptions {
-                start: cmd
-                    .get_one::<String>(ARG_START)
+                begin: cmd
+                    .get_one::<String>(ARG_BEGIN)
                     .map(|x: &String| x.as_str()),
                 end: cmd.get_one::<String>(ARG_END).map(|x: &String| x.as_str()),
                 git_path: cmd
@@ -641,13 +656,18 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::run::HandleRunInput<'a> {
                     .ok_or(MonorailError::MissingArg(ARG_GIT_PATH.into()))?,
             },
             commands: cmd
-                .get_many::<String>(ARG_COMMAND)
-                .ok_or(MonorailError::MissingArg(ARG_COMMAND.into()))
+                .get_many::<String>(ARG_COMMANDS)
+                .ok_or(MonorailError::MissingArg(ARG_COMMANDS.into()))
                 .into_iter()
                 .flatten()
                 .collect(),
             targets: cmd
-                .get_many::<String>(ARG_TARGET)
+                .get_many::<String>(ARG_TARGETS)
+                .into_iter()
+                .flatten()
+                .collect(),
+            sequences: cmd
+                .get_many::<String>(ARG_SEQUENCES)
                 .into_iter()
                 .flatten()
                 .collect(),
@@ -661,14 +681,14 @@ impl<'a> From<&'a clap::ArgMatches> for app::analyze::HandleAnalyzeInput<'a> {
     fn from(cmd: &'a clap::ArgMatches) -> Self {
         Self {
             git_opts: core::git::GitOptions {
-                start: cmd
-                    .get_one::<String>(ARG_START)
+                begin: cmd
+                    .get_one::<String>(ARG_BEGIN)
                     .map(|x: &String| x.as_str()),
                 end: cmd.get_one::<String>(ARG_END).map(|x: &String| x.as_str()),
                 git_path: cmd.get_one::<String>(ARG_GIT_PATH).unwrap(),
             },
             targets: cmd
-                .get_many::<String>(ARG_TARGET)
+                .get_many::<String>(ARG_TARGETS)
                 .into_iter()
                 .flatten()
                 .collect(),
@@ -697,13 +717,13 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::log::LogFilterInput {
             include_stdout: cmd.get_flag(ARG_STDOUT),
             include_stderr: cmd.get_flag(ARG_STDERR),
             commands: cmd
-                .get_many::<String>(ARG_COMMAND)
+                .get_many::<String>(ARG_COMMANDS)
                 .into_iter()
                 .flatten()
                 .map(|x| x.to_owned())
                 .collect(),
             targets: cmd
-                .get_many::<String>(ARG_TARGET)
+                .get_many::<String>(ARG_TARGETS)
                 .into_iter()
                 .flatten()
                 .map(|x| x.to_owned())
