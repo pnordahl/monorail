@@ -100,3 +100,9 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 - The `--command` argument for `run` and `log show` has changed to `--commands` for consistency
 - The `--target` argument for `run`, `analyze`, and `log show` has changed to `--targets` for consistency
 - The `--start` (`-s`) argument for `run` and `analyze` has changed to `--begin` (`-b`)
+
+## [3.1.1] - 2024-11-02
+
+### Fixed
+
+- Fixes staged changes not appearing in changesets when a checkpoint is not present (@neopug)
