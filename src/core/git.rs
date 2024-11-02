@@ -38,7 +38,7 @@ pub(crate) async fn get_git_diff_changes<'a>(
     git_opts: &'a GitOptions<'a>,
     checkpoint: &'a Option<tracking::Checkpoint>,
     work_path: &path::Path,
-) -> Result<Option<Vec<Change>>, MonorailError> {
+) -> Result<Vec<Change>, MonorailError> {
     let begin = git_opts.begin.or_else(|| {
         // otherwise, check checkpoint.id; if provided, use that
         if let Some(checkpoint) = checkpoint {
@@ -55,18 +55,11 @@ pub(crate) async fn get_git_diff_changes<'a>(
 
     let end = match begin {
         Some(_) => git_opts.end,
-        None => None,
+        // if otherwise unspecified, HEAD is our stopping point
+        None => Some("HEAD"),
     };
 
-    let diff_changes = git_cmd_diff_changes(git_opts.git_path, work_path, begin, end).await?;
-    if begin.is_none() && end.is_none() && diff_changes.is_empty() {
-        // no pending changes and diff range is ok, but signficant in that it
-        // means change detection is impossible and other processes should consider
-        // all targets changed
-        Ok(None)
-    } else {
-        Ok(Some(diff_changes))
-    }
+    git_cmd_diff_changes(git_opts.git_path, work_path, begin, end).await
 }
 
 pub(crate) async fn get_git_all_changes<'a>(
@@ -78,9 +71,7 @@ pub(crate) async fn get_git_all_changes<'a>(
         get_git_diff_changes(git_opts, checkpoint, work_path),
         git_cmd_other_changes(git_opts.git_path, work_path)
     )?;
-    if let Some(diff_changes) = diff_changes {
-        other_changes.extend(diff_changes);
-    }
+    other_changes.extend(diff_changes);
     let mut filtered_changes = match checkpoint {
         Some(checkpoint) => {
             if let Some(pending) = &checkpoint.pending {
@@ -252,7 +243,7 @@ mod tests {
             get_git_diff_changes(&git_opts, &None, &repo_path)
                 .await
                 .unwrap(),
-            None
+            vec![]
         );
 
         // begin == end is ok
@@ -262,7 +253,7 @@ mod tests {
             get_git_diff_changes(&git_opts, &None, &repo_path)
                 .await
                 .unwrap(),
-            Some(vec![])
+            vec![]
         );
 
         // begin < end with changes is ok
@@ -277,9 +268,9 @@ mod tests {
             get_git_diff_changes(&git_opts, &None, &repo_path)
                 .await
                 .unwrap(),
-            Some(vec![Change {
+            vec![Change {
                 name: "foo.txt".to_string()
-            }])
+            }]
         );
 
         // begin > end with changes is ok
@@ -289,9 +280,9 @@ mod tests {
             get_git_diff_changes(&git_opts, &None, &repo_path)
                 .await
                 .unwrap(),
-            Some(vec![Change {
+            vec![Change {
                 name: "foo.txt".to_string()
-            }])
+            }]
         );
 
         Ok(())
@@ -301,13 +292,15 @@ mod tests {
     async fn test_get_git_diff_changes_ok_with_checkpoint() -> Result<(), Box<dyn std::error::Error>>
     {
         let repo_path = init(false).await;
+        // make initial HEAD
+        commit(&repo_path).await;
         let git_opts = GitOptions {
             begin: None,
             end: None,
             git_path: "git",
         };
 
-        // no changes with empty checkpoint commit is ok(none)
+        // no changes with empty checkpoint commit is ok
         assert_eq!(
             get_git_diff_changes(
                 &git_opts,
@@ -320,7 +313,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            None
+            vec![]
         );
 
         // get initial begin of repo
@@ -340,7 +333,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            Some(vec![])
+            vec![]
         );
 
         // create first file and commit
@@ -363,9 +356,9 @@ mod tests {
             )
             .await
             .unwrap(),
-            Some(vec![Change {
+            vec![Change {
                 name: "foo.txt".to_string()
-            }])
+            }]
         );
         // foo invisble when checkpoint commit is updated to second head
         assert_eq!(
@@ -380,7 +373,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            Some(vec![])
+            vec![]
         );
         // foo is visible if user passes begin, since it has higher priority over checkpoint commit
         assert_eq!(
@@ -399,9 +392,9 @@ mod tests {
             )
             .await
             .unwrap(),
-            Some(vec![Change {
+            vec![Change {
                 name: "foo.txt".to_string()
-            }])
+            }]
         );
 
         Ok(())
@@ -456,6 +449,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_git_all_changes_ok1() {
         let repo_path = init(false).await;
+        // make initial HEAD
+        commit(&repo_path).await;
+
         // no changes, no checkpoint is ok
         assert!(get_git_all_changes(
             &GitOptions {
