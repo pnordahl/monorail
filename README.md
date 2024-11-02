@@ -72,6 +72,77 @@ _NOTE_: the commit is to create a valid HEAD reference, which is needed in a lat
 
 First, we will set up some toy projects to help get a feel for using `monorail`. Since `rust` is already installed, we'll use that in addition to `python` (which you likely also have installed; if not, go ahead and do so). The third project will not include any real code, because it's just going to illustrate how shared dependencies are considered during execution of commands. Finally, each will get an empty `monorail.sh` file that we will add code to as the tutorial proceeds.
 
+### Initial configuration and mapping tagets
+
+We will soon fill out our repository with some toy projects, but before we do, let's create a `Monorail.json` file that describes this structure in terms `monorail` understands. This command will create that file in the root of the repository, and simply map top level paths (which we will create in a moment) to targets:
+
+```sh
+cat <<EOF > Monorail.json
+{
+  "targets": [
+    { "path": "rust" },
+    { "path": "python/app3" },
+    { "path": "proto" }
+  ]
+}
+EOF
+```
+
+This is how you generally specify targets; a unique filesystem path relative to the root of your repository.
+
+Run the following, to show our config and ensure our input is well-formed:
+
+```sh
+monorail config show | jq
+```
+```json
+{
+  "timestamp": "2024-10-27T11:12:56.287190+00:00",
+  "output_dir": "monorail-out",
+  "max_retained_runs": 10,
+  "change_provider": {
+    "use": "git"
+  },
+  "targets": [
+    {
+      "path": "rust",
+      "commands": {
+        "path": "monorail"
+      }
+    },
+    {
+      "path": "python/app3",
+      "commands": {
+        "path": "monorail"
+      }
+    },
+    {
+      "path": "proto",
+      "commands": {
+        "path": "monorail"
+      }
+    }
+  ]
+}
+```
+
+This output includes some default values for things not specified, but otherwise reflects what we have entered. An additional note about the location of the `Monorail.json` file; you can specify an absolute path with `-c`, e.g. `monorail -c </path/to/your/config/file>`, and this will be used instead of the default (`$(pwd)/Monorail.json`). All of `monorail`s commands are executed, and internal tracking files and logs stored, _relative to this path_.
+
+Before we continue, let's create an initial `checkpoint`. The checkpoint will be described in more detail in a later section of this tutorial, but think of it as a "marker" for the beginning of a change detection window. For now, just run the command:
+
+```sh
+monorail checkpoint update
+```
+```json
+{
+  "timestamp": "2024-10-27T11:12:56.287190+00:00",
+  "checkpoint": {
+    "id": "df5dd3521af1f3d5cd1c4054e03e5573e2d24368",
+    "pending": null
+  }
+}
+```
+
 ### Rust
 These commands will make a rust workspace with two member projects with tests:
 
@@ -131,62 +202,6 @@ pushd proto
 touch README.md
 popd
 ```
-
-## Mapping targets
-
-Now that our repository structure is in place, we will create a `Monorail.json` file that describes this structure in terms `monorail` understands. This command will create that file in the root of the repository, and simply map top level paths to targets:
-
-```sh
-cat <<EOF > Monorail.json
-{
-  "targets": [
-    { "path": "rust" },
-    { "path": "python/app3" },
-    { "path": "proto" }
-  ]
-}
-EOF
-```
-
-This is how you generally specify targets; a unique filesystem path relative to the root of your repository.
-
-Run the following, to show our config and ensure our input is well-formed:
-
-```sh
-monorail config show | jq
-```
-```json
-{
-  "timestamp": "2024-10-27T11:12:56.287190+00:00",
-  "output_dir": "monorail-out",
-  "max_retained_runs": 10,
-  "change_provider": {
-    "use": "git"
-  },
-  "targets": [
-    {
-      "path": "rust",
-      "commands": {
-        "path": "monorail"
-      }
-    },
-    {
-      "path": "python/app3",
-      "commands": {
-        "path": "monorail"
-      }
-    },
-    {
-      "path": "proto",
-      "commands": {
-        "path": "monorail"
-      }
-    }
-  ]
-}
-```
-
-This output includes some default values for things not specified, but otherwise reflects what we have entered. An additional note about the location of the `Monorail.json` file; you can specify an absolute path with `-c`, e.g. `monorail -c </path/to/your/config/file>`, and this will be used instead of the default (`$(pwd)/Monorail.json`). All of `monorail`s commands are executed, and internal tracking files and logs stored, _relative to this path_.
 
 ## Preview: running commands
 
@@ -807,58 +822,16 @@ Now, for a practical example. First, query the checkpoint:
 monorail checkpoint show
 ```
 ```json
-{"timestamp":"2024-10-27T11:18:28.576758+00:00","kind":"error","type":"tracking_checkpoint_not_found","message":"Tracking checkpoint open error; No such file or directory (os error 2)"}
-```
-
-This error (which was printed to stderr) is fine, because by default no checkpoint exists. This means that all of the various files we've added are seen by `monorail` as changes. Now, update the checkpoint to include the current "latest point" in history; since we have only our initial HEAD commit, that's what we see:
-
-```sh
-monorail checkpoint update | jq
-```
-```json
 {
-  "timestamp": "2024-10-27T11:19:34.929320+00:00",
+  "timestamp": "2024-11-02T21:17:32.634952+00:00",
   "checkpoint": {
-    "id": "40f5a4e3e01bdd2bc8f1053d9158e25cf274ca99",
+    "id": "df5dd3521af1f3d5cd1c4054e03e5573e2d24368",
     "pending": null
   }
 }
 ```
 
-This is however, not so useful; none of the files we've added have been committed so this doesn't affect analysis results like we'd want:
-
-```sh
-monorail analyze | jq
-```
-```json
-{
-  "timestamp": "2024-10-27T11:19:46.533262+00:00",
-  "targets": [
-    "proto",
-    "python/app3",
-    "rust"
-  ]
-}
-```
-
-Before we resolve this, let's delete the checkpoint:
-
-```sh
-monorail checkpoint delete | jq
-```
-```json
-{
-  "timestamp": "2024-10-27T13:32:54.968691+00:00",
-  "checkpoint": {
-    "id": "",
-    "pending": null
-  }
-}
-```
-
-By deleting the checkpoint, we have told `monorail` to treat every target in our repository as changed bypassing change detection entirely.
-
-In this tutorial, where all of our changes are "pending" (i.e. we haven't committed anything thus far), the key is to add `--pending` or `-p` when updating the checkpoint. This will include those files and their SHA2 checksums in the checkpoint.
+This is the checkpoint we created earlier in the tutorial. As mentioned, it's a marker for `monorail` to use as a starting point for determining what has changed in the repo. Its current value is the initial HEAD we created when the repo was created, and since we haven't committed anything thus far, it's not reducing the changeset. Thus, we need to include these untracked changes in the checkpoint to have an effect on analysis; do this by adding `--pending` or `-p` when updating the checkpoint. This will include those files and their SHA2 checksums in the checkpoint.
 
 
 ```sh
@@ -910,6 +883,10 @@ monorail -v run -c hello build
 {"timestamp":"2024-10-27T11:20:21.500453+00:00","failed":false,"invocation_args":"-v run -c hello build","results":[]}
 ```
 
+You can also freely `monorail checkpoint delete` and essentially bypass change detection entirely, causing all targets will be considered changed. You can also manually set the checkpoint with `monorail checkpoint update -i <id>`, where `<id>` is a change provider reference (e.g. for git, this is usually a commit SHA).
+
+### Using the checkpoint
+
 The `checkpoint` is a powerful way to control the behaviors of `analyze` and guided `run`. Since the checkpoint controls `monorail`s view of what has changed in the repository, and you can set the checkpoint id to any valid change provider reference, you can `analyze` and `run` for any point in history.
 
 For example, this useful one-liner will perform a graph-guided run of the provided commands, and if successful, update the checkpoint to avoid running any commands for the involved targets until they change again: `monorail run -c <cmd1> <cmd2> ... <cmdN> && monorail checkpoint update -p`. This is most useful when the sequence of commands you provide covers everything you want to execute for a target in order for it to be considered "complete".
@@ -918,7 +895,7 @@ Locally, that might just be a bare minimum of commands; `monorail run prep check
 
 ### Checkpointing in CI/CD
 
-In a CI/CD environment, the id returned by `checkpoint update` or `checkpoint show` can be stored as a build artifact for one build and restored for the next one. This provides a means to do incremental command execution for builds, tests, packaging, deploys, and more.
+In a CI/CD environment, the id returned by `checkpoint update` or `checkpoint show` can be stored as a build artifact on a per-branch basis for one build and restored for the next one. This provides a means to do incremental command execution for builds, tests, packaging, deploys, and more.
 
 To restore a checkpoint, provide `--id` or `-i` with a valid ID (sourced from a previous `checkpoint update` invocation) when updating the checkpoint:
 
