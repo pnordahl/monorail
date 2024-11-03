@@ -13,7 +13,7 @@ use sha2::Digest;
 
 use tracing::{debug, error, info, instrument};
 
-use crate::app::{analyze, log, result};
+use crate::app::{analyze, log, result, target};
 use crate::core::error::{GraphError, MonorailError};
 use crate::core::{self, file, git, tracking, ChangeProviderKind, Target};
 
@@ -197,8 +197,10 @@ fn get_run_data_groups<'a>(
                 let command_path = match &target.commands.definitions {
                     Some(definitions) => match definitions.get(c.as_str()) {
                         Some(def) => {
-                            command_args = Some(def.args.clone());
-                            Some(commands_path.join(&def.path))
+                            let app_target_command =
+                                target::AppTargetCommand::new(c, def, &commands_path, work_path);
+                            command_args = Some(app_target_command.args.to_vec());
+                            app_target_command.path
                         }
                         None => file::find_file_by_stem(c, &commands_path),
                     },

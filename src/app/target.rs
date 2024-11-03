@@ -34,9 +34,37 @@ pub(crate) struct AppTarget<'a> {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AppTargetCommand<'a> {
-    path: path::PathBuf,
-    args: &'a [String],
-    is_executable: bool,
+    pub(crate) name: String,
+    pub(crate) path: Option<path::PathBuf>,
+    pub(crate) args: &'a [String],
+    pub(crate) is_executable: bool,
+}
+impl<'a> AppTargetCommand<'a> {
+    pub(crate) fn new(
+        name: &'a str,
+        def: &'a core::CommandDefinition,
+        target_command_path: &path::Path,
+        work_path: &path::Path,
+    ) -> Self {
+        // if no path is provided, attempt to discover it
+        let p = if def.path.is_empty() {
+            file::find_file_by_stem(name, target_command_path)
+        } else {
+            // otherwise, use what was provided instead
+            Some(work_path.join(&def.path))
+        };
+        let is_executable = if let Some(ref p) = p {
+            file::is_executable(p)
+        } else {
+            false
+        };
+        Self {
+            name: name.to_owned(),
+            path: p,
+            args: &def.args,
+            is_executable,
+        }
+    }
 }
 
 pub(crate) fn target_show<'a>(
@@ -59,65 +87,11 @@ pub(crate) fn target_show<'a>(
             target_set.insert(&t.path);
         }
         if input.show_commands {
-            let found = find_target_commands(t, work_path)?;
+            let target_command_path = work_path.join(&t.path).join(&t.commands.path);
+            let found = find_target_commands(t, &target_command_path, work_path)?;
             out_target.commands = Some(found);
         }
         targets.push(out_target);
-    }
-
-    // Merges the target's command definitions with a filesytem walk to
-    // create a complete view of a targets available commands.
-    fn find_target_commands<'a>(
-        target: &'a core::Target,
-        work_path: &path::Path,
-    ) -> Result<HashMap<String, AppTargetCommand<'a>>, MonorailError> {
-        let mut o = HashMap::new();
-        let mut def_paths = HashSet::new();
-        let target_command_path = work_path.join(&target.path).join(&target.commands.path);
-        // first, process any defined commands and note the paths we've seen
-        if let Some(defs) = &target.commands.definitions {
-            for (name, def) in defs {
-                let def_path = target_command_path.join(&def.path);
-                o.insert(
-                    name.to_string(),
-                    AppTargetCommand {
-                        path: path::Path::new(&target.commands.path).join(&def.path),
-                        args: &def.args,
-                        is_executable: file::is_executable(&def_path),
-                    },
-                );
-                def_paths.insert(def_path);
-            }
-        }
-        // now walk the target.commands.path looking for files that we haven't already seen
-        if let Ok(entries) = std::fs::read_dir(&target_command_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() && !def_paths.contains(&path) {
-                    if let Some(stem) = path.file_stem() {
-                        o.insert(
-                            stem.to_str()
-                                .ok_or(MonorailError::Generic(format!(
-                                    "Bad string for stem {:?}",
-                                    stem
-                                )))?
-                                .to_string(),
-                            AppTargetCommand {
-                                path: path::Path::new(&target.commands.path).join(
-                                    path.file_name().ok_or(MonorailError::Generic(format!(
-                                        "Bad file name {:?}",
-                                        path.file_name()
-                                    )))?,
-                                ),
-                                args: &[],
-                                is_executable: file::is_executable(&path),
-                            },
-                        );
-                    }
-                }
-            }
-        }
-        Ok(o)
     }
 
     if input.show_target_groups {
@@ -129,4 +103,72 @@ pub(crate) fn target_show<'a>(
         targets,
         target_groups,
     })
+}
+
+// Merges the target's command definitions with a filesytem walk to
+// create a complete view of a targets available commands.
+fn find_target_commands<'a>(
+    target: &'a core::Target,
+    target_command_path: &path::Path,
+    work_path: &path::Path,
+) -> Result<HashMap<String, AppTargetCommand<'a>>, MonorailError> {
+    let mut o = HashMap::new();
+    let mut def_paths = HashSet::new();
+
+    // first, process any defined commands and note the paths we've seen
+    if let Some(defs) = &target.commands.definitions {
+        for (name, def) in defs {
+            // if def.path is specified, we will use that instead
+            let def_path = if def.path.is_empty() {
+                target_command_path.to_path_buf()
+            } else {
+                work_path.join(&def.path)
+            };
+            o.insert(
+                name.to_string(),
+                AppTargetCommand::new(name, def, target_command_path, work_path),
+            );
+            def_paths.insert(def_path);
+        }
+    }
+    // now walk the target.commands.path looking for files that we haven't already seen
+    if let Ok(entries) = std::fs::read_dir(target_command_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && !def_paths.contains(&path) {
+                if let Some(ref stem) = path.file_stem().as_ref() {
+                    let stem_str = stem
+                        .to_str()
+                        .ok_or(MonorailError::Generic(format!(
+                            "Bad string for stem {:?}",
+                            stem
+                        )))?
+                        .to_string();
+                    // use the args defined for this command, if any
+                    let args = match &target.commands.definitions {
+                        Some(defs) => match defs.get(&stem_str) {
+                            Some(def) => def.args.as_slice(),
+                            None => &[],
+                        },
+                        None => &[],
+                    };
+                    o.insert(
+                        stem_str.clone(),
+                        AppTargetCommand {
+                            name: stem_str.clone(),
+                            path: Some(path::Path::new(&target.commands.path).join(
+                                path.file_name().ok_or(MonorailError::Generic(format!(
+                                    "Bad file name {:?}",
+                                    path.file_name()
+                                )))?,
+                            )),
+                            args,
+                            is_executable: file::is_executable(&path),
+                        },
+                    );
+                }
+            }
+        }
+    }
+    Ok(o)
 }

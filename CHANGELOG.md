@@ -106,3 +106,11 @@ Dependency graph, parallel execution, replaced extensions with `monorail run`, a
 ### Fixed
 
 - Fixes staged changes not appearing in changesets when a checkpoint is not present (@neopug)
+
+## [3.2.0] - 2024-11-02
+
+### Changed
+
+- The `commands.path` field now always defaults to `monorail`, relative to the target path
+- The `commands.definitions.<command_name>.path` field is now interpreted relative to the repository root
+- The `commands.definitions.<command_name>.args` field now applies to mapped definitions and discovered commands

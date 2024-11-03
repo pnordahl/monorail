@@ -106,9 +106,11 @@ impl Config {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub(crate) struct CommandDefinition {
+    #[serde(default)]
     pub(crate) path: String,
+    #[serde(default)]
     pub(crate) args: Vec<String>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -132,7 +134,9 @@ pub(crate) struct Target {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct TargetCommands {
     // Relative path from this target's `path` to a directory containing
-    // commands that can be executed by `monorail run`.
+    // commands that can be executed by `monorail run`. Used for
+    // any commands that are not mapped to other paths in CommandDefinition.
+    #[serde(default = "TargetCommands::default_path")]
     pub(crate) path: String,
     // Mappings of command names to executable statements; these
     // statements will be used when spawning tasks, and if unspecified
@@ -143,9 +147,14 @@ pub(crate) struct TargetCommands {
 impl Default for TargetCommands {
     fn default() -> Self {
         Self {
-            path: "monorail".into(),
+            path: Self::default_path(),
             definitions: None,
         }
+    }
+}
+impl TargetCommands {
+    fn default_path() -> String {
+        "monorail".into()
     }
 }
 
