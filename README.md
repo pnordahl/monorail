@@ -759,7 +759,7 @@ When you run a sequence, it is first expanded into the commands it maps to. Then
 Lastly, you can query targets and include information about the commands that are available for each target. The `commands` table is built by merging executables found on the filesystem with any definitions in your configuration file:
 
 ```sh
-monorail target show --commands
+monorail target show --commands | jq
 ```
 ```json
 {
@@ -772,7 +772,7 @@ monorail target show --commands
       ],
       "commands": {
         "hello": {
-          "path": "monorail/hello.sh",
+          "path": "/tmp/monorail-tutorial/monorail/hello.sh",
           "args": [],
           "is_executable": true
         }
@@ -785,7 +785,7 @@ monorail target show --commands
       ],
       "commands": {
         "hello": {
-          "path": "monorail/hello.py",
+          "path": "/tmp/monorail-tutorial/monorail/hello.py",
           "args": [],
           "is_executable": true
         }
@@ -798,7 +798,7 @@ monorail target show --commands
       ],
       "commands": {
         "hello": {
-          "path": "monorail/hello.awk",
+          "path": "/tmp/monorail-tutorial/monorail/hello.awk",
           "args": [],
           "is_executable": true
         }
@@ -819,7 +819,7 @@ For `git`, the checkpoint is stored as a reference such as HEAD, or an object SH
 Now, for a practical example. First, query the checkpoint:
 
 ```sh
-monorail checkpoint show
+monorail checkpoint show | jq
 ```
 ```json
 {
