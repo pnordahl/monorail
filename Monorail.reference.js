@@ -65,8 +65,9 @@ const reference = {
 			*/
 			"commands": {
 				/*
-				Location within this target path containing command
-				executables.
+				Default location within this target path containing command
+				executables. This is used when locating executables for a
+				command when no definition path for that command is specified.
 
 				Optional, default: "monorail"
 				*/
@@ -81,8 +82,9 @@ const reference = {
 				"definitions": {
 					"<command_name>": {
 						// Path to an executable to use for this command.
-						// Required.
-						"path": "path/relative/to/commands/path",
+						// Optional. default: <commands.path>/<command_name>.<extension>,
+						// where <extension> is discovered on the filesystem.
+						"path": "path/within/repository",
 						// Array of flags, switches, and arguments to
 						// provide when running the command executable.
 						// Optional, default: []

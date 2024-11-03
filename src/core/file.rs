@@ -59,7 +59,7 @@ pub(crate) fn find_file_by_stem(name: &str, dir: &path::Path) -> Option<path::Pa
     debug!(
         name = name,
         dir = dir.display().to_string(),
-        "Executable search"
+        "File stem search"
     );
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
