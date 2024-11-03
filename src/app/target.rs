@@ -29,29 +29,35 @@ pub(crate) struct AppTarget<'a> {
     pub(crate) ignores: &'a Option<Vec<String>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) commands: Option<HashMap<String, AppTargetCommand<'a>>>,
+    pub(crate) commands: Option<HashMap<String, AppTargetCommand>>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct AppTargetCommand<'a> {
+pub(crate) struct AppTargetCommand {
     pub(crate) name: String,
     pub(crate) path: Option<path::PathBuf>,
-    pub(crate) args: &'a [String],
+    pub(crate) args: Option<Vec<String>>,
     pub(crate) is_executable: bool,
 }
-impl<'a> AppTargetCommand<'a> {
+impl AppTargetCommand {
     pub(crate) fn new(
-        name: &'a str,
-        def: &'a core::CommandDefinition,
+        name: &str,
+        def: Option<&core::CommandDefinition>,
         target_command_path: &path::Path,
         work_path: &path::Path,
     ) -> Self {
-        // if no path is provided, attempt to discover it
-        let p = if def.path.is_empty() {
-            file::find_file_by_stem(name, target_command_path)
-        } else {
-            // otherwise, use what was provided instead
-            Some(work_path.join(&def.path))
+        let (p, args) = match def {
+            Some(def) => (
+                if def.path.is_empty() {
+                    // if no path is provided, attempt to discover it
+                    file::find_file_by_stem(name, target_command_path)
+                } else {
+                    // otherwise, use what was provided instead
+                    Some(work_path.join(&def.path))
+                },
+                Some(def.args.clone()),
+            ),
+            None => (file::find_file_by_stem(name, target_command_path), None),
         };
         let is_executable = if let Some(ref p) = p {
             file::is_executable(p)
@@ -61,7 +67,7 @@ impl<'a> AppTargetCommand<'a> {
         Self {
             name: name.to_owned(),
             path: p,
-            args: &def.args,
+            args,
             is_executable,
         }
     }
@@ -107,11 +113,11 @@ pub(crate) fn target_show<'a>(
 
 // Merges the target's command definitions with a filesytem walk to
 // create a complete view of a targets available commands.
-fn find_target_commands<'a>(
-    target: &'a core::Target,
+fn find_target_commands(
+    target: &core::Target,
     target_command_path: &path::Path,
     work_path: &path::Path,
-) -> Result<HashMap<String, AppTargetCommand<'a>>, MonorailError> {
+) -> Result<HashMap<String, AppTargetCommand>, MonorailError> {
     let mut o = HashMap::new();
     let mut def_paths = HashSet::new();
 
@@ -126,7 +132,7 @@ fn find_target_commands<'a>(
             };
             o.insert(
                 name.to_string(),
-                AppTargetCommand::new(name, def, target_command_path, work_path),
+                AppTargetCommand::new(name, Some(def), target_command_path, work_path),
             );
             def_paths.insert(def_path);
         }
@@ -144,27 +150,9 @@ fn find_target_commands<'a>(
                             stem
                         )))?
                         .to_string();
-                    // use the args defined for this command, if any
-                    let args = match &target.commands.definitions {
-                        Some(defs) => match defs.get(&stem_str) {
-                            Some(def) => def.args.as_slice(),
-                            None => &[],
-                        },
-                        None => &[],
-                    };
                     o.insert(
                         stem_str.clone(),
-                        AppTargetCommand {
-                            name: stem_str.clone(),
-                            path: Some(path::Path::new(&target.commands.path).join(
-                                path.file_name().ok_or(MonorailError::Generic(format!(
-                                    "Bad file name {:?}",
-                                    path.file_name()
-                                )))?,
-                            )),
-                            args,
-                            is_executable: file::is_executable(&path),
-                        },
+                        AppTargetCommand::new(&stem_str, None, target_command_path, work_path),
                     );
                 }
             }

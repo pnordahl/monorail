@@ -197,9 +197,13 @@ fn get_run_data_groups<'a>(
                 let command_path = match &target.commands.definitions {
                     Some(definitions) => match definitions.get(c.as_str()) {
                         Some(def) => {
-                            let app_target_command =
-                                target::AppTargetCommand::new(c, def, &commands_path, work_path);
-                            command_args = Some(app_target_command.args.to_vec());
+                            let app_target_command = target::AppTargetCommand::new(
+                                c,
+                                Some(def),
+                                &commands_path,
+                                work_path,
+                            );
+                            command_args = app_target_command.args;
                             app_target_command.path
                         }
                         None => file::find_file_by_stem(c, &commands_path),
