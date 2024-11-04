@@ -14,6 +14,15 @@ pub(crate) struct GitOptions<'a> {
     pub(crate) end: Option<&'a str>,
     pub(crate) git_path: &'a str,
 }
+impl Default for GitOptions<'_> {
+    fn default() -> Self {
+        Self {
+            begin: None,
+            end: None,
+            git_path: "git",
+        }
+    }
+}
 
 pub(crate) async fn get_filtered_changes(
     changes: Vec<Change>,

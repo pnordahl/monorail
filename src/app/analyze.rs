@@ -394,31 +394,10 @@ mod tests {
     use super::*;
     use crate::core::testing::*;
 
-    async fn prep_raw_config_repo() -> (core::Config, path::PathBuf) {
-        let repo_path = init(false).await;
-        let c: core::Config = serde_json::from_str(RAW_CONFIG).unwrap();
-
-        create_file(
-            &repo_path,
-            "rust",
-            "monorail.sh",
-            b"command whoami { echo 'rust' }",
-        )
-        .await;
-        create_file(
-            &repo_path,
-            "rust/target",
-            "monorail.sh",
-            b"command whoami { echo 'rust/target' }",
-        )
-        .await;
-        (c, repo_path)
-    }
-
     #[tokio::test]
     async fn test_analyze_empty() {
         let changes = vec![];
-        let (c, work_path) = prep_raw_config_repo().await;
+        let (c, work_path) = new_test_repo().await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, false, false);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -429,7 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_unknown() {
-        let change1 = "foo.txt";
+        let change1 = "not_a_target/file.txt";
         let changes = vec![Change {
             name: change1.to_string(),
         }];
@@ -439,7 +418,7 @@ mod tests {
             targets: Some(vec![]),
         }];
 
-        let (c, work_path) = prep_raw_config_repo().await;
+        let (c, work_path) = new_test_repo().await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -451,11 +430,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_target_file() {
-        let change1 = "rust/lib.rs";
+        let change1 = "target6/file.txt";
         let changes = vec![Change {
             name: change1.to_string(),
         }];
-        let target1 = "rust";
+        let target1 = "target6";
         let expected_targets = vec![target1.to_string()];
         let expected_target_groups = vec![vec![target1.to_string()]];
         let expected_changes = vec![AnalyzedChange {
@@ -466,7 +445,7 @@ mod tests {
             }]),
         }];
 
-        let (c, work_path) = prep_raw_config_repo().await;
+        let (c, work_path) = new_test_repo().await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -476,12 +455,12 @@ mod tests {
         assert_eq!(o.target_groups, Some(expected_target_groups));
     }
     #[tokio::test]
-    async fn test_analyze_target() {
-        let change1 = "rust";
+    async fn test_analyze_parent_target() {
+        let change1 = "target4/file.txt";
         let changes = vec![Change {
             name: change1.to_string(),
         }];
-        let target1 = "rust";
+        let target1 = "target4";
         let expected_targets = vec![target1.to_string()];
         let expected_target_groups = vec![vec![target1.to_string()]];
         let expected_changes = vec![AnalyzedChange {
@@ -492,7 +471,7 @@ mod tests {
             }]),
         }];
 
-        let (c, work_path) = prep_raw_config_repo().await;
+        let (c, work_path) = new_test_repo().await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -504,12 +483,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_target_ancestors() {
-        let change1 = "rust/target/foo.txt";
+        let change1 = "target4/target5/file.txt";
         let changes = vec![Change {
             name: change1.to_string(),
         }];
-        let target1 = "rust";
-        let target2 = "rust/target";
+        let target1 = "target4";
+        let target2 = "target4/target5";
         let expected_targets = vec![target1.to_string(), target2.to_string()];
         let expected_target_groups = vec![vec![target1.to_string()], vec![target2.to_string()]];
         let expected_changes = vec![AnalyzedChange {
@@ -530,7 +509,7 @@ mod tests {
             ]),
         }];
 
-        let (c, work_path) = prep_raw_config_repo().await;
+        let (c, work_path) = new_test_repo().await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -542,12 +521,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_target_uses() {
-        let change1 = "common/foo.txt";
+        let change1 = "target2/file.txt";
         let changes = vec![Change {
             name: change1.to_string(),
         }];
-        let target1 = "rust";
-        let target2 = "rust/target";
+        let target1 = "target2";
+        let target2 = "target3";
         let expected_targets = vec![target1.to_string(), target2.to_string()];
         let expected_target_groups = vec![vec![target1.to_string()], vec![target2.to_string()]];
         let expected_changes = vec![AnalyzedChange {
@@ -555,7 +534,7 @@ mod tests {
             targets: Some(vec![
                 AnalyzedChangeTarget {
                     path: target1.to_string(),
-                    reason: AnalyzedChangeTargetReason::UsesTargetParent,
+                    reason: AnalyzedChangeTargetReason::Target,
                 },
                 AnalyzedChangeTarget {
                     path: target2.to_string(),
@@ -564,7 +543,7 @@ mod tests {
             ]),
         }];
 
-        let (c, work_path) = prep_raw_config_repo().await;
+        let (c, work_path) = new_test_repo().await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -575,29 +554,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_analyze_target_ignores() {
-        let change1 = "rust/target/ignoreme.txt";
-        let changes = vec![Change {
-            name: change1.to_string(),
-        }];
-        let target1 = "rust";
-        let target2 = "rust/target";
-        let expected_targets = vec![target1.to_string()];
-        let expected_changes = vec![AnalyzedChange {
-            path: change1.to_string(),
-            targets: Some(vec![
-                AnalyzedChangeTarget {
+    async fn test_analyze_target_ignores_all() {
+        let change1 = "target4/ignore.txt";
+        let change2 = "target4/target5/ignore.txt";
+        let changes = vec![
+            Change {
+                name: change1.to_string(),
+            },
+            Change {
+                name: change2.to_string(),
+            },
+        ];
+        let target1 = "target4";
+        let target2 = "target4/target5";
+        let expected_targets: Vec<String> = vec![target1.to_string()];
+        let expected_changes = vec![
+            AnalyzedChange {
+                path: change1.to_string(),
+                targets: Some(vec![AnalyzedChangeTarget {
                     path: target1.to_string(),
                     reason: AnalyzedChangeTargetReason::Target,
-                },
-                AnalyzedChangeTarget {
-                    path: target2.to_string(),
-                    reason: AnalyzedChangeTargetReason::Ignores,
-                },
-            ]),
-        }];
+                }]),
+            },
+            AnalyzedChange {
+                path: change2.to_string(),
+                targets: Some(vec![
+                    AnalyzedChangeTarget {
+                        path: target1.to_string(),
+                        reason: AnalyzedChangeTargetReason::Target,
+                    },
+                    AnalyzedChangeTarget {
+                        path: target2.to_string(),
+                        reason: AnalyzedChangeTargetReason::Ignores,
+                    },
+                ]),
+            },
+        ];
 
-        let (c, work_path) = prep_raw_config_repo().await;
+        let (c, work_path) = new_test_repo().await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
