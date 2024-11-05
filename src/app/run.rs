@@ -27,13 +27,13 @@ pub(crate) struct HandleRunInput<'a> {
     pub(crate) fail_on_undefined: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct RunOutput {
     pub(crate) failed: bool,
     invocation_args: String,
     results: Vec<CommandRunResult>,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct CommandRunResult {
     command: String,
     successes: Vec<TargetRunResult>,
@@ -41,7 +41,7 @@ pub(crate) struct CommandRunResult {
     unknowns: Vec<TargetRunResult>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct TargetRunResult {
     target: String,
     code: Option<i32>,
@@ -63,8 +63,11 @@ pub(crate) async fn handle_run<'a>(
     if cfg.targets.is_empty() {
         return Err(MonorailError::from("No configured targets"));
     }
+    let mut tracking_run = get_next_tracking_run(cfg, &tracking_table)?;
+    let log_dir = setup_log_dir(cfg, tracking_run.id, work_path)?;
+    let commands = get_all_commands(cfg, &input.commands, &input.sequences)?;
 
-    match input.targets.len() {
+    let (index, target_groups) = match input.targets.len() {
         0 => {
             let ths = cfg.get_target_path_set();
             let mut index = core::Index::new(cfg, &ths, work_path)?;
@@ -86,18 +89,7 @@ pub(crate) async fn handle_run<'a>(
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
-            run_internal(
-                cfg,
-                &tracking_table,
-                &index,
-                work_path,
-                &input.commands,
-                &input.sequences,
-                &target_groups,
-                input.fail_on_undefined,
-                invocation_args,
-            )
-            .await
+            (index, target_groups)
         }
         _ => {
             let mut index = core::Index::new(cfg, &input.targets, work_path)?;
@@ -116,23 +108,33 @@ pub(crate) async fn handle_run<'a>(
                 debug!("Synthesizing target groups");
                 tg
             };
-
-            run_internal(
-                cfg,
-                &tracking_table,
-                &index,
-                work_path,
-                &input.commands,
-                &input.sequences,
-                &target_groups,
-                input.fail_on_undefined,
-                invocation_args,
-            )
-            .await
+            (index, target_groups)
         }
-    }
+    };
+
+    let run_data_groups = get_run_data_groups(
+        &index,
+        &commands,
+        &cfg.targets,
+        &target_groups,
+        work_path,
+        &log_dir,
+    )?;
+    let run_output = run_internal(
+        cfg,
+        &run_data_groups,
+        &commands,
+        &log_dir,
+        input.fail_on_undefined,
+        invocation_args,
+    )
+    .await?;
+
+    // Update the run counter
+    tracking_run.save()?;
+    Ok(run_output)
 }
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct RunData {
     target_path: String,
     command_work_path: path::PathBuf,
@@ -141,18 +143,18 @@ struct RunData {
     #[serde(skip)]
     logs: Logs,
 }
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct RunDataGroup {
     #[serde(skip)]
     command_index: usize,
     datas: Vec<RunData>,
 }
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct RunDataGroups {
     groups: Vec<RunDataGroup>,
 }
 
-// Create an initial run output with unknowns, and build the RunData for each target group.
+// Builds the RunData for each target group that will be used when spawning tasks.
 fn get_run_data_groups<'a>(
     index: &core::Index<'_>,
     commands: &'a [&'a String],
@@ -160,13 +162,11 @@ fn get_run_data_groups<'a>(
     target_groups: &[Vec<String>],
     work_path: &path::Path,
     log_dir: &path::Path,
-    invocation_args: &'a str,
-) -> Result<(RunOutput, RunDataGroups), MonorailError> {
+) -> Result<RunDataGroups, MonorailError> {
     // for converting potentially deep nested paths into a single directory string
     let mut path_hasher = sha2::Sha256::new();
 
     let mut groups = Vec::with_capacity(target_groups.len());
-    let mut crrs = Vec::with_capacity(target_groups.len());
     for (i, c) in commands.iter().enumerate() {
         for group in target_groups {
             let mut run_data = Vec::with_capacity(group.len());
@@ -236,24 +236,10 @@ fn get_run_data_groups<'a>(
                 command_index: i,
                 datas: run_data,
             });
-            let crr = CommandRunResult {
-                command: c.to_string(),
-                successes: vec![],
-                failures: vec![],
-                unknowns,
-            };
-            crrs.push(crr);
         }
     }
 
-    Ok((
-        RunOutput {
-            failed: false,
-            invocation_args: invocation_args.to_owned(),
-            results: crrs,
-        },
-        RunDataGroups { groups },
-    ))
+    Ok(RunDataGroups { groups })
 }
 
 pub(crate) fn spawn_task(
@@ -321,7 +307,7 @@ impl CommandTask {
         let stdout_header = log::get_header(&stdout_client.file_name, &target, &command, true);
         let stdout_fut = log::process_reader(
             &log_config,
-            tokio::io::BufReader::new(child.stdout.take().unwrap()),
+            tokio::io::BufReader::new(child.stdout.take().unwrap()), // todo unwrap
             stdout_client,
             stdout_header,
             stdout_log_stream_client,
@@ -330,7 +316,7 @@ impl CommandTask {
         let stderr_header = log::get_header(&stderr_client.file_name, &target, &command, true);
         let stderr_fut = log::process_reader(
             &log_config,
-            tokio::io::BufReader::new(child.stderr.take().unwrap()),
+            tokio::io::BufReader::new(child.stderr.take().unwrap()), // todo unwrap
             stderr_client,
             stderr_header,
             stderr_log_stream_client,
@@ -345,52 +331,44 @@ impl CommandTask {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-#[instrument]
-async fn run_internal<'a>(
-    cfg: &'a core::Config,
+fn get_next_tracking_run(
+    cfg: &core::Config,
     tracking_table: &tracking::Table,
-    index: &core::Index<'_>,
+) -> Result<tracking::Run, MonorailError> {
+    // obtain current log info counter and increment it before using
+    let mut run = match tracking_table.open_run() {
+        Ok(run) => run,
+        Err(MonorailError::TrackingRunNotFound(_)) => tracking_table.new_run(),
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    if run.id >= cfg.max_retained_runs {
+        run.id = 0;
+    }
+    run.id += 1;
+    Ok(run)
+}
+
+#[instrument]
+fn setup_log_dir(
+    cfg: &core::Config,
+    run_id: usize,
     work_path: &path::Path,
+) -> Result<path::PathBuf, MonorailError> {
+    let log_dir = cfg.get_log_path(work_path).join(format!("{}", run_id));
+    // remove the log_dir path if it exists, and create a new one
+    std::fs::remove_dir_all(&log_dir).unwrap_or(());
+    std::fs::create_dir_all(&log_dir)?;
+    Ok(log_dir)
+}
+
+// Expands sequences into commands and appends any explicit commands.
+fn get_all_commands<'a>(
+    cfg: &'a core::Config,
     commands: &'a [&'a String],
     sequences: &'a [&'a String],
-    target_groups: &[Vec<String>],
-    fail_on_undefined: bool,
-    invocation_args: &'a str,
-) -> Result<RunOutput, MonorailError> {
-    let log_stream_client = match log::StreamClient::connect("127.0.0.1:9201").await {
-        Ok(lsc) => Some(lsc),
-        Err(e) => {
-            debug!(error = e.to_string(), "Log streaming disabled");
-            None
-        }
-    };
-
-    let mut failed = false;
-    let mut results = vec![];
-
-    let log_dir = {
-        // obtain current log info counter and increment it before using
-        let mut run = match tracking_table.open_run() {
-            Ok(run) => run,
-            Err(MonorailError::TrackingRunNotFound(_)) => tracking_table.new_run(),
-            Err(e) => {
-                return Err(e);
-            }
-        };
-        if run.id >= cfg.max_retained_runs {
-            run.id = 0;
-        }
-        run.id += 1;
-
-        run.save()?;
-        let log_dir = cfg.get_log_path(work_path).join(format!("{}", run.id));
-        // remove the log_dir path if it exists, and create a new one
-        std::fs::remove_dir_all(&log_dir).unwrap_or(());
-        std::fs::create_dir_all(&log_dir)?;
-        log_dir
-    };
-
+) -> Result<Vec<&'a String>, MonorailError> {
     // append provided commands to any expanded sequences provided
     let mut all_commands = vec![];
     if !sequences.is_empty() {
@@ -410,27 +388,35 @@ async fn run_internal<'a>(
     }
 
     all_commands.extend_from_slice(commands);
+    Ok(all_commands)
+}
 
-    let (initial_run_output, run_data_groups) = get_run_data_groups(
-        index,
-        &all_commands,
-        &cfg.targets,
-        target_groups,
-        work_path,
-        &log_dir,
-        invocation_args,
-    )?;
-
-    // Make initial run output available for use by other commands
-    store_run_output(&initial_run_output, &log_dir)?;
-
+async fn process_run_data_groups(
+    cfg: &core::Config,
+    run_data_groups: &RunDataGroups,
+    all_commands: &[&String],
+    fail_on_undefined: bool,
+) -> Result<(Vec<CommandRunResult>, bool), MonorailError> {
+    let log_stream_client = match log::StreamClient::connect("127.0.0.1:9201").await {
+        Ok(lsc) => Some(lsc),
+        Err(e) => {
+            debug!(error = e.to_string(), "Log streaming disabled");
+            None
+        }
+    };
+    let mut results = Vec::new();
     let mut cancelled = false;
+    let mut failed = false;
 
-    info!(num = run_data_groups.groups.len(), "processing groups");
-
-    // Spawn concurrent tasks for each group of rundata
-    for mut run_data_group in run_data_groups.groups {
+    for run_data_group in &run_data_groups.groups {
         let command = &all_commands[run_data_group.command_index];
+        let mut crr = CommandRunResult {
+            command: command.to_string(),
+            successes: vec![],
+            failures: vec![],
+            unknowns: vec![],
+        };
+
         info!(
             num = run_data_group.datas.len(),
             command = command,
@@ -438,7 +424,7 @@ async fn run_internal<'a>(
         );
         if cancelled {
             let mut unknowns = vec![];
-            for rd in run_data_group.datas.iter_mut() {
+            for rd in run_data_group.datas.iter() {
                 let target = rd.target_path.to_owned();
                 error!(
                     status = "aborted",
@@ -463,12 +449,6 @@ async fn run_internal<'a>(
             continue;
         }
 
-        let mut crr = CommandRunResult {
-            command: command.to_string(),
-            successes: vec![],
-            failures: vec![],
-            unknowns: vec![],
-        };
         let mut js = tokio::task::JoinSet::new();
         let token = sync::Arc::new(tokio_util::sync::CancellationToken::new());
         let mut abort_table = HashMap::new();
@@ -476,7 +456,7 @@ async fn run_internal<'a>(
         let mut compressor = log::Compressor::new(2, compressor_shutdown.clone());
         let mut compressor_clients = vec![];
         for id in 0..run_data_group.datas.len() {
-            let rd = &mut run_data_group.datas[id];
+            let rd = &run_data_group.datas[id];
             let stdout_client = compressor.register(&rd.logs.stdout_path)?;
             let stderr_client = compressor.register(&rd.logs.stderr_path)?;
             compressor_clients.push(stdout_client.clone());
@@ -628,7 +608,7 @@ async fn run_internal<'a>(
                         let run_data_index = abort_table
                             .get(&e.id())
                             .ok_or(MonorailError::from("Task id missing from abort table"))?;
-                        let rd = &mut run_data_group.datas[*run_data_index];
+                        let rd = &run_data_group.datas[*run_data_index];
                         error!(
                             status = "aborted",
                             command = command,
@@ -659,8 +639,27 @@ async fn run_internal<'a>(
         if !crr.failures.is_empty() {
             failed = true;
         }
+
         results.push(crr);
     }
+
+    Ok((results, failed))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[instrument]
+async fn run_internal<'a>(
+    cfg: &'a core::Config,
+    run_data_groups: &'a RunDataGroups,
+    commands: &'a [&'a String],
+    log_dir: &path::Path,
+    fail_on_undefined: bool,
+    invocation_args: &'a str,
+) -> Result<RunOutput, MonorailError> {
+    info!(num = run_data_groups.groups.len(), "processing groups");
+
+    let (results, failed) =
+        process_run_data_groups(cfg, run_data_groups, commands, fail_on_undefined).await?;
 
     let o = RunOutput {
         failed,
@@ -668,8 +667,7 @@ async fn run_internal<'a>(
         results,
     };
 
-    // Update the run output with final results
-    store_run_output(&o, &log_dir)?;
+    store_run_output(&o, log_dir)?;
 
     Ok(o)
 }
@@ -683,13 +681,13 @@ fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), 
         .open(log_dir.join(result::RESULT_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let bw = BufWriter::new(run_result_file);
-    let mut encoder = zstd::stream::write::Encoder::new(bw, 3).unwrap(); // todo unwrap
+    let mut encoder = zstd::stream::write::Encoder::new(bw, 3)?;
     serde_json::to_writer(&mut encoder, run_output)?;
-    encoder.finish().unwrap(); // todo unwrap
+    encoder.finish()?;
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub(crate) struct Logs {
     stdout_path: path::PathBuf,
     stderr_path: path::PathBuf,
@@ -710,5 +708,133 @@ impl Logs {
             stdout_path: dir_path.clone().join(log::STDOUT_FILE),
             stderr_path: dir_path.clone().join(log::STDERR_FILE),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Read;
+    use tempfile::tempdir;
+    use zstd::stream::read::Decoder;
+
+    #[test]
+    fn test_store_run_output_success() {
+        // Create temporary directory for log storage
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let log_dir = temp_dir.path();
+
+        // Create a sample RunOutput object
+        let run_output = RunOutput {
+            failed: false,
+            invocation_args: "example args".to_string(),
+            results: vec![
+                CommandRunResult {
+                    command: "build".to_string(),
+                    successes: vec![TargetRunResult {
+                        target: "target1".to_string(),
+                        code: Some(0),
+                        stdout_path: Some(log_dir.join("stdout_target1.log")),
+                        stderr_path: Some(log_dir.join("stderr_target1.log")),
+                        error: None,
+                        runtime_secs: 12.3,
+                    }],
+                    failures: vec![],
+                    unknowns: vec![],
+                },
+                CommandRunResult {
+                    command: "test".to_string(),
+                    successes: vec![],
+                    failures: vec![TargetRunResult {
+                        target: "target2".to_string(),
+                        code: Some(1),
+                        stdout_path: Some(log_dir.join("stdout_target2.log")),
+                        stderr_path: Some(log_dir.join("stderr_target2.log")),
+                        error: Some("Compilation error".to_string()),
+                        runtime_secs: 5.5,
+                    }],
+                    unknowns: vec![],
+                },
+            ],
+        };
+
+        // Call the function to store the output
+        let result = store_run_output(&run_output, log_dir);
+        assert!(result.is_ok(), "store_run_output should succeed");
+
+        // Check that the result file exists
+        let result_file_path = log_dir.join(result::RESULT_OUTPUT_FILE_NAME);
+        assert!(result_file_path.exists(), "Result file should be created");
+
+        // Read and decompress the file
+        let compressed_file = File::open(&result_file_path).expect("Failed to open result file");
+        let mut decoder = Decoder::new(compressed_file).expect("Failed to create decoder");
+        let mut decompressed_data = String::new();
+        decoder
+            .read_to_string(&mut decompressed_data)
+            .expect("Failed to read decompressed data");
+
+        // Deserialize the decompressed data back into a RunOutput object
+        let deserialized_output: RunOutput =
+            serde_json::from_str(&decompressed_data).expect("Failed to deserialize data");
+
+        // Assert that the original and deserialized data match
+        assert_eq!(
+            run_output, deserialized_output,
+            "Deserialized data should match the original"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_task_success() {
+        // Create a temporary directory for the command to run in
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let work_path = temp_dir.path();
+
+        // Use a simple command that exists, like `echo`
+        let command_path = path::Path::new("echo");
+        let command_args = Some(vec!["Hello, world!".to_string()]);
+
+        // Call spawn_task and check if the process is spawned successfully
+        let child_result = spawn_task(work_path, command_path, &command_args);
+        assert!(
+            child_result.is_ok(),
+            "spawn_task should succeed with valid command"
+        );
+
+        // Optionally check if the process runs and produces expected output
+        let child = child_result.unwrap();
+        let output = child
+            .wait_with_output()
+            .await
+            .expect("Failed to read child output");
+        assert!(
+            output.status.success(),
+            "The command should exit successfully"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Hello, world!"),
+            "Output should contain the expected message"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_task_failure() {
+        // Create a temporary directory for the command to run in
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let work_path = temp_dir.path();
+
+        // Use an invalid command path to simulate failure
+        let command_path = path::Path::new("invalid_command");
+        let command_args = Some(vec!["arg1".to_string(), "arg2".to_string()]);
+
+        // Call spawn_task and check if it returns an error
+        let child_result = spawn_task(work_path, command_path, &command_args);
+        assert!(
+            child_result.is_err(),
+            "spawn_task should fail with an invalid command"
+        );
     }
 }

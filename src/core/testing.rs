@@ -62,8 +62,10 @@ pub(crate) const TEST_CONFIG: &str = r#"
                 "not_a_target/commands"
             ],
             "commands": {
-                "cmd0": {
-                    "path": "not_a_target/commands/cmd0.sh"
+                "definitions": {
+                    "cmd0": {
+                        "path": "not_a_target/commands/cmd0.sh"
+                    }
                 }
             }
         }
