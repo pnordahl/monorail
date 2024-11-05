@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::os::unix::fs::PermissionsExt;
 use std::result::Result;
 use std::{io, path};
@@ -8,6 +8,31 @@ use tokio::io::AsyncReadExt;
 use tracing::debug;
 
 use crate::core::error::MonorailError;
+
+pub(crate) fn contains_file(p: &path::Path) -> Result<(), MonorailError> {
+    if p.is_file() {
+        return Ok(());
+    }
+    // we also require that there be at least one file in it, because
+    // many other processes require non-empty directories to be correct
+    let mut stack = VecDeque::new();
+    stack.push_back(p.to_path_buf());
+    while let Some(current_path) = stack.pop_front() {
+        for entry in std::fs::read_dir(current_path)?.flatten().by_ref() {
+            let ep = entry.path();
+            if ep.is_file() {
+                return Ok(());
+            } else if ep.is_dir() {
+                stack.push_back(ep);
+            }
+        }
+    }
+
+    return Err(MonorailError::Generic(format!(
+        "Directory {} has no files",
+        &p.display()
+    )));
+}
 
 // Open a file from the provided path, and compute its checksum
 // TODO: allow hasher to be passed in?
@@ -88,10 +113,72 @@ pub(crate) fn is_executable(p: impl AsRef<path::Path>) -> bool {
 mod tests {
     use super::*;
     use crate::core::testing::*;
-    use std::fs::{set_permissions, File};
+    use std::fs::{self, set_permissions, File};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_contains_file_with_file() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("test_file.txt");
+        fs::write(&file_path, "Hello, world!").unwrap();
+
+        // Should succeed because the path points to a file
+        assert!(contains_file(&file_path).is_ok());
+    }
+
+    #[test]
+    fn test_contains_file_with_directory_containing_file() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("test_file.txt");
+        fs::write(&file_path, "Hello, world!").unwrap();
+
+        // Should succeed because the directory contains a file
+        assert!(contains_file(temp_dir.path()).is_ok());
+    }
+
+    #[test]
+    fn test_contains_file_with_empty_directory() {
+        let temp_dir = tempdir().unwrap();
+        assert!(contains_file(temp_dir.path()).is_err());
+    }
+
+    #[test]
+    fn test_contains_file_with_nested_directory_with_file() {
+        let temp_dir = tempdir().unwrap();
+        let nested_dir = temp_dir.path().join("nested");
+        fs::create_dir(&nested_dir).unwrap();
+        let nested_file_path = nested_dir.join("nested_file.txt");
+        fs::write(&nested_file_path, "Nested file content").unwrap();
+
+        // Should succeed because a nested directory contains a file
+        assert!(contains_file(temp_dir.path()).is_ok());
+    }
+
+    #[test]
+    fn test_contains_file_with_nested_empty_directories() {
+        let temp_dir = tempdir().unwrap();
+        let nested_dir = temp_dir.path().join("nested");
+        fs::create_dir(&nested_dir).unwrap();
+
+        // Should fail because the directory and nested directory are empty
+        assert!(contains_file(temp_dir.path()).is_err());
+    }
+
+    #[test]
+    fn test_contains_file_with_multiple_directories_one_with_file() {
+        let temp_dir = tempdir().unwrap();
+        let dir1 = temp_dir.path().join("dir1");
+        let dir2 = temp_dir.path().join("dir2");
+        fs::create_dir(&dir1).unwrap();
+        fs::create_dir(&dir2).unwrap();
+        let file_path = dir2.join("file_in_dir2.txt");
+        fs::write(&file_path, "Some content").unwrap();
+
+        // Should succeed because dir2 contains a file
+        assert!(contains_file(temp_dir.path()).is_ok());
+    }
 
     #[tokio::test]
     async fn test_checksum_is_equal() {
