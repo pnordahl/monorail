@@ -32,6 +32,7 @@ pub(crate) enum ChangeProviderKind {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ChangeProvider {
     pub(crate) r#use: ChangeProviderKind,
 }
@@ -50,6 +51,7 @@ impl FromStr for ChangeProviderKind {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LogConfig {
     // Tick frequency for flushing accumulated logs to stream
     // and compression tasks
@@ -64,6 +66,7 @@ impl Default for LogConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default = "Config::default_output_path")]
     pub(crate) output_dir: String,
@@ -107,6 +110,7 @@ impl Config {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CommandDefinition {
     #[serde(default)]
     pub(crate) path: String,
@@ -114,6 +118,7 @@ pub(crate) struct CommandDefinition {
     pub(crate) args: Vec<String>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Target {
     // The filesystem path, relative to the repository root.
     pub(crate) path: String,
@@ -132,6 +137,7 @@ pub(crate) struct Target {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TargetCommands {
     // Relative path from this target's `path` to a directory containing
     // commands that can be executed by `monorail run`. Used for
