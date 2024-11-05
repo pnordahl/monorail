@@ -28,10 +28,10 @@ pub(crate) fn contains_file(p: &path::Path) -> Result<(), MonorailError> {
         }
     }
 
-    return Err(MonorailError::Generic(format!(
+    Err(MonorailError::Generic(format!(
         "Directory {} has no files",
         &p.display()
-    )));
+    )))
 }
 
 // Open a file from the provided path, and compute its checksum
@@ -132,7 +132,7 @@ mod tests {
     fn test_contains_file_with_directory_containing_file() {
         let temp_dir = tempdir().unwrap();
         let file_path = temp_dir.path().join("test_file.txt");
-        fs::write(&file_path, "Hello, world!").unwrap();
+        fs::write(file_path, "Hello, world!").unwrap();
 
         // Should succeed because the directory contains a file
         assert!(contains_file(temp_dir.path()).is_ok());
@@ -150,7 +150,7 @@ mod tests {
         let nested_dir = temp_dir.path().join("nested");
         fs::create_dir(&nested_dir).unwrap();
         let nested_file_path = nested_dir.join("nested_file.txt");
-        fs::write(&nested_file_path, "Nested file content").unwrap();
+        fs::write(nested_file_path, "Nested file content").unwrap();
 
         // Should succeed because a nested directory contains a file
         assert!(contains_file(temp_dir.path()).is_ok());
@@ -160,7 +160,7 @@ mod tests {
     fn test_contains_file_with_nested_empty_directories() {
         let temp_dir = tempdir().unwrap();
         let nested_dir = temp_dir.path().join("nested");
-        fs::create_dir(&nested_dir).unwrap();
+        fs::create_dir(nested_dir).unwrap();
 
         // Should fail because the directory and nested directory are empty
         assert!(contains_file(temp_dir.path()).is_err());
@@ -171,10 +171,10 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let dir1 = temp_dir.path().join("dir1");
         let dir2 = temp_dir.path().join("dir2");
-        fs::create_dir(&dir1).unwrap();
+        fs::create_dir(dir1).unwrap();
         fs::create_dir(&dir2).unwrap();
         let file_path = dir2.join("file_in_dir2.txt");
-        fs::write(&file_path, "Some content").unwrap();
+        fs::write(file_path, "Some content").unwrap();
 
         // Should succeed because dir2 contains a file
         assert!(contains_file(temp_dir.path()).is_ok());
