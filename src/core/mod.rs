@@ -32,6 +32,7 @@ pub(crate) enum ChangeProviderKind {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ChangeProvider {
     pub(crate) r#use: ChangeProviderKind,
 }
@@ -50,6 +51,7 @@ impl FromStr for ChangeProviderKind {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LogConfig {
     // Tick frequency for flushing accumulated logs to stream
     // and compression tasks
@@ -64,6 +66,7 @@ impl Default for LogConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default = "Config::default_output_path")]
     pub(crate) output_dir: String,
@@ -107,6 +110,7 @@ impl Config {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CommandDefinition {
     #[serde(default)]
     pub(crate) path: String,
@@ -114,6 +118,7 @@ pub(crate) struct CommandDefinition {
     pub(crate) args: Vec<String>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Target {
     // The filesystem path, relative to the repository root.
     pub(crate) path: String,
@@ -132,6 +137,7 @@ pub(crate) struct Target {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TargetCommands {
     // Relative path from this target's `path` to a directory containing
     // commands that can be executed by `monorail run`. Used for
@@ -186,7 +192,7 @@ impl<'a> Index<'a> {
         cfg.targets.iter().enumerate().try_for_each(|(i, target)| {
             targets.push(target.path.to_owned());
             let target_path_str = target.path.as_str();
-            require_existence(work_path, target_path_str)?;
+            file::contains_file(&work_path.join(target_path_str))?;
             if dag.label2node.contains_key(target_path_str) {
                 return Err(MonorailError::DependencyGraph(GraphError::DuplicateLabel(
                     target.path.to_owned(),
@@ -272,29 +278,6 @@ impl<'a> Index<'a> {
             dag,
         })
     }
-}
-
-#[inline(always)]
-fn require_existence(work_path: &path::Path, path: &str) -> Result<(), MonorailError> {
-    let p = work_path.join(path);
-    if p.is_file() {
-        return Ok(());
-    }
-    // we also require that there be at least one file in it, because
-    // many other processes require non-empty directories to be correct
-    if p.is_dir() {
-        for entry in p.read_dir()?.flatten() {
-            if entry.path().is_file() {
-                return Ok(());
-            }
-        }
-        return Err(MonorailError::Generic(format!(
-            "Directory {} has no files",
-            &p.display()
-        )));
-    }
-
-    Err(MonorailError::PathDNE(path.to_owned()))
 }
 
 #[cfg(test)]
