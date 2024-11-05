@@ -203,6 +203,20 @@ fn get_run_data_groups<'a>(
                                 &commands_path,
                                 work_path,
                             );
+                            debug!(
+                                command_path = &app_target_command
+                                    .path
+                                    .as_ref()
+                                    .unwrap_or(&path::PathBuf::new())
+                                    .display()
+                                    .to_string(),
+                                command_args = &app_target_command
+                                    .args
+                                    .as_ref()
+                                    .unwrap_or(&vec![])
+                                    .join(" "),
+                                "Using defined command"
+                            );
                             command_args = app_target_command.args;
                             app_target_command.path
                         }
