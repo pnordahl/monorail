@@ -81,7 +81,7 @@ pub(crate) const TEST_CONFIG: &str = r#"
 }
 "#;
 
-pub(crate) async fn init2(repo_path: &path::Path, bare: bool) {
+pub(crate) async fn init(repo_path: &path::Path, bare: bool) {
     let mut args = vec!["init", repo_path.to_str().unwrap()];
     if bare {
         args.push("--bare");
@@ -130,7 +130,7 @@ pub(crate) async fn get_head(repo_path: &path::Path) -> String {
     String::from(end.trim())
 }
 
-pub(crate) async fn create_file2(
+pub(crate) async fn create_file(
     repo_path: &path::Path,
     dir: &str,
     file_name: &str,
@@ -176,8 +176,8 @@ pub(crate) fn get_pair_map(pairs: &[(&str, String)]) -> HashMap<String, String> 
     pending
 }
 
-pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
-    init2(rp, false).await;
+pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
+    init(rp, false).await;
     // make initial head
     commit(rp).await;
     let c: core::Config = serde_json::from_str(TEST_CONFIG).unwrap();
@@ -204,8 +204,8 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         .unwrap();
 
     // fill with files
-    create_file2(rp, "not_a_target", "file.txt", b"1", false).await;
-    create_file2(
+    create_file(rp, "not_a_target", "file.txt", b"1", false).await;
+    create_file(
         rp,
         "not_a_target/commands",
         "cmd0.sh",
@@ -213,8 +213,8 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file2(rp, "target1", "file.txt", b"1", false).await;
-    create_file2(
+    create_file(rp, "target1", "file.txt", b"1", false).await;
+    create_file(
         rp,
         "target1/commands",
         "cmd0.sh",
@@ -222,7 +222,7 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file2(
+    create_file(
         rp,
         "target1/commands",
         "cmd1.sh",
@@ -230,7 +230,7 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file2(
+    create_file(
         rp,
         "target1/commands",
         "cmd2.sh",
@@ -238,7 +238,7 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file2(
+    create_file(
         rp,
         "target1/commands",
         "cmd3.sh",
@@ -246,7 +246,7 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file2(
+    create_file(
         rp,
         "target1/commands",
         "cmd4.sh",
@@ -254,9 +254,9 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file2(rp, "target2", "file.txt", b"1", false).await;
-    create_file2(rp, "target3", "file.txt", b"1", false).await;
-    create_file2(
+    create_file(rp, "target2", "file.txt", b"1", false).await;
+    create_file(rp, "target3", "file.txt", b"1", false).await;
+    create_file(
         rp,
         "target3/monorail",
         "cmd0.sh",
@@ -264,8 +264,8 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file2(rp, "target4", "ignore.txt", b"1", false).await;
-    create_file2(
+    create_file(rp, "target4", "ignore.txt", b"1", false).await;
+    create_file(
         rp,
         "target4/monorail",
         "cmd0.sh",
@@ -273,9 +273,9 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file2(rp, "target4/target5", "ignore.txt", b"1", false).await;
-    create_file2(rp, "target4/target5", "use.txt", b"1", false).await;
-    create_file2(
+    create_file(rp, "target4/target5", "ignore.txt", b"1", false).await;
+    create_file(rp, "target4/target5", "use.txt", b"1", false).await;
+    create_file(
         rp,
         "target4/target5/monorail",
         "cmd0.sh",
@@ -283,7 +283,7 @@ pub(crate) async fn new_test_repo2(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file2(rp, "target6", "file.txt", b"1", false).await;
+    create_file(rp, "target6", "file.txt", b"1", false).await;
 
     c
 }

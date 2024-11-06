@@ -240,7 +240,7 @@ mod tests {
     async fn test_get_git_diff_changes_ok() -> Result<(), Box<dyn std::error::Error>> {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(repo_path, false).await;
+        init(repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
@@ -305,7 +305,7 @@ mod tests {
     {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(repo_path, false).await;
+        init(repo_path, false).await;
         // make initial HEAD
         commit(repo_path).await;
         let git_opts = GitOptions {
@@ -418,7 +418,7 @@ mod tests {
     async fn test_get_git_diff_changes_err() -> Result<(), Box<dyn std::error::Error>> {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(repo_path, false).await;
+        init(repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
@@ -466,7 +466,7 @@ mod tests {
     async fn test_get_git_all_changes_ok1() {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(repo_path, false).await;
+        init(repo_path, false).await;
         // make initial HEAD
         commit(repo_path).await;
 
@@ -489,7 +489,7 @@ mod tests {
     async fn test_get_git_all_changes_ok2() {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(repo_path, false).await;
+        init(repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
@@ -526,7 +526,7 @@ mod tests {
     async fn test_get_git_all_changes_ok3() {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(repo_path, false).await;
+        init(repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
@@ -627,7 +627,7 @@ mod tests {
     async fn test_get_filtered_changes() {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(repo_path, false).await;
+        init(repo_path, false).await;
         let root_path = &repo_path;
         let fname1 = "test1.txt";
         let fname2 = "test2.txt";

@@ -113,7 +113,7 @@ mod tests {
     async fn test_handle_checkpoint_delete_success() {
         let td2 = tempdir().unwrap();
         let rp = &td2.path();
-        let cfg = new_test_repo2(rp).await;
+        let cfg = new_test_repo(rp).await;
         let tracking_path = cfg.get_tracking_path(rp);
         let tt = tracking::Table::new(&tracking_path).unwrap();
         let mut cp = tt.new_checkpoint();
@@ -133,7 +133,7 @@ mod tests {
     async fn test_handle_checkpoint_show_success() {
         let td2 = tempdir().unwrap();
         let rp = &td2.path();
-        let cfg = new_test_repo2(rp).await;
+        let cfg = new_test_repo(rp).await;
         let tracking_path = cfg.get_tracking_path(rp);
         let tt = tracking::Table::new(&tracking_path).unwrap();
         let mut cp = tt.new_checkpoint();
@@ -153,7 +153,7 @@ mod tests {
     async fn test_handle_checkpoint_update_with_pending_changes() {
         let td2 = tempdir().unwrap();
         let rp = &td2.path();
-        let cfg = new_test_repo2(rp).await;
+        let cfg = new_test_repo(rp).await;
         let head = get_head(rp).await;
         let git_opts: git::GitOptions = Default::default();
 
@@ -178,7 +178,7 @@ mod tests {
     async fn test_handle_checkpoint_update_no_pending_changes() {
         let td2 = tempdir().unwrap();
         let rp = &td2.path();
-        let cfg = new_test_repo2(rp).await;
+        let cfg = new_test_repo(rp).await;
         let git_opts: git::GitOptions = Default::default();
 
         let input = CheckpointUpdateInput {
