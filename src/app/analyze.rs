@@ -393,11 +393,14 @@ pub(crate) fn analyze(
 mod tests {
     use super::*;
     use crate::core::testing::*;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_analyze_empty() {
         let changes = vec![];
-        let (c, work_path) = new_test_repo().await;
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo2(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, false, false);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -418,7 +421,9 @@ mod tests {
             targets: Some(vec![]),
         }];
 
-        let (c, work_path) = new_test_repo().await;
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo2(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -445,7 +450,9 @@ mod tests {
             }]),
         }];
 
-        let (c, work_path) = new_test_repo().await;
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo2(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -471,7 +478,9 @@ mod tests {
             }]),
         }];
 
-        let (c, work_path) = new_test_repo().await;
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo2(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -509,7 +518,9 @@ mod tests {
             ]),
         }];
 
-        let (c, work_path) = new_test_repo().await;
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo2(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -543,7 +554,9 @@ mod tests {
             ]),
         }];
 
-        let (c, work_path) = new_test_repo().await;
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo2(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
@@ -591,7 +604,9 @@ mod tests {
             },
         ];
 
-        let (c, work_path) = new_test_repo().await;
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo2(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();

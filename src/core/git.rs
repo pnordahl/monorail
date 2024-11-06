@@ -234,10 +234,13 @@ pub(crate) async fn git_cmd_diff_changes(
 mod tests {
     use super::*;
     use crate::core::testing::*;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_get_git_diff_changes_ok() -> Result<(), Box<dyn std::error::Error>> {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init2(&repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
@@ -300,7 +303,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_git_diff_changes_ok_with_checkpoint() -> Result<(), Box<dyn std::error::Error>>
     {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init2(&repo_path, false).await;
         // make initial HEAD
         commit(&repo_path).await;
         let git_opts = GitOptions {
@@ -411,7 +416,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_git_diff_changes_err() -> Result<(), Box<dyn std::error::Error>> {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init2(&repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
@@ -457,7 +464,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_git_all_changes_ok1() {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init2(&repo_path, false).await;
         // make initial HEAD
         commit(&repo_path).await;
 
@@ -478,7 +487,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_git_all_changes_ok2() {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init2(&repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
@@ -513,7 +524,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_git_all_changes_ok3() {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init2(&repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
@@ -612,7 +625,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_filtered_changes() {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init2(&repo_path, false).await;
         let root_path = &repo_path;
         let fname1 = "test1.txt";
         let fname2 = "test2.txt";

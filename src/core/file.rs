@@ -182,7 +182,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_checksum_is_equal() {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init2(&repo_path, false).await;
         let fname1 = "test1.txt";
 
         let root_path = &repo_path;
@@ -210,7 +212,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_file_checksum() {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init2(&repo_path, false).await;
 
         // files that don't exist have an empty checksum
         let p = &repo_path.join("test.txt");

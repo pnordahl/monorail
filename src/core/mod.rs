@@ -284,6 +284,7 @@ impl<'a> Index<'a> {
 mod tests {
     use super::*;
     use crate::core::testing::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_trie() {
@@ -304,32 +305,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_index() {
-        let (c, work_path) = prep_raw_config_repo().await;
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo2(&work_path).await;
         let l = Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
 
         assert_eq!(
             l.targets_trie
-                .common_prefix_search("rust/target/src/foo.rs")
+                .common_prefix_search("target4/target5/src/foo.rs")
                 .collect::<Vec<String>>(),
-            vec!["rust".to_string(), "rust/target".to_string()]
+            vec!["target4".to_string(), "target4/target5".to_string()]
         );
         assert_eq!(
             l.uses
-                .common_prefix_search("common/foo.txt")
+                .common_prefix_search("target3/foo.txt")
                 .collect::<Vec<String>>(),
-            vec!["common".to_string()]
+            vec!["target3".to_string()]
         );
         assert_eq!(
             l.ignores
-                .common_prefix_search("rust/target/ignoreme.txt")
+                .common_prefix_search("target4/ignore.txt")
                 .collect::<Vec<String>>(),
-            vec!["rust/target/ignoreme.txt".to_string()]
+            vec!["target4/ignore.txt".to_string()]
         );
-        // lies within `rust` target, so it's in the dag, not the map
-        assert_eq!(*l.use2targets.get("common").unwrap(), vec!["rust/target"]);
+        // lies within `target3` target, so it's in the dag, not the map
+        assert_eq!(*l.use2targets.get("target3").unwrap(), vec!["target4"]);
         assert_eq!(
-            *l.ignore2targets.get("rust/target/ignoreme.txt").unwrap(),
-            vec!["rust/target"]
+            *l.ignore2targets.get("target4/target5/ignore.txt").unwrap(),
+            vec!["target4/target5"]
         );
     }
 

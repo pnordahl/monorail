@@ -101,3 +101,100 @@ async fn checkpoint_update_git<'a>(
 
     Ok(CheckpointUpdateOutput { checkpoint })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::git;
+    use crate::core::testing::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_handle_checkpoint_delete_success() {
+        let td2 = tempdir().unwrap();
+        let rp = &td2.path();
+        let cfg = new_test_repo2(rp).await;
+        let tracking_path = cfg.get_tracking_path(rp);
+        let tt = tracking::Table::new(&tracking_path).unwrap();
+        let mut cp = tt.new_checkpoint();
+        cp.save().unwrap();
+
+        assert!(cp.path.exists(), "Checkpoint should exist");
+
+        // Run the function
+        let result = handle_checkpoint_delete(&cfg, rp).await;
+
+        // Check the output and file deletion
+        assert!(result.is_ok());
+        assert!(!cp.path.exists(), "Checkpoint file should be deleted");
+    }
+
+    #[tokio::test]
+    async fn test_handle_checkpoint_show_success() {
+        let td2 = tempdir().unwrap();
+        let rp = &td2.path();
+        let cfg = new_test_repo2(rp).await;
+        let tracking_path = cfg.get_tracking_path(rp);
+        let tt = tracking::Table::new(&tracking_path).unwrap();
+        let mut cp = tt.new_checkpoint();
+        cp.id = "test_id".to_string();
+        cp.save().unwrap();
+
+        assert!(cp.path.exists(), "Checkpoint should exist");
+
+        let result = handle_checkpoint_show(&cfg, rp).await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output.checkpoint.id, "test_id");
+    }
+
+    #[tokio::test]
+    async fn test_handle_checkpoint_update_with_pending_changes() {
+        let td2 = tempdir().unwrap();
+        let rp = &td2.path();
+        let cfg = new_test_repo2(rp).await;
+        let head = get_head(rp).await;
+        let git_opts: git::GitOptions = Default::default();
+
+        let input = CheckpointUpdateInput {
+            id: None,
+            pending: true,
+            git_opts: git_opts,
+        };
+
+        let result = handle_checkpoint_update(&cfg, &input, rp).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(
+            // number of files in the test config
+            output.checkpoint.pending.unwrap().len() == 17,
+            "Pending changes should be populated"
+        );
+        assert_eq!(output.checkpoint.id, head);
+    }
+
+    #[tokio::test]
+    async fn test_handle_checkpoint_update_no_pending_changes() {
+        let td2 = tempdir().unwrap();
+        let rp = &td2.path();
+        let cfg = new_test_repo2(rp).await;
+        let git_opts: git::GitOptions = Default::default();
+
+        let input = CheckpointUpdateInput {
+            id: Some("test_id"),
+            pending: false,
+            git_opts: git_opts,
+        };
+
+        let result = handle_checkpoint_update(&cfg, &input, rp).await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output.checkpoint.id, "test_id");
+        assert!(
+            output.checkpoint.pending.is_none(),
+            "Pending changes should be None when not requested"
+        );
+    }
+}
