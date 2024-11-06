@@ -494,3 +494,125 @@ pub(crate) fn get_header(filename: &str, target: &str, command: &str, color: boo
         format!("[monorail | {filename} | {target} | {command}]\n")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_compressor_initialization() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let compressor = Compressor::new(4, shutdown.clone());
+
+        assert_eq!(compressor.num_threads, 4);
+        assert_eq!(compressor.index, 0);
+        assert_eq!(compressor.req_channels.len(), 4);
+        assert_eq!(compressor.registrations.len(), 4);
+        assert!(!compressor.shutdown.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_register_paths() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let mut compressor = Compressor::new(2, shutdown.clone());
+        let temp_dir = tempdir().unwrap();
+
+        // Register a path and validate the returned CompressorClient
+        let test_path = temp_dir.path().join("test_file_1");
+        let client = compressor
+            .register(&test_path)
+            .expect("Failed to register path");
+
+        // Check that the path is added to the correct registration slot
+        assert_eq!(compressor.registrations[0][0], test_path);
+        assert_eq!(client.file_name, "test_file_1".to_string());
+        assert_eq!(client.encoder_index, 0);
+
+        // Register another path and check the rotation across threads
+        let test_path_2 = temp_dir.path().join("test_file_2");
+        let client_2 = compressor
+            .register(&test_path_2)
+            .expect("Failed to register path");
+
+        assert_eq!(compressor.registrations[1][0], test_path_2);
+        assert_eq!(client_2.file_name, "test_file_2".to_string());
+        assert_eq!(client_2.encoder_index, 0);
+    }
+
+    #[test]
+    fn test_run_compressor_with_data_requests() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let mut compressor = Compressor::new(1, shutdown.clone());
+        let temp_dir = tempdir().unwrap();
+
+        let test_path = temp_dir.path().join("test_output.zst");
+        let client = compressor
+            .register(&test_path)
+            .expect("Failed to register path");
+
+        // Spawn the compressor threads
+        let compressor_handle = std::thread::spawn(move || compressor.run());
+
+        // Send a Data request
+        let data = Arc::new(vec![b"Test data".to_vec()]);
+        client
+            .req_tx
+            .send(CompressRequest::Data(client.encoder_index, data.clone()))
+            .expect("Failed to send data");
+
+        // Finalize the encoder and shut down the thread
+        client.shutdown().unwrap();
+
+        // Wait for the compressor thread to end
+        compressor_handle.join().unwrap().unwrap();
+
+        // Verify that the compressed file is created and contains data
+        assert!(test_path.exists());
+
+        // Check that the file is not empty
+        let metadata = std::fs::metadata(&test_path).expect("Failed to get metadata");
+        assert!(metadata.len() > 0, "Compressed file should not be empty");
+    }
+
+    #[test]
+    fn test_shutdown_compressor() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let mut compressor = Compressor::new(2, shutdown.clone());
+        let temp_dir = tempdir().unwrap();
+
+        // Register paths
+        let test_path_1 = temp_dir.path().join("test_file_1");
+        let test_path_2 = temp_dir.path().join("test_file_2");
+        let client_1 = compressor
+            .register(&test_path_1)
+            .expect("Failed to register path");
+        let client_2 = compressor
+            .register(&test_path_2)
+            .expect("Failed to register path");
+
+        // Run compressor threads
+        let compressor_handle = std::thread::spawn(move || compressor.run());
+
+        // Send Shutdown requests to each compressor thread
+        client_1
+            .req_tx
+            .send(CompressRequest::Shutdown)
+            .expect("Failed to send shutdown request");
+        client_2
+            .req_tx
+            .send(CompressRequest::Shutdown)
+            .expect("Failed to send shutdown request");
+
+        // Wait for the compressor threads to end
+        compressor_handle.join().unwrap().unwrap();
+
+        // Assert that shutdown flag was set to true
+        shutdown.store(true, Ordering::Relaxed);
+        assert!(shutdown.load(Ordering::Relaxed));
+    }
+}
