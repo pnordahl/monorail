@@ -240,19 +240,19 @@ mod tests {
     async fn test_get_git_diff_changes_ok() -> Result<(), Box<dyn std::error::Error>> {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(&repo_path, false).await;
+        init2(repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
-        commit(&repo_path).await;
-        let begin = get_head(&repo_path).await;
+        commit(repo_path).await;
+        let begin = get_head(repo_path).await;
 
         // no begin/end without a checkpoint or pending changes is ok(none)
         assert_eq!(
-            get_git_diff_changes(&git_opts, &None, &repo_path)
+            get_git_diff_changes(&git_opts, &None, repo_path)
                 .await
                 .unwrap(),
             vec![]
@@ -262,7 +262,7 @@ mod tests {
         git_opts.begin = Some(&begin);
         git_opts.end = Some(&begin);
         assert_eq!(
-            get_git_diff_changes(&git_opts, &None, &repo_path)
+            get_git_diff_changes(&git_opts, &None, repo_path)
                 .await
                 .unwrap(),
             vec![]
@@ -271,13 +271,13 @@ mod tests {
         // begin < end with changes is ok
         let foo_path = &repo_path.join("foo.txt");
         let _foo_checksum = write_with_checksum(foo_path, &[1]).await?;
-        add("foo.txt", &repo_path).await;
-        commit(&repo_path).await;
-        let end = get_head(&repo_path).await;
+        add("foo.txt", repo_path).await;
+        commit(repo_path).await;
+        let end = get_head(repo_path).await;
         git_opts.begin = Some(&begin);
         git_opts.end = Some(&end);
         assert_eq!(
-            get_git_diff_changes(&git_opts, &None, &repo_path)
+            get_git_diff_changes(&git_opts, &None, repo_path)
                 .await
                 .unwrap(),
             vec![Change {
@@ -289,7 +289,7 @@ mod tests {
         git_opts.begin = Some(&end);
         git_opts.end = Some(&begin);
         assert_eq!(
-            get_git_diff_changes(&git_opts, &None, &repo_path)
+            get_git_diff_changes(&git_opts, &None, repo_path)
                 .await
                 .unwrap(),
             vec![Change {
@@ -305,9 +305,9 @@ mod tests {
     {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(&repo_path, false).await;
+        init2(repo_path, false).await;
         // make initial HEAD
-        commit(&repo_path).await;
+        commit(repo_path).await;
         let git_opts = GitOptions {
             begin: None,
             end: None,
@@ -323,7 +323,7 @@ mod tests {
                     id: "".to_string(),
                     pending: None,
                 }),
-                &repo_path
+                repo_path
             )
             .await
             .unwrap(),
@@ -331,8 +331,8 @@ mod tests {
         );
 
         // get initial begin of repo
-        commit(&repo_path).await;
-        let first_head = get_head(&repo_path).await;
+        commit(repo_path).await;
+        let first_head = get_head(repo_path).await;
 
         // no changes for valid checkpoint commit is empty vector
         assert_eq!(
@@ -343,7 +343,7 @@ mod tests {
                     id: first_head.clone(),
                     pending: None,
                 }),
-                &repo_path
+                repo_path
             )
             .await
             .unwrap(),
@@ -353,9 +353,9 @@ mod tests {
         // create first file and commit
         let foo_path = &repo_path.join("foo.txt");
         let _ = write_with_checksum(foo_path, &[1]).await?;
-        add("foo.txt", &repo_path).await;
-        commit(&repo_path).await;
-        let second_head = get_head(&repo_path).await;
+        add("foo.txt", repo_path).await;
+        commit(repo_path).await;
+        let second_head = get_head(repo_path).await;
 
         // foo visible when checkpoint commit is first head
         assert_eq!(
@@ -366,7 +366,7 @@ mod tests {
                     id: first_head.clone(),
                     pending: None,
                 }),
-                &repo_path
+                repo_path
             )
             .await
             .unwrap(),
@@ -383,7 +383,7 @@ mod tests {
                     id: second_head.clone(),
                     pending: None,
                 }),
-                &repo_path
+                repo_path
             )
             .await
             .unwrap(),
@@ -402,7 +402,7 @@ mod tests {
                     id: second_head.clone(),
                     pending: None,
                 }),
-                &repo_path
+                repo_path
             )
             .await
             .unwrap(),
@@ -418,15 +418,15 @@ mod tests {
     async fn test_get_git_diff_changes_err() -> Result<(), Box<dyn std::error::Error>> {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(&repo_path, false).await;
+        init2(repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
-        commit(&repo_path).await;
-        let begin = get_head(&repo_path).await;
+        commit(repo_path).await;
+        let begin = get_head(repo_path).await;
 
         // no begin/end, with invalid checkpoint commit is err
         assert!(get_git_diff_changes(
@@ -439,21 +439,21 @@ mod tests {
                     "blarp".to_string()
                 )])),
             }),
-            &repo_path
+            repo_path
         )
         .await
         .is_err());
 
         // bad begin is err
         git_opts.begin = Some("foo");
-        assert!(get_git_diff_changes(&git_opts, &None, &repo_path)
+        assert!(get_git_diff_changes(&git_opts, &None, repo_path)
             .await
             .is_err());
 
         // bad end is err
         git_opts.begin = Some(&begin);
         git_opts.end = Some("foo");
-        assert!(get_git_diff_changes(&git_opts, &None, &repo_path)
+        assert!(get_git_diff_changes(&git_opts, &None, repo_path)
             .await
             .is_err());
         git_opts.begin = None;
@@ -466,9 +466,9 @@ mod tests {
     async fn test_get_git_all_changes_ok1() {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(&repo_path, false).await;
+        init2(repo_path, false).await;
         // make initial HEAD
-        commit(&repo_path).await;
+        commit(repo_path).await;
 
         // no changes, no checkpoint is ok
         assert!(get_git_all_changes(
@@ -478,7 +478,7 @@ mod tests {
                 git_path: "git",
             },
             &None,
-            &repo_path
+            repo_path
         )
         .await
         .unwrap()
@@ -489,15 +489,15 @@ mod tests {
     async fn test_get_git_all_changes_ok2() {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(&repo_path, false).await;
+        init2(repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
-        commit(&repo_path).await;
-        let begin = get_head(&repo_path).await;
+        commit(repo_path).await;
+        let begin = get_head(repo_path).await;
         git_opts.begin = Some(&begin);
 
         // no changes, with checkpoint is ok
@@ -512,7 +512,7 @@ mod tests {
                         "dsfksl".to_string()
                     )])),
                 }),
-                &repo_path
+                repo_path
             )
             .await
             .unwrap()
@@ -526,25 +526,25 @@ mod tests {
     async fn test_get_git_all_changes_ok3() {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(&repo_path, false).await;
+        init2(repo_path, false).await;
         let mut git_opts = GitOptions {
             begin: None,
             end: None,
             git_path: "git",
         };
         // create commit so there's something for HEAD to point to
-        commit(&repo_path).await;
-        let begin = get_head(&repo_path).await;
+        commit(repo_path).await;
+        let begin = get_head(repo_path).await;
         git_opts.begin = Some(&begin);
 
         // create a new file and check that it is seen
         let foo_path = &repo_path.join("foo.txt");
         let foo_checksum = write_with_checksum(foo_path, &[1]).await.unwrap();
-        add("foo.txt", &repo_path).await;
-        commit(&repo_path).await;
+        add("foo.txt", repo_path).await;
+        commit(repo_path).await;
 
         assert_eq!(
-            get_git_all_changes(&git_opts, &None, &repo_path)
+            get_git_all_changes(&git_opts, &None, repo_path)
                 .await
                 .unwrap()
                 .unwrap()
@@ -565,7 +565,7 @@ mod tests {
                         foo_checksum.clone()
                     )])),
                 }),
-                &repo_path
+                repo_path
             )
             .await
             .unwrap()
@@ -574,7 +574,7 @@ mod tests {
             0
         );
 
-        let end = get_head(&repo_path).await;
+        let end = get_head(repo_path).await;
         git_opts.end = Some(&end);
 
         // create another file and check that it is seen, even though checkpoint
@@ -592,7 +592,7 @@ mod tests {
                         foo_checksum.clone()
                     )])),
                 }),
-                &repo_path
+                repo_path
             )
             .await
             .unwrap()
@@ -613,7 +613,7 @@ mod tests {
                         ("bar.txt".to_string(), bar_checksum)
                     ])),
                 }),
-                &repo_path
+                repo_path
             )
             .await
             .unwrap()
@@ -627,7 +627,7 @@ mod tests {
     async fn test_get_filtered_changes() {
         let td = tempdir().unwrap();
         let repo_path = &td.path();
-        init2(&repo_path, false).await;
+        init2(repo_path, false).await;
         let root_path = &repo_path;
         let fname1 = "test1.txt";
         let fname2 = "test2.txt";
@@ -648,7 +648,7 @@ mod tests {
                         .await
                         .unwrap(),
                 )]),
-                &repo_path
+                repo_path
             )
             .await,
             vec![]
@@ -662,7 +662,7 @@ mod tests {
             get_filtered_changes(
                 vec![change1.clone()],
                 &get_pair_map(&[(fname1, "foo".into(),)]),
-                &repo_path
+                repo_path
             )
             .await,
             vec![change1.clone()]
@@ -670,7 +670,7 @@ mod tests {
 
         // empty changes, empty pending
         assert_eq!(
-            get_filtered_changes(vec![], &HashMap::new(), &repo_path).await,
+            get_filtered_changes(vec![], &HashMap::new(), repo_path).await,
             vec![]
         );
 
@@ -679,7 +679,7 @@ mod tests {
             get_filtered_changes(
                 vec![change1.clone(), change2.clone()],
                 &HashMap::new(),
-                &repo_path
+                repo_path
             )
             .await,
             vec![change1.clone(), change2.clone()]
@@ -694,7 +694,7 @@ mod tests {
                         .await
                         .unwrap(),
                 )]),
-                &repo_path
+                repo_path
             )
             .await,
             vec![]

@@ -307,8 +307,8 @@ mod tests {
     async fn test_index() {
         let td = tempdir().unwrap();
         let work_path = &td.path();
-        let c = new_test_repo2(&work_path).await;
-        let l = Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
+        let c = new_test_repo2(work_path).await;
+        let l = Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
 
         assert_eq!(
             l.targets_trie

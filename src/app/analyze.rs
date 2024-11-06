@@ -401,7 +401,7 @@ mod tests {
         let td = tempdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo2(work_path).await;
-        let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
+        let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
         let ai = AnalyzeInput::new(true, false, false);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
 
@@ -424,7 +424,7 @@ mod tests {
         let td = tempdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo2(work_path).await;
-        let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
+        let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
 
@@ -453,7 +453,7 @@ mod tests {
         let td = tempdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo2(work_path).await;
-        let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
+        let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
 
@@ -481,7 +481,7 @@ mod tests {
         let td = tempdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo2(work_path).await;
-        let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
+        let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
 
@@ -521,7 +521,7 @@ mod tests {
         let td = tempdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo2(work_path).await;
-        let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
+        let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
 
@@ -557,7 +557,7 @@ mod tests {
         let td = tempdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo2(work_path).await;
-        let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
+        let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
 
@@ -607,7 +607,7 @@ mod tests {
         let td = tempdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo2(work_path).await;
-        let mut index = core::Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
+        let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
         let ai = AnalyzeInput::new(true, true, true);
         let o = analyze(&ai, &mut index, Some(changes)).unwrap();
 

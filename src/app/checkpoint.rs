@@ -160,7 +160,7 @@ mod tests {
         let input = CheckpointUpdateInput {
             id: None,
             pending: true,
-            git_opts: git_opts,
+            git_opts,
         };
 
         let result = handle_checkpoint_update(&cfg, &input, rp).await;
@@ -184,7 +184,7 @@ mod tests {
         let input = CheckpointUpdateInput {
             id: Some("test_id"),
             pending: false,
-            git_opts: git_opts,
+            git_opts,
         };
 
         let result = handle_checkpoint_update(&cfg, &input, rp).await;
