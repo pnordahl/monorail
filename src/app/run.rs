@@ -1,4 +1,4 @@
-use std::{path, sync, time};
+use std::{path, sync, thread, time};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -39,6 +39,16 @@ pub(crate) struct CommandRunResult {
     successes: Vec<TargetRunResult>,
     failures: Vec<TargetRunResult>,
     unknowns: Vec<TargetRunResult>,
+}
+impl CommandRunResult {
+    fn new(command: &str) -> Self {
+        Self {
+            command: command.to_string(),
+            successes: vec![],
+            failures: vec![],
+            unknowns: vec![],
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -264,10 +274,28 @@ pub(crate) fn spawn_task(
     cmd.spawn().map_err(MonorailError::from)
 }
 
+struct CommandTaskFinishInfo {
+    id: usize,
+    status: std::process::ExitStatus,
+    elapsed: time::Duration,
+}
+struct CommandTaskCancelInfo {
+    id: usize,
+    elapsed: time::Duration,
+    error: MonorailError,
+}
+
 #[derive(Debug)]
 struct CommandTask {
     id: usize,
     start_time: time::Instant,
+    token: sync::Arc<tokio_util::sync::CancellationToken>,
+    target: sync::Arc<String>,
+    command: sync::Arc<String>,
+    log_config: sync::Arc<core::LogConfig>,
+    stdout_client: log::CompressorClient,
+    stderr_client: log::CompressorClient,
+    log_stream_client: Option<log::StreamClient>,
 }
 impl CommandTask {
     #[allow(clippy::too_many_arguments)]
@@ -275,21 +303,15 @@ impl CommandTask {
     async fn run(
         &mut self,
         mut child: tokio::process::Child,
-        token: sync::Arc<tokio_util::sync::CancellationToken>,
-        target: String,
-        command: String,
-        log_config: core::LogConfig,
-        stdout_client: log::CompressorClient,
-        stderr_client: log::CompressorClient,
-        log_stream_client: Option<log::StreamClient>,
-    ) -> Result<
-        (usize, std::process::ExitStatus, time::Duration),
-        (usize, time::Duration, MonorailError),
-    > {
-        let (stdout_log_stream_client, stderr_log_stream_client) = match log_stream_client {
+    ) -> Result<CommandTaskFinishInfo, CommandTaskCancelInfo> {
+        let (stdout_log_stream_client, stderr_log_stream_client) = match &self.log_stream_client {
             Some(lsc) => {
-                let allowed =
-                    log::is_log_allowed(&lsc.args.targets, &lsc.args.commands, &target, &command);
+                let allowed = log::is_log_allowed(
+                    &lsc.args.targets,
+                    &lsc.args.commands,
+                    &self.target,
+                    &self.command,
+                );
                 let stdout_lsc = if allowed && lsc.args.include_stdout {
                     Some(lsc.clone())
                 } else {
@@ -304,30 +326,69 @@ impl CommandTask {
             }
             None => (None, None),
         };
-        let stdout_header = log::get_header(&stdout_client.file_name, &target, &command, true);
+        let stdout_header = log::get_header(
+            &self.stdout_client.file_name,
+            &self.target,
+            &self.command,
+            true,
+        );
         let stdout_fut = log::process_reader(
-            &log_config,
-            tokio::io::BufReader::new(child.stdout.take().unwrap()), // todo unwrap
-            stdout_client,
+            &self.log_config,
+            tokio::io::BufReader::new(
+                child
+                    .stdout
+                    .take()
+                    .ok_or(MonorailError::from("Missing stdout task stream"))
+                    .map_err(|e| CommandTaskCancelInfo {
+                        id: self.id,
+                        elapsed: self.start_time.elapsed(),
+                        error: e,
+                    })?,
+            ),
+            self.stdout_client.clone(),
             stdout_header,
             stdout_log_stream_client,
-            token.clone(),
+            self.token.clone(),
         );
-        let stderr_header = log::get_header(&stderr_client.file_name, &target, &command, true);
+        let stderr_header = log::get_header(
+            &self.stderr_client.file_name,
+            &self.target,
+            &self.command,
+            true,
+        );
         let stderr_fut = log::process_reader(
-            &log_config,
-            tokio::io::BufReader::new(child.stderr.take().unwrap()), // todo unwrap
-            stderr_client,
+            &self.log_config,
+            tokio::io::BufReader::new(
+                child
+                    .stderr
+                    .take()
+                    .ok_or(MonorailError::from("Missing stderr task stream"))
+                    .map_err(|e| CommandTaskCancelInfo {
+                        id: self.id,
+                        elapsed: self.start_time.elapsed(),
+                        error: e,
+                    })?,
+            ),
+            self.stderr_client.clone(),
             stderr_header,
             stderr_log_stream_client,
-            token.clone(),
+            self.token.clone(),
         );
         let child_fut = async { child.wait().await.map_err(MonorailError::from) };
 
         let (_stdout_result, _stderr_result, child_result) =
-            tokio::try_join!(stdout_fut, stderr_fut, child_fut)
-                .map_err(|e| (self.id, self.start_time.elapsed(), e))?;
-        Ok((self.id, child_result, self.start_time.elapsed()))
+            tokio::try_join!(stdout_fut, stderr_fut, child_fut).map_err(|e| {
+                CommandTaskCancelInfo {
+                    id: self.id,
+                    elapsed: self.start_time.elapsed(),
+                    error: e,
+                }
+            })?;
+        Ok(CommandTaskFinishInfo {
+            id: self.id,
+            status: child_result,
+            elapsed: self.start_time.elapsed(),
+        })
     }
 }
 
@@ -392,13 +453,233 @@ fn get_all_commands<'a>(
 }
 
 async fn initialize_log_stream(addr: &str) -> Option<log::StreamClient> {
-    match log::StreamClient::connect().await {
+    match log::StreamClient::connect(addr).await {
         Ok(client) => Some(client),
         Err(e) => {
             debug!(error = e.to_string(), "Log streaming disabled");
             None
         }
     }
+}
+
+fn create_aborted_unknowns_result(command: &str, run_data: &[RunData]) -> CommandRunResult {
+    let mut unknowns = vec![];
+    for rd in run_data.iter() {
+        let target = rd.target_path.to_owned();
+        error!(
+            status = "aborted",
+            command = command,
+            target = &rd.target_path
+        );
+        unknowns.push(TargetRunResult {
+            target,
+            code: None,
+            stdout_path: None,
+            stderr_path: None,
+            error: Some("command task cancelled".to_string()),
+            runtime_secs: 0.0,
+        });
+    }
+    CommandRunResult {
+        command: command.to_string(),
+        successes: vec![],
+        failures: vec![],
+        unknowns,
+    }
+}
+
+async fn process_task_results(
+    mut js: tokio::task::JoinSet<Result<CommandTaskFinishInfo, CommandTaskCancelInfo>>,
+    run_data_group: &RunDataGroup,
+    token: &sync::Arc<tokio_util::sync::CancellationToken>,
+    abort_table: HashMap<tokio::task::Id, usize>,
+    command: &str,
+    crr: &mut CommandRunResult,
+) -> Result<bool, MonorailError> {
+    let mut cancelled = false;
+    while let Some(join_res) = js.join_next().await {
+        match join_res {
+            Ok(task_res) => {
+                match task_res {
+                    Ok(info) => {
+                        let rd = &run_data_group.datas[info.id];
+                        let mut trr = TargetRunResult {
+                            target: rd.target_path.to_owned(),
+                            code: info.status.code(),
+                            stdout_path: Some(rd.logs.stdout_path.to_owned()),
+                            stderr_path: Some(rd.logs.stderr_path.to_owned()),
+                            error: None,
+                            runtime_secs: info.elapsed.as_secs_f32(),
+                        };
+                        if info.status.success() {
+                            info!(
+                                status = "success",
+                                command = command,
+                                target = &rd.target_path,
+                                "task"
+                            );
+
+                            crr.successes.push(trr);
+                        } else {
+                            // TODO: --cancel-on-error option
+                            token.cancel();
+                            cancelled = true;
+                            error!(
+                                status = "failed",
+                                command = command,
+                                target = &rd.target_path,
+                                "task"
+                            );
+
+                            trr.error = Some("command returned an error".to_string());
+                            crr.failures.push(trr);
+                        }
+                    }
+                    Err(info) => {
+                        // TODO: --cancel-on-error option
+                        token.cancel();
+                        cancelled = true;
+
+                        let (status, message) = match info.error {
+                            MonorailError::TaskCancelled => {
+                                ("cancelled", "command task cancelled".to_string())
+                            }
+                            _ => ("error", format!("command task failed: {}", info.error)),
+                        };
+
+                        let rd = &run_data_group.datas[info.id];
+                        error!(
+                            status = status,
+                            command = command,
+                            target = &rd.target_path,
+                            "task"
+                        );
+
+                        crr.failures.push(TargetRunResult {
+                            target: rd.target_path.to_owned(),
+                            code: None,
+                            stdout_path: Some(rd.logs.stdout_path.to_owned()),
+                            stderr_path: Some(rd.logs.stderr_path.to_owned()),
+                            error: Some(message),
+                            runtime_secs: info.elapsed.as_secs_f32(),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                if e.is_cancelled() {
+                    let run_data_index = abort_table
+                        .get(&e.id())
+                        .ok_or(MonorailError::from("Task id missing from abort table"))?;
+                    let rd = &run_data_group.datas[*run_data_index];
+                    error!(
+                        status = "aborted",
+                        command = command,
+                        target = &rd.target_path,
+                        "task"
+                    );
+
+                    crr.unknowns.push(TargetRunResult {
+                        target: rd.target_path.to_owned(),
+                        code: None,
+                        stdout_path: None,
+                        stderr_path: None,
+                        error: Some("command task cancelled".to_string()),
+                        runtime_secs: 0.0,
+                    })
+                }
+            }
+        }
+    }
+    Ok(cancelled)
+}
+
+// Prepare the compressor ahead of time so that we can run it before spawning tasks.
+// While this involves a second iteration of the RunData slice, this is necessary to
+// avoid potentially blocking chatty tasks behind running the compressor.
+fn initialize_compressor(
+    run_datas: &[RunData],
+    num_threads: usize,
+) -> Result<
+    (
+        log::Compressor,
+        Vec<(log::CompressorClient, log::CompressorClient)>,
+    ),
+    MonorailError,
+> {
+    let mut compressor = log::Compressor::new(
+        num_threads,
+        sync::Arc::new(sync::atomic::AtomicBool::new(false)),
+    );
+    let mut clients = Vec::new();
+
+    for run_data in run_datas.iter() {
+        let stdout_client = compressor.register(&run_data.logs.stdout_path)?;
+        let stderr_client = compressor.register(&run_data.logs.stderr_path)?;
+        clients.push((stdout_client, stderr_client));
+    }
+    Ok((compressor, clients))
+}
+
+async fn schedule_task(
+    mut task: CommandTask,
+    rd: &RunData,
+    join_set: &mut tokio::task::JoinSet<Result<CommandTaskFinishInfo, CommandTaskCancelInfo>>,
+    abort_table: &mut HashMap<tokio::task::Id, usize>,
+    crr: &mut CommandRunResult,
+    fail_on_undefined: bool,
+) -> Result<(), MonorailError> {
+    if let Some(command_path) = &rd.command_path {
+        // check that the command path is executable before proceeding
+        if file::is_executable(command_path) {
+            info!(
+                status = "scheduled",
+                command = *task.command,
+                target = &rd.target_path,
+                "task"
+            );
+            let task_id = task.id;
+            let child = spawn_task(&rd.command_work_path, command_path, &rd.command_args)?;
+            let handle = join_set.spawn(async move { task.run(child).await });
+            abort_table.insert(handle.id(), task_id);
+        } else {
+            info!(
+                status = "non_executable",
+                command = *task.command,
+                target = &rd.target_path,
+                "task"
+            );
+            crr.unknowns.push(TargetRunResult {
+                target: task.target.to_string(),
+                code: None,
+                stdout_path: None,
+                stderr_path: None,
+                error: Some("command not executable".to_string()),
+                runtime_secs: 0.0,
+            });
+        }
+    } else {
+        info!(
+            status = "undefined",
+            command = *task.command,
+            target = &rd.target_path,
+            "task"
+        );
+        let trr = TargetRunResult {
+            target: task.target.to_string(),
+            code: None,
+            stdout_path: None,
+            stderr_path: None,
+            error: Some("command not found".to_string()),
+            runtime_secs: 0.0,
+        };
+        if fail_on_undefined {
+            crr.failures.push(trr);
+        } else {
+            crr.unknowns.push(trr);
+        }
+    }
+    Ok(())
 }
 
 async fn process_run_data_groups(
@@ -416,233 +697,69 @@ async fn process_run_data_groups(
 
     for run_data_group in &run_data_groups.groups {
         let command = &all_commands[run_data_group.command_index];
-        let mut crr = CommandRunResult::new(command);
-        let mut crr = CommandRunResult {
-            command: command.to_string(),
-            successes: vec![],
-            failures: vec![],
-            unknowns: vec![],
-        };
-
         info!(
             num = run_data_group.datas.len(),
             command = command,
             "processing targets",
         );
         if cancelled {
-            let mut unknowns = vec![];
-            for rd in run_data_group.datas.iter() {
-                let target = rd.target_path.to_owned();
-                error!(
-                    status = "aborted",
-                    command = command,
-                    target = &rd.target_path
-                );
-                unknowns.push(TargetRunResult {
-                    target,
-                    code: None,
-                    stdout_path: None,
-                    stderr_path: None,
-                    error: Some("command task cancelled".to_string()),
-                    runtime_secs: 0.0,
-                });
-            }
-            results.push(CommandRunResult {
-                command: command.to_string(),
-                successes: vec![],
-                failures: vec![],
-                unknowns,
-            });
+            results.push(create_aborted_unknowns_result(
+                command,
+                &run_data_group.datas,
+            ));
             continue;
         }
+
+        let mut crr = CommandRunResult::new(command);
 
         let mut js = tokio::task::JoinSet::new();
         let token = sync::Arc::new(tokio_util::sync::CancellationToken::new());
         let mut abort_table = HashMap::new();
-        let compressor_shutdown = sync::Arc::new(sync::atomic::AtomicBool::new(false));
-        let mut compressor = log::Compressor::new(2, compressor_shutdown.clone());
-        let mut compressor_clients = vec![];
-        for id in 0..run_data_group.datas.len() {
-            let rd = &run_data_group.datas[id];
-            let stdout_client = compressor.register(&rd.logs.stdout_path)?;
-            let stderr_client = compressor.register(&rd.logs.stderr_path)?;
-            compressor_clients.push(stdout_client.clone());
-            compressor_clients.push(stderr_client.clone());
-            let mut ft = CommandTask {
+        let log_config = sync::Arc::new(cfg.log.clone());
+
+        let (mut compressor, compressor_clients) = initialize_compressor(&run_data_group.datas, 2)?;
+        let compressor_handle = thread::spawn(move || compressor.run());
+
+        for (id, rd) in run_data_group.datas.iter().enumerate() {
+            let target = sync::Arc::new(rd.target_path.clone());
+            let command = sync::Arc::new(command.to_string());
+            let clients = &compressor_clients[id];
+            let ct = CommandTask {
                 id,
+                token: token.clone(),
+                target,
+                command,
+                log_config: log_config.clone(),
+                stdout_client: clients.0.clone(),
+                stderr_client: clients.1.clone(),
+                log_stream_client: log_stream_client.clone(),
                 start_time: time::Instant::now(),
             };
-            let target2 = rd.target_path.clone();
-            let command2 = command.to_string();
 
-            if let Some(command_path) = &rd.command_path {
-                // check that the command path is executable before proceeding
-                if file::is_executable(command_path) {
-                    info!(
-                        status = "scheduled",
-                        command = command,
-                        target = &rd.target_path,
-                        "task"
-                    );
-                    let child = spawn_task(&rd.command_work_path, command_path, &rd.command_args)?;
-                    let token2 = token.clone();
-                    let log_stream_client2 = log_stream_client.clone();
-                    let log_config = cfg.log.clone();
-                    let handle = js.spawn(async move {
-                        ft.run(
-                            child,
-                            token2,
-                            target2,
-                            command2,
-                            log_config,
-                            stdout_client,
-                            stderr_client,
-                            log_stream_client2,
-                        )
-                        .await
-                    });
-                    abort_table.insert(handle.id(), id);
-                } else {
-                    info!(
-                        status = "non_executable",
-                        command = command,
-                        target = &rd.target_path,
-                        "task"
-                    );
-                    crr.unknowns.push(TargetRunResult {
-                        target: target2,
-                        code: None,
-                        stdout_path: None,
-                        stderr_path: None,
-                        error: Some("command not executable".to_string()),
-                        runtime_secs: 0.0,
-                    });
-                }
-            } else {
-                info!(
-                    status = "undefined",
-                    command = command,
-                    target = &rd.target_path,
-                    "task"
-                );
-                let trr = TargetRunResult {
-                    target: target2,
-                    code: None,
-                    stdout_path: None,
-                    stderr_path: None,
-                    error: Some("command not found".to_string()),
-                    runtime_secs: 0.0,
-                };
-                if fail_on_undefined {
-                    crr.failures.push(trr);
-                } else {
-                    crr.unknowns.push(trr);
-                }
-            }
-        }
-        let compressor_handle = std::thread::spawn(move || compressor.run());
-        while let Some(join_res) = js.join_next().await {
-            match join_res {
-                Ok(task_res) => {
-                    match task_res {
-                        Ok((id, status, duration)) => {
-                            let rd = &run_data_group.datas[id];
-                            let mut trr = TargetRunResult {
-                                target: rd.target_path.to_owned(),
-                                code: status.code(),
-                                stdout_path: Some(rd.logs.stdout_path.to_owned()),
-                                stderr_path: Some(rd.logs.stderr_path.to_owned()),
-                                error: None,
-                                runtime_secs: duration.as_secs_f32(),
-                            };
-                            if status.success() {
-                                info!(
-                                    status = "success",
-                                    command = command,
-                                    target = &rd.target_path,
-                                    "task"
-                                );
-
-                                crr.successes.push(trr);
-                            } else {
-                                // TODO: --cancel-on-error option
-                                token.cancel();
-                                cancelled = true;
-                                error!(
-                                    status = "failed",
-                                    command = command,
-                                    target = &rd.target_path,
-                                    "task"
-                                );
-
-                                trr.error = Some("command returned an error".to_string());
-                                crr.failures.push(trr);
-                            }
-                        }
-                        Err((id, duration, e)) => {
-                            // TODO: --cancel-on-error option
-                            token.cancel();
-                            cancelled = true;
-
-                            let (status, message) = match e {
-                                MonorailError::TaskCancelled => {
-                                    ("cancelled", "command task cancelled".to_string())
-                                }
-                                _ => ("error", format!("command task failed: {}", e)),
-                            };
-
-                            let rd = &run_data_group.datas[id];
-                            error!(
-                                status = status,
-                                command = command,
-                                target = &rd.target_path,
-                                "task"
-                            );
-
-                            crr.failures.push(TargetRunResult {
-                                target: rd.target_path.to_owned(),
-                                code: None,
-                                stdout_path: Some(rd.logs.stdout_path.to_owned()),
-                                stderr_path: Some(rd.logs.stderr_path.to_owned()),
-                                error: Some(message),
-                                runtime_secs: duration.as_secs_f32(),
-                            });
-                        }
-                    }
-                }
-                Err(e) => {
-                    if e.is_cancelled() {
-                        let run_data_index = abort_table
-                            .get(&e.id())
-                            .ok_or(MonorailError::from("Task id missing from abort table"))?;
-                        let rd = &run_data_group.datas[*run_data_index];
-                        error!(
-                            status = "aborted",
-                            command = command,
-                            target = &rd.target_path,
-                            "task"
-                        );
-
-                        crr.unknowns.push(TargetRunResult {
-                            target: rd.target_path.to_owned(),
-                            code: None,
-                            stdout_path: None,
-                            stderr_path: None,
-                            error: Some("command task cancelled".to_string()),
-                            runtime_secs: 0.0,
-                        })
-                    }
-                }
-            }
-        }
-        for client in compressor_clients.iter() {
-            client.shutdown()?;
+            schedule_task(
+                ct,
+                rd,
+                &mut js,
+                &mut abort_table,
+                &mut crr,
+                fail_on_undefined,
+            )
+            .await?;
         }
 
+        cancelled =
+            process_task_results(js, run_data_group, &token, abort_table, command, &mut crr)
+                .await?;
+
+        for client in compressor_clients {
+            client.0.shutdown()?;
+            client.1.shutdown()?;
+        }
         // Unwrap for thread dyn Any panic contents, which isn't easily mapped to a MonorailError
         // because it doesn't impl Error; however, the internals of this handle do, so they
         // will get propagated.
         compressor_handle.join().unwrap()?;
+
         if !crr.failures.is_empty() {
             failed = true;
         }
@@ -727,9 +844,64 @@ mod tests {
     use tempfile::tempdir;
     use zstd::stream::read::Decoder;
 
-    use sha2::Sha256;
-    use std::collections::{HashMap, HashSet};
-    use std::path::{Path, PathBuf};
+    async fn prep_process_run_data_groups_test(
+        cfg: &core::Config,
+        work_path: &path::Path,
+        commands: &[&String],
+        target_groups: &[Vec<String>],
+    ) -> RunDataGroups {
+        let index = core::Index::new(cfg, &cfg.get_target_path_set(), work_path).unwrap();
+        let log_dir = work_path.join("log_dir");
+
+        get_run_data_groups(
+            &index,
+            commands,
+            &cfg.targets,
+            target_groups,
+            work_path,
+            &log_dir,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_process_run_data_groups() {
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let cfg = new_test_repo(work_path).await;
+        let cmd1 = "cmd1".to_string();
+        let target1 = "target1".to_string();
+        let commands = vec![&cmd1];
+        let target_groups = vec![vec![target1.clone()]];
+        let run_data_groups =
+            prep_process_run_data_groups_test(&cfg, work_path, &commands, &target_groups).await;
+        let res = process_run_data_groups(&cfg, &run_data_groups, &commands, false).await;
+        assert!(res.is_ok(), "Expected no error from processing groups");
+
+        let rdg1 = &run_data_groups.groups[0];
+        assert_eq!(*commands[rdg1.command_index], cmd1);
+
+        let rd1 = &rdg1.datas[0];
+
+        let (results, cancelled) = res.unwrap();
+        assert!(!cancelled);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].command, cmd1);
+        assert_eq!(results[0].successes.len(), 1);
+        assert_eq!(results[0].failures.len(), 0);
+        assert_eq!(results[0].unknowns.len(), 0);
+        assert_eq!(
+            results[0].successes[0],
+            TargetRunResult {
+                target: rd1.target_path.clone(),
+                code: Some(0),
+                stdout_path: Some(rd1.logs.stdout_path.clone()),
+                stderr_path: Some(rd1.logs.stderr_path.clone()),
+                error: None,
+                runtime_secs: results[0].successes[0].runtime_secs
+            }
+        );
+    }
 
     #[tokio::test]
     async fn test_get_run_data_groups() {

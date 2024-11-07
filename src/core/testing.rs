@@ -209,7 +209,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "not_a_target/commands",
         "cmd0.sh",
-        b"#!/bin/bash\necho 'not_a_target cmd0",
+        b"#!/bin/bash\necho 'not_a_target cmd0'",
         true,
     )
     .await;
@@ -218,7 +218,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd0.sh",
-        b"#!/bin/bash\necho 'target1 cmd0",
+        b"#!/bin/bash\necho 'target1 cmd0'",
         true,
     )
     .await;
@@ -226,7 +226,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd1.sh",
-        b"#!/bin/bash\necho 'target1 cmd1",
+        b"#!/bin/bash\necho 'target1 cmd1'",
         true,
     )
     .await;
@@ -234,7 +234,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd2.sh",
-        b"#!/bin/bash\necho 'target1 cmd2",
+        b"#!/bin/bash\necho 'target1 cmd2'",
         true,
     )
     .await;
@@ -242,7 +242,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd3.sh",
-        b"#!/bin/bash\necho 'target1 cmd3 $1",
+        b"#!/bin/bash\necho \"target1 cmd3 $1\"",
         true,
     )
     .await;
@@ -250,7 +250,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd4.sh",
-        b"#!/bin/bash\necho 'target1 cmd4 $1",
+        b"#!/bin/bash\necho \"target1 cmd4 $1\"",
         true,
     )
     .await;

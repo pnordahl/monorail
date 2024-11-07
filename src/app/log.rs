@@ -403,6 +403,7 @@ impl Compressor {
             shutdown,
         }
     }
+
     // Register the provided path and return a CompressorClient
     // that can be used to schedule operations on the underlying encoder.
     pub(crate) fn register(&mut self, p: &path::Path) -> Result<CompressorClient, MonorailError> {
