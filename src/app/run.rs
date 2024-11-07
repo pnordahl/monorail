@@ -391,25 +391,32 @@ fn get_all_commands<'a>(
     Ok(all_commands)
 }
 
+async fn initialize_log_stream(addr: &str) -> Option<log::StreamClient> {
+    match log::StreamClient::connect().await {
+        Ok(client) => Some(client),
+        Err(e) => {
+            debug!(error = e.to_string(), "Log streaming disabled");
+            None
+        }
+    }
+}
+
 async fn process_run_data_groups(
     cfg: &core::Config,
     run_data_groups: &RunDataGroups,
     all_commands: &[&String],
     fail_on_undefined: bool,
 ) -> Result<(Vec<CommandRunResult>, bool), MonorailError> {
-    let log_stream_client = match log::StreamClient::connect("127.0.0.1:9201").await {
-        Ok(lsc) => Some(lsc),
-        Err(e) => {
-            debug!(error = e.to_string(), "Log streaming disabled");
-            None
-        }
-    };
+    // TODO: parameterize addr from cfg
+    let log_stream_client = initialize_log_stream("127.0.0.1:9201").await;
+
     let mut results = Vec::new();
     let mut cancelled = false;
     let mut failed = false;
 
     for run_data_group in &run_data_groups.groups {
         let command = &all_commands[run_data_group.command_index];
+        let mut crr = CommandRunResult::new(command);
         let mut crr = CommandRunResult {
             command: command.to_string(),
             successes: vec![],
@@ -714,18 +721,52 @@ impl Logs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::testing::*;
     use std::fs::File;
     use std::io::Read;
     use tempfile::tempdir;
     use zstd::stream::read::Decoder;
 
+    use sha2::Sha256;
+    use std::collections::{HashMap, HashSet};
+    use std::path::{Path, PathBuf};
+
+    #[tokio::test]
+    async fn test_get_run_data_groups() {
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
+        let cmd1 = "cmd4".to_string();
+        let commands = vec![&cmd1];
+        let target_groups = vec![vec!["target1".to_string()]];
+        let log_dir = work_path.join("log_dir");
+
+        let result = get_run_data_groups(
+            &index,
+            &commands,
+            &c.targets,
+            &target_groups,
+            work_path,
+            &log_dir,
+        );
+        assert!(result.is_ok(), "get_run_data_groups returned an error");
+
+        let run_data_groups = result.unwrap();
+        assert_eq!(run_data_groups.groups.len(), 1);
+        assert_eq!(run_data_groups.groups[0].datas.len(), 1);
+
+        let run_data = &run_data_groups.groups[0].datas[0];
+        assert_eq!(run_data.target_path, "target1");
+        assert!(run_data.command_path.is_some());
+        assert_eq!(run_data.command_args, Some(vec!["arg1".to_string()]));
+    }
+
     #[test]
     fn test_store_run_output_success() {
-        // Create temporary directory for log storage
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let log_dir = temp_dir.path();
 
-        // Create a sample RunOutput object
         let run_output = RunOutput {
             failed: false,
             invocation_args: "example args".to_string(),
@@ -759,15 +800,12 @@ mod tests {
             ],
         };
 
-        // Call the function to store the output
         let result = store_run_output(&run_output, log_dir);
         assert!(result.is_ok(), "store_run_output should succeed");
 
-        // Check that the result file exists
         let result_file_path = log_dir.join(result::RESULT_OUTPUT_FILE_NAME);
         assert!(result_file_path.exists(), "Result file should be created");
 
-        // Read and decompress the file
         let compressed_file = File::open(&result_file_path).expect("Failed to open result file");
         let mut decoder = Decoder::new(compressed_file).expect("Failed to create decoder");
         let mut decompressed_data = String::new();
@@ -775,11 +813,9 @@ mod tests {
             .read_to_string(&mut decompressed_data)
             .expect("Failed to read decompressed data");
 
-        // Deserialize the decompressed data back into a RunOutput object
         let deserialized_output: RunOutput =
             serde_json::from_str(&decompressed_data).expect("Failed to deserialize data");
 
-        // Assert that the original and deserialized data match
         assert_eq!(
             run_output, deserialized_output,
             "Deserialized data should match the original"
@@ -788,22 +824,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_task_success() {
-        // Create a temporary directory for the command to run in
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let work_path = temp_dir.path();
 
-        // Use a simple command that exists, like `echo`
         let command_path = path::Path::new("echo");
         let command_args = Some(vec!["Hello, world!".to_string()]);
 
-        // Call spawn_task and check if the process is spawned successfully
         let child_result = spawn_task(work_path, command_path, &command_args);
         assert!(
             child_result.is_ok(),
             "spawn_task should succeed with valid command"
         );
 
-        // Optionally check if the process runs and produces expected output
         let child = child_result.unwrap();
         let output = child
             .wait_with_output()
@@ -822,15 +854,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_task_failure() {
-        // Create a temporary directory for the command to run in
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let work_path = temp_dir.path();
 
-        // Use an invalid command path to simulate failure
         let command_path = path::Path::new("invalid_command");
         let command_args = Some(vec!["arg1".to_string(), "arg2".to_string()]);
 
-        // Call spawn_task and check if it returns an error
         let child_result = spawn_task(work_path, command_path, &command_args);
         assert!(
             child_result.is_err(),
