@@ -182,7 +182,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_checksum_is_equal() {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init(repo_path, false).await;
         let fname1 = "test1.txt";
 
         let root_path = &repo_path;
@@ -194,9 +196,9 @@ mod tests {
         )]);
 
         // checksums must match
-        assert!(checksum_is_equal(&pending, &repo_path, fname1).await);
+        assert!(checksum_is_equal(&pending, repo_path, fname1).await);
         // file error (such as dne) interpreted as checksum mismatch
-        assert!(!checksum_is_equal(&pending, &repo_path, "dne.txt").await);
+        assert!(!checksum_is_equal(&pending, repo_path, "dne.txt").await);
 
         // write a file and use a pending entry with a mismatched checksum
         let fname2 = "test2.txt";
@@ -205,12 +207,14 @@ mod tests {
             .unwrap();
         let pending2 = get_pair_map(&[(fname2, "foobar".into())]);
         // checksums don't match
-        assert!(!checksum_is_equal(&pending2, &repo_path, fname2).await);
+        assert!(!checksum_is_equal(&pending2, repo_path, fname2).await);
     }
 
     #[tokio::test]
     async fn test_get_file_checksum() {
-        let repo_path = init(false).await;
+        let td = tempdir().unwrap();
+        let repo_path = &td.path();
+        init(repo_path, false).await;
 
         // files that don't exist have an empty checksum
         let p = &repo_path.join("test.txt");

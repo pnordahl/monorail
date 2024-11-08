@@ -142,7 +142,7 @@ impl Serialize for MonorailError {
                 state.serialize_field("message", &self.to_string())?;
             }
             MonorailError::Git(_) => {
-                state.serialize_field("type", "Git")?;
+                state.serialize_field("type", "git")?;
                 state.serialize_field("message", &self.to_string())?;
             }
             MonorailError::Io(_) => {

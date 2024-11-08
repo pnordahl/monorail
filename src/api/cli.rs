@@ -42,6 +42,9 @@ pub const ARG_STDERR: &str = "stderr";
 pub const ARG_STDOUT: &str = "stdout";
 pub const ARG_ID: &str = "id";
 pub const ARG_DEPS: &str = "deps";
+pub const ARG_ARG: &str = "arg";
+pub const ARG_ARG_MAP: &str = "arg-map";
+pub const ARG_ARG_MAP_FILE: &str = "arg-map-file";
 pub const ARG_FAIL_ON_UNDEFINED: &str = "fail-on-undefined";
 
 pub const VAL_JSON: &str = "json";
@@ -249,10 +252,38 @@ pub fn build() -> clap::Command {
         .arg(
             Arg::new(ARG_FAIL_ON_UNDEFINED)
                 .long(ARG_FAIL_ON_UNDEFINED)
-                .long_help("Fail commands that are undefined by targets. If --target is specified, this defaults to true.")
-                .default_value_if(ARG_TARGETS, ArgPredicate::IsPresent, Some("true"))
+                .long_help("Fail commands that are undefined by targets.")
                 .action(ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new(ARG_ARG)
+                .short('a')
+                .long(ARG_ARG)
+                .num_args(1..)
+                .required(false)
+                .action(ArgAction::Append)
+                .conflicts_with_all([ARG_ARG_MAP, ARG_ARG_MAP_FILE])
+                .help("One or more runtime argument(s) to be provided when executing a command. This is a shorthand form of the more expressive '--arg-map' and '--arg-map-file', designed for single command + single target use. Providing this flag without specifying exactly one command and one target will result in an error. Arguments supplied are appended to commands.definitions.{{command}}.args, if any are specified in the configuration file.")
+        )
+        .arg(
+            Arg::new(ARG_ARG_MAP)
+                .long(ARG_ARG_MAP)
+                .short('m')
+                .required(false)
+                .num_args(1)
+                .conflicts_with_all([ARG_ARG, ARG_ARG_MAP_FILE])
+                .help("A JSON literal containing nested command-target-args mappings. Arguments supplied are appended to commands.definitions.{{command}}.args, if any are specified in the configuration file."),
+        )
+        .arg(
+            Arg::new(ARG_ARG_MAP_FILE)
+                .long(ARG_ARG_MAP_FILE)
+                .short('f')
+                .required(false)
+                .num_args(1)
+                .conflicts_with_all([ARG_ARG, ARG_ARG_MAP])
+                .help("A JSON file containing nested command-target-args mappings. Arguments supplied are appended to commands.definitions.{{command}}.args, if any are specified in the configuration file."),
+        )
+
     )
     .subcommand(Command::new(CMD_RESULT).about("Show historical results from runs").subcommand(Command::new(CMD_SHOW).about("Show results from `run` invocations")))
     /*
@@ -672,6 +703,13 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::run::HandleRunInput<'a> {
                 .into_iter()
                 .flatten()
                 .collect(),
+            args: cmd
+                .get_many::<String>(ARG_ARG)
+                .into_iter()
+                .flatten()
+                .collect(),
+            arg_map: cmd.get_one::<String>(ARG_ARG_MAP),
+            arg_map_file: cmd.get_one::<String>(ARG_ARG_MAP_FILE),
             include_deps: cmd.get_flag(ARG_DEPS),
             fail_on_undefined: cmd.get_flag(ARG_FAIL_ON_UNDEFINED),
         })

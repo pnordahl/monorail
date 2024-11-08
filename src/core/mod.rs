@@ -83,10 +83,35 @@ pub(crate) struct Config {
 }
 impl Config {
     pub(crate) fn new(file_path: &path::Path) -> Result<Config, MonorailError> {
-        let file = File::open(file_path)?;
+        let file = File::open(file_path).map_err(|e| {
+            MonorailError::Generic(format!(
+                "Could not open configuration file at {}; {}",
+                file_path.display(),
+                e
+            ))
+        })?;
         let mut buf_reader = BufReader::new(file);
-        let buf = buf_reader.fill_buf()?;
-        Ok(serde_json::from_str(std::str::from_utf8(buf)?)?)
+        let buf = buf_reader.fill_buf().map_err(|e| {
+            MonorailError::Generic(format!(
+                "Could not read configuration file data at {}; {}",
+                file_path.display(),
+                e
+            ))
+        })?;
+        serde_json::from_str(std::str::from_utf8(buf).map_err(|e| {
+            MonorailError::Generic(format!(
+                "Configuration file at {} contains invalid UTF-8; {}",
+                file_path.display(),
+                e
+            ))
+        })?)
+        .map_err(|e| {
+            MonorailError::Generic(format!(
+                "Configuration file at {} contains invalid JSON; {}",
+                file_path.display(),
+                e
+            ))
+        })
     }
     pub(crate) fn get_target_path_set(&self) -> HashSet<&String> {
         let mut o = HashSet::new();
@@ -284,6 +309,7 @@ impl<'a> Index<'a> {
 mod tests {
     use super::*;
     use crate::core::testing::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_trie() {
@@ -304,32 +330,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_index() {
-        let (c, work_path) = prep_raw_config_repo().await;
-        let l = Index::new(&c, &c.get_target_path_set(), &work_path).unwrap();
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let l = Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
 
         assert_eq!(
             l.targets_trie
-                .common_prefix_search("rust/target/src/foo.rs")
+                .common_prefix_search("target4/target5/src/foo.rs")
                 .collect::<Vec<String>>(),
-            vec!["rust".to_string(), "rust/target".to_string()]
+            vec!["target4".to_string(), "target4/target5".to_string()]
         );
         assert_eq!(
             l.uses
-                .common_prefix_search("common/foo.txt")
+                .common_prefix_search("target3/foo.txt")
                 .collect::<Vec<String>>(),
-            vec!["common".to_string()]
+            vec!["target3".to_string()]
         );
         assert_eq!(
             l.ignores
-                .common_prefix_search("rust/target/ignoreme.txt")
+                .common_prefix_search("target4/ignore.txt")
                 .collect::<Vec<String>>(),
-            vec!["rust/target/ignoreme.txt".to_string()]
+            vec!["target4/ignore.txt".to_string()]
         );
-        // lies within `rust` target, so it's in the dag, not the map
-        assert_eq!(*l.use2targets.get("common").unwrap(), vec!["rust/target"]);
+        // lies within `target3` target, so it's in the dag, not the map
+        assert_eq!(*l.use2targets.get("target3").unwrap(), vec!["target4"]);
         assert_eq!(
-            *l.ignore2targets.get("rust/target/ignoreme.txt").unwrap(),
-            vec!["rust/target"]
+            *l.ignore2targets.get("target4/target5/ignore.txt").unwrap(),
+            vec!["target4/target5"]
         );
     }
 
