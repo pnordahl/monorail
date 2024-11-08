@@ -1,6 +1,14 @@
 # Change Log
 
-## [3.2.1] - 2024-11-02
+## [3.3.0] - 2024-11-08
+
+### Changed
+
+- Omit `code`, `stdout_path`, `stderr_path`, and `runtime_secs` fields if null in serialized run results structure
+- Adjusted run results structure to reduce duplication and improve logical grouping
+- The `invocation_args` field in the run results structure is now `invocation`
+
+## [3.2.1] - 2024-11-08
 
 ### Added
 

@@ -57,12 +57,16 @@ impl CommandRunResult {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct TargetRunResult {
     target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stdout_path: Option<path::PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stderr_path: Option<path::PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
-    runtime_secs: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_secs: Option<f32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -259,7 +263,7 @@ fn get_run_data_groups<'a>(
                     stdout_path: Some(logs.stdout_path.to_owned()),
                     stderr_path: Some(logs.stderr_path.to_owned()),
                     error: None,
-                    runtime_secs: 0.0,
+                    runtime_secs: None,
                 });
                 let target_index = index
                     .dag
@@ -556,7 +560,7 @@ fn create_aborted_unknowns_result(command: &str, run_data: &[RunData]) -> Comman
             stdout_path: None,
             stderr_path: None,
             error: Some("command task cancelled".to_string()),
-            runtime_secs: 0.0,
+            runtime_secs: None,
         });
     }
     CommandRunResult {
@@ -588,7 +592,7 @@ async fn process_task_results(
                             stdout_path: Some(rd.logs.stdout_path.to_owned()),
                             stderr_path: Some(rd.logs.stderr_path.to_owned()),
                             error: None,
-                            runtime_secs: info.elapsed.as_secs_f32(),
+                            runtime_secs: Some(info.elapsed.as_secs_f32()),
                         };
                         if info.status.success() {
                             info!(
@@ -640,7 +644,7 @@ async fn process_task_results(
                             stdout_path: Some(rd.logs.stdout_path.to_owned()),
                             stderr_path: Some(rd.logs.stderr_path.to_owned()),
                             error: Some(message),
-                            runtime_secs: info.elapsed.as_secs_f32(),
+                            runtime_secs: Some(info.elapsed.as_secs_f32()),
                         });
                     }
                 }
@@ -664,7 +668,7 @@ async fn process_task_results(
                         stdout_path: None,
                         stderr_path: None,
                         error: Some("command task cancelled".to_string()),
-                        runtime_secs: 0.0,
+                        runtime_secs: None,
                     })
                 }
             }
@@ -734,7 +738,7 @@ async fn schedule_task(
                 stdout_path: None,
                 stderr_path: None,
                 error: Some("command not executable".to_string()),
-                runtime_secs: 0.0,
+                runtime_secs: None,
             });
         }
     } else {
@@ -750,7 +754,7 @@ async fn schedule_task(
             stdout_path: None,
             stderr_path: None,
             error: Some("command not found".to_string()),
-            runtime_secs: 0.0,
+            runtime_secs: None,
         };
         if fail_on_undefined {
             crr.failures.push(trr);
@@ -1199,7 +1203,7 @@ mod tests {
                         stdout_path: Some(log_dir.join("stdout_target1.log")),
                         stderr_path: Some(log_dir.join("stderr_target1.log")),
                         error: None,
-                        runtime_secs: 12.3,
+                        runtime_secs: Some(12.3),
                     }],
                     failures: vec![],
                     unknowns: vec![],
@@ -1213,7 +1217,7 @@ mod tests {
                         stdout_path: Some(log_dir.join("stdout_target2.log")),
                         stderr_path: Some(log_dir.join("stderr_target2.log")),
                         error: Some("Compilation error".to_string()),
-                        runtime_secs: 5.5,
+                        runtime_secs: Some(5.5),
                     }],
                     unknowns: vec![],
                 },
