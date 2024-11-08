@@ -1,4 +1,4 @@
-use std::{path, sync, thread, time};
+use std::{fs, io, path, sync, thread, time};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -23,6 +23,9 @@ pub(crate) struct HandleRunInput<'a> {
     pub(crate) commands: Vec<&'a String>,
     pub(crate) sequences: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
+    pub(crate) args: Vec<&'a String>,
+    pub(crate) arg_map: Option<&'a String>,
+    pub(crate) arg_map_file: Option<&'a String>,
     pub(crate) include_deps: bool,
     pub(crate) fail_on_undefined: bool,
 }
@@ -62,6 +65,70 @@ pub(crate) struct TargetRunResult {
     runtime_secs: f32,
 }
 
+#[derive(Deserialize, Default)]
+struct ArgMap {
+    table: HashMap<String, HashMap<String, Vec<String>>>,
+}
+impl ArgMap {
+    fn new(input: &HandleRunInput<'_>) -> Result<Self, MonorailError> {
+        if !input.args.is_empty() {
+            if input.commands.len() != 1 {
+                return Err(MonorailError::from(
+                    "When providing --arg, only one command may be specified",
+                ));
+            }
+            if input.targets.len() != 1 {
+                return Err(MonorailError::from(
+                    "When providing --arg, only one target may be specified",
+                ));
+            }
+            Ok(Self {
+                table: HashMap::from([(
+                    input
+                        .targets
+                        .iter()
+                        .next()
+                        .ok_or(MonorailError::from("Could not extract target"))?
+                        .to_string(),
+                    HashMap::from([(
+                        input.commands[0].to_string(),
+                        input.args.iter().map(|s| s.to_string()).collect(),
+                    )]),
+                )]),
+            })
+        } else if let Some(am) = input.arg_map {
+            let table: HashMap<String, HashMap<String, Vec<String>>> = serde_json::from_str(am)
+                .map_err(|e| {
+                    MonorailError::Generic(format!("Inline arg map contains invalid JSON; {}", e))
+                })?;
+            Ok(Self { table })
+        } else if let Some(amf) = input.arg_map_file {
+            let p = path::Path::new(amf);
+            let f = fs::File::open(p).map_err(MonorailError::from)?;
+            let br = io::BufReader::new(f);
+            let table: HashMap<String, HashMap<String, Vec<String>>> = serde_json::from_reader(br)
+                .map_err(|e| {
+                    MonorailError::Generic(format!(
+                        "File arg map at {} contains invalid JSON; {}",
+                        p.display(),
+                        e
+                    ))
+                })?;
+            Ok(Self { table })
+        } else {
+            Ok(Default::default())
+        }
+    }
+    fn get_args<'a>(&'a self, target: &'a str, command: &'a str) -> Option<&'a [String]> {
+        if let Some(cmd_map) = &self.table.get(target) {
+            if let Some(args) = &cmd_map.get(command) {
+                return Some(args);
+            }
+        }
+        None
+    }
+}
+
 #[instrument]
 pub(crate) async fn handle_run<'a>(
     cfg: &'a core::Config,
@@ -76,6 +143,7 @@ pub(crate) async fn handle_run<'a>(
     let mut tracking_run = get_next_tracking_run(cfg, &tracking_table)?;
     let log_dir = setup_log_dir(cfg, tracking_run.id, work_path)?;
     let commands = get_all_commands(cfg, &input.commands, &input.sequences)?;
+    let arg_map = ArgMap::new(input)?;
 
     let (index, target_groups) = match input.targets.len() {
         0 => {
@@ -129,6 +197,7 @@ pub(crate) async fn handle_run<'a>(
         &target_groups,
         work_path,
         &log_dir,
+        &arg_map,
     )?;
     let run_output = run_internal(
         cfg,
@@ -172,17 +241,18 @@ fn get_run_data_groups<'a>(
     target_groups: &[Vec<String>],
     work_path: &path::Path,
     log_dir: &path::Path,
+    arg_map: &ArgMap,
 ) -> Result<RunDataGroups, MonorailError> {
     // for converting potentially deep nested paths into a single directory string
     let mut path_hasher = sha2::Sha256::new();
 
     let mut groups = Vec::with_capacity(target_groups.len());
-    for (i, c) in commands.iter().enumerate() {
+    for (i, cmd) in commands.iter().enumerate() {
         for group in target_groups {
             let mut run_data = Vec::with_capacity(group.len());
             let mut unknowns = Vec::with_capacity(group.len());
             for target_path in group {
-                let logs = Logs::new(log_dir, c.as_str(), target_path, &mut path_hasher)?;
+                let logs = Logs::new(log_dir, cmd.as_str(), target_path, &mut path_hasher)?;
                 unknowns.push(TargetRunResult {
                     target: target_path.to_owned(),
                     code: None,
@@ -199,16 +269,16 @@ fn get_run_data_groups<'a>(
                     .ok_or(MonorailError::DependencyGraph(
                         GraphError::LabelNodeNotFound(target_path.to_owned()),
                     ))?;
-                let target = targets
+                let tar = targets
                     .get(target_index)
                     .ok_or(MonorailError::from("Target not found"))?;
-                let commands_path = work_path.join(target_path).join(&target.commands.path);
+                let commands_path = work_path.join(target_path).join(&tar.commands.path);
                 let mut command_args = None;
-                let command_path = match &target.commands.definitions {
-                    Some(definitions) => match definitions.get(c.as_str()) {
+                let command_path = match &tar.commands.definitions {
+                    Some(definitions) => match definitions.get(cmd.as_str()) {
                         Some(def) => {
                             let app_target_command = target::AppTargetCommand::new(
-                                c,
+                                cmd,
                                 Some(def),
                                 &commands_path,
                                 work_path,
@@ -230,10 +300,19 @@ fn get_run_data_groups<'a>(
                             command_args = app_target_command.args;
                             app_target_command.path
                         }
-                        None => file::find_file_by_stem(c, &commands_path),
+                        None => file::find_file_by_stem(cmd, &commands_path),
                     },
-                    None => file::find_file_by_stem(c, &commands_path),
+                    None => file::find_file_by_stem(cmd, &commands_path),
                 };
+                // now, append any runtime args to existing config args, if present
+                let arg_map_args = arg_map.get_args(&tar.path, cmd);
+                if let Some(ref mut args) = command_args {
+                    if let Some(am_args) = arg_map_args {
+                        args.extend_from_slice(am_args);
+                    }
+                } else if let Some(am_args) = arg_map_args {
+                    command_args = Some(am_args.to_owned());
+                }
                 run_data.push(RunData {
                     target_path: target_path.to_owned(),
                     command_work_path: work_path.join(target_path),
@@ -844,6 +923,166 @@ mod tests {
     use tempfile::tempdir;
     use zstd::stream::read::Decoder;
 
+    fn setup_handle_run_input<'a>(
+        commands: Vec<&'a String>,
+        targets: HashSet<&'a String>,
+        args: Vec<&'a String>,
+        arg_map: Option<&'a String>,
+        arg_map_file: Option<&'a String>,
+    ) -> HandleRunInput<'a> {
+        HandleRunInput {
+            git_opts: git::GitOptions::default(),
+            commands,
+            sequences: vec![],
+            targets,
+            args,
+            arg_map,
+            arg_map_file,
+            include_deps: false,
+            fail_on_undefined: false,
+        }
+    }
+
+    const ARG_MAP_JSON: &str = r#"{
+      "rust/crate1": {
+        "build": [
+          "--release"
+        ]
+      }
+    }"#;
+
+    #[test]
+    fn test_arg_map_single_command_target() {
+        let command = "build".to_string();
+        let target = "rust/crate1".to_string();
+        let arg1 = "--release".to_string();
+
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target]),
+            vec![&arg1],
+            None,
+            None,
+        );
+
+        let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
+        let args = arg_map
+            .get_args("rust/crate1", "build")
+            .expect("Args not found");
+
+        assert_eq!(args, &vec!["--release".to_string()]);
+    }
+
+    #[test]
+    fn test_arg_map_args_multiple_commands_error() {
+        let command1 = "build".to_string();
+        let command2 = "test".to_string();
+        let target = "rust/crate1".to_string();
+        let arg = "--release".to_string();
+
+        let input = setup_handle_run_input(
+            vec![&command1, &command2],
+            HashSet::from([&target]),
+            vec![&arg],
+            None,
+            None,
+        );
+
+        let result = ArgMap::new(&input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_arg_map_args_multiple_targets_error() {
+        let command = "build".to_string();
+        let target1 = "rust/crate1".to_string();
+        let target2 = "rust/crate2".to_string();
+        let arg = "--release".to_string();
+
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target1, &target2]),
+            vec![&arg],
+            None,
+            None,
+        );
+
+        let result = ArgMap::new(&input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_arg_map_valid_inline_json() {
+        let json = ARG_MAP_JSON.to_string();
+        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], Some(&json), None);
+
+        let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
+        let args = arg_map
+            .get_args("rust/crate1", "build")
+            .expect("Args not found");
+
+        assert_eq!(args, &vec!["--release".to_string()]);
+    }
+
+    #[test]
+    fn test_arg_map_invalid_inline_json() {
+        let invalid_json = r#"{lkjsdf"#.to_string();
+        let input =
+            setup_handle_run_input(vec![], HashSet::new(), vec![], Some(&invalid_json), None);
+
+        let result = ArgMap::new(&input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_arg_map_valid_file() {
+        let td = tempdir().unwrap();
+        let command = "build".to_string();
+        let target = "rust/crate1".to_string();
+
+        let path = td.path().join("test_arg_map.json");
+        std::fs::write(&path, ARG_MAP_JSON).expect("Failed to write test file");
+        let path_str = path.display().to_string();
+
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target]),
+            vec![],
+            None,
+            Some(&path_str),
+        );
+        let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
+
+        let args = arg_map
+            .get_args("rust/crate1", "build")
+            .expect("Args not found");
+        assert_eq!(args, &vec!["--release".to_string()]);
+    }
+
+    #[test]
+    fn test_arg_map_invalid_file() {
+        let td = tempdir().unwrap();
+        let path = td.path().join("invalid_arg_map.json");
+        std::fs::write(&path, r#"{lksjdfklj"#).expect("Failed to write test file");
+        let path_str = path.display().to_string();
+
+        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], None, Some(&path_str));
+        let result = ArgMap::new(&input);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_arg_map_get_args_nonexistent() {
+        let json = ARG_MAP_JSON.to_string();
+        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], Some(&json), None);
+
+        let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
+        let args = arg_map.get_args("nonexistent_target", "nonexistent_command");
+
+        assert!(args.is_none());
+    }
+
     async fn prep_process_run_data_groups_test(
         cfg: &core::Config,
         work_path: &path::Path,
@@ -852,6 +1091,9 @@ mod tests {
     ) -> RunDataGroups {
         let index = core::Index::new(cfg, &cfg.get_target_path_set(), work_path).unwrap();
         let log_dir = work_path.join("log_dir");
+        let arg_map: ArgMap = ArgMap {
+            table: HashMap::new(),
+        };
 
         get_run_data_groups(
             &index,
@@ -860,6 +1102,7 @@ mod tests {
             target_groups,
             work_path,
             &log_dir,
+            &arg_map,
         )
         .unwrap()
     }
@@ -879,27 +1122,28 @@ mod tests {
         assert!(res.is_ok(), "Expected no error from processing groups");
 
         let rdg1 = &run_data_groups.groups[0];
-        assert_eq!(*commands[rdg1.command_index], cmd1);
+        assert_eq!(commands[rdg1.command_index], &cmd1);
 
         let rd1 = &rdg1.datas[0];
 
         let (results, cancelled) = res.unwrap();
         assert!(!cancelled);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].command, cmd1);
-        assert_eq!(results[0].successes.len(), 1);
-        assert_eq!(results[0].failures.len(), 0);
-        assert_eq!(results[0].unknowns.len(), 0);
         assert_eq!(
-            results[0].successes[0],
-            TargetRunResult {
-                target: rd1.target_path.clone(),
-                code: Some(0),
-                stdout_path: Some(rd1.logs.stdout_path.clone()),
-                stderr_path: Some(rd1.logs.stderr_path.clone()),
-                error: None,
-                runtime_secs: results[0].successes[0].runtime_secs
-            }
+            results,
+            vec![CommandRunResult {
+                command: cmd1,
+                successes: vec![TargetRunResult {
+                    target: rd1.target_path.clone(),
+                    code: Some(0),
+                    stdout_path: Some(rd1.logs.stdout_path.clone()),
+                    stderr_path: Some(rd1.logs.stderr_path.clone()),
+                    error: None,
+                    runtime_secs: results[0].successes[0].runtime_secs
+                }],
+                failures: vec![],
+                unknowns: vec![]
+            }]
         );
     }
 
@@ -913,6 +1157,9 @@ mod tests {
         let commands = vec![&cmd1];
         let target_groups = vec![vec!["target1".to_string()]];
         let log_dir = work_path.join("log_dir");
+        let arg_map: ArgMap = ArgMap {
+            table: HashMap::new(),
+        };
 
         let result = get_run_data_groups(
             &index,
@@ -921,6 +1168,7 @@ mod tests {
             &target_groups,
             work_path,
             &log_dir,
+            &arg_map,
         );
         assert!(result.is_ok(), "get_run_data_groups returned an error");
 

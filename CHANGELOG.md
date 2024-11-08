@@ -1,5 +1,19 @@
 # Change Log
 
+## [3.2.1] - 2024-11-02
+
+### Added
+
+- `--arg`, `--arg-map`, and `--arg-map-file` arguments to `monorail run` for providing runtime arguments to commands
+
+### Changed
+
+- `--fail-on-undefined` now always defaults to `false`, instead of `true` when one or more targets is supplied to `monorail run`
+
+### Fixed
+
+- Improved error clarity for configuration file-related issues
+
 ## [3.2.0] - 2024-11-02
 
 ### Changed

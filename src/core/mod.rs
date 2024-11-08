@@ -83,10 +83,35 @@ pub(crate) struct Config {
 }
 impl Config {
     pub(crate) fn new(file_path: &path::Path) -> Result<Config, MonorailError> {
-        let file = File::open(file_path)?;
+        let file = File::open(file_path).map_err(|e| {
+            MonorailError::Generic(format!(
+                "Could not open configuration file at {}; {}",
+                file_path.display(),
+                e
+            ))
+        })?;
         let mut buf_reader = BufReader::new(file);
-        let buf = buf_reader.fill_buf()?;
-        Ok(serde_json::from_str(std::str::from_utf8(buf)?)?)
+        let buf = buf_reader.fill_buf().map_err(|e| {
+            MonorailError::Generic(format!(
+                "Could not read configuration file data at {}; {}",
+                file_path.display(),
+                e
+            ))
+        })?;
+        serde_json::from_str(std::str::from_utf8(buf).map_err(|e| {
+            MonorailError::Generic(format!(
+                "Configuration file at {} contains invalid UTF-8; {}",
+                file_path.display(),
+                e
+            ))
+        })?)
+        .map_err(|e| {
+            MonorailError::Generic(format!(
+                "Configuration file at {} contains invalid JSON; {}",
+                file_path.display(),
+                e
+            ))
+        })
     }
     pub(crate) fn get_target_path_set(&self) -> HashSet<&String> {
         let mut o = HashSet::new();
