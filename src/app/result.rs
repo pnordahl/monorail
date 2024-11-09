@@ -18,10 +18,10 @@ pub(crate) fn result_show<'a>(
     let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
     // use run to get results.json file in id dir
     let run = tracking_table.open_run()?;
-    let log_dir = cfg.get_log_path(work_path).join(format!("{}", run.id));
+    let run_dir = cfg.get_run_path(work_path).join(format!("{}", run.id));
     let run_output_file = std::fs::OpenOptions::new()
         .read(true)
-        .open(log_dir.join(RESULT_OUTPUT_FILE_NAME))
+        .open(run_dir.join(RESULT_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let br = std::io::BufReader::new(run_output_file);
     let mut decoder = zstd::stream::read::Decoder::new(br)?;

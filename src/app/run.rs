@@ -31,9 +31,39 @@ pub(crate) struct HandleRunInput<'a> {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub(crate) struct OutRunFiles {
+    stdout: String,
+    stderr: String,
+}
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub(crate) struct OutRun {
+    path: String,
+    files: OutRunFiles,
+    targets: HashMap<String, String>,
+}
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub(crate) struct Out {
+    run: OutRun,
+}
+impl Out {
+    fn new(run_path: &path::Path) -> Self {
+        Self {
+            run: OutRun {
+                path: run_path.display().to_string(),
+                files: OutRunFiles {
+                    stdout: "stdout.zst".to_string(),
+                    stderr: "stderr.zst".to_string(),
+                },
+                targets: HashMap::new(),
+            },
+        }
+    }
+}
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct RunOutput {
     pub(crate) failed: bool,
-    invocation_args: String,
+    invocation: String,
+    out: Out,
     results: Vec<CommandRunResult>,
 }
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -59,10 +89,6 @@ pub(crate) struct TargetRunResult {
     target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stdout_path: Option<path::PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stderr_path: Option<path::PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,7 +163,7 @@ impl ArgMap {
 pub(crate) async fn handle_run<'a>(
     cfg: &'a core::Config,
     input: &'a HandleRunInput<'a>,
-    invocation_args: &'a str,
+    invocation: &'a str,
     work_path: &'a path::Path,
 ) -> Result<RunOutput, MonorailError> {
     let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
@@ -145,7 +171,7 @@ pub(crate) async fn handle_run<'a>(
         return Err(MonorailError::from("No configured targets"));
     }
     let mut tracking_run = get_next_tracking_run(cfg, &tracking_table)?;
-    let log_dir = setup_log_dir(cfg, tracking_run.id, work_path)?;
+    let run_path = setup_run_path(cfg, tracking_run.id, work_path)?;
     let commands = get_all_commands(cfg, &input.commands, &input.sequences)?;
     let arg_map = ArgMap::new(input)?;
 
@@ -200,16 +226,16 @@ pub(crate) async fn handle_run<'a>(
         &cfg.targets,
         &target_groups,
         work_path,
-        &log_dir,
+        &run_path,
         &arg_map,
     )?;
     let run_output = run_internal(
         cfg,
-        &run_data_groups,
+        run_data_groups,
         &commands,
-        &log_dir,
+        &run_path,
         input.fail_on_undefined,
-        invocation_args,
+        invocation,
     )
     .await?;
 
@@ -235,6 +261,7 @@ struct RunDataGroup {
 #[derive(Debug, Serialize)]
 struct RunDataGroups {
     groups: Vec<RunDataGroup>,
+    out: Out,
 }
 
 // Builds the RunData for each target group that will be used when spawning tasks.
@@ -244,11 +271,13 @@ fn get_run_data_groups<'a>(
     targets: &[Target],
     target_groups: &[Vec<String>],
     work_path: &path::Path,
-    log_dir: &path::Path,
+    run_path: &path::Path,
     arg_map: &ArgMap,
 ) -> Result<RunDataGroups, MonorailError> {
+    let mut out = Out::new(run_path);
+
     // for converting potentially deep nested paths into a single directory string
-    let mut path_hasher = sha2::Sha256::new();
+    let mut hasher = sha2::Sha256::new();
 
     let mut groups = Vec::with_capacity(target_groups.len());
     for (i, cmd) in commands.iter().enumerate() {
@@ -256,12 +285,15 @@ fn get_run_data_groups<'a>(
             let mut run_data = Vec::with_capacity(group.len());
             let mut unknowns = Vec::with_capacity(group.len());
             for target_path in group {
-                let logs = Logs::new(log_dir, cmd.as_str(), target_path, &mut path_hasher)?;
+                hasher.update(target_path);
+                let target_hash = format!("{:x}", hasher.finalize_reset());
+                out.run
+                    .targets
+                    .insert(target_path.to_string(), target_hash.clone());
+                let logs = Logs::new(run_path, cmd.as_str(), &target_hash)?;
                 unknowns.push(TargetRunResult {
                     target: target_path.to_owned(),
                     code: None,
-                    stdout_path: Some(logs.stdout_path.to_owned()),
-                    stderr_path: Some(logs.stderr_path.to_owned()),
                     error: None,
                     runtime_secs: None,
                 });
@@ -332,7 +364,7 @@ fn get_run_data_groups<'a>(
         }
     }
 
-    Ok(RunDataGroups { groups })
+    Ok(RunDataGroups { groups, out })
 }
 
 pub(crate) fn spawn_task(
@@ -495,16 +527,16 @@ fn get_next_tracking_run(
 }
 
 #[instrument]
-fn setup_log_dir(
+fn setup_run_path(
     cfg: &core::Config,
     run_id: usize,
     work_path: &path::Path,
 ) -> Result<path::PathBuf, MonorailError> {
-    let log_dir = cfg.get_log_path(work_path).join(format!("{}", run_id));
-    // remove the log_dir path if it exists, and create a new one
-    std::fs::remove_dir_all(&log_dir).unwrap_or(());
-    std::fs::create_dir_all(&log_dir)?;
-    Ok(log_dir)
+    let run_path = cfg.get_run_path(work_path).join(format!("{}", run_id));
+    // remove the run_path path if it exists, and create a new one
+    std::fs::remove_dir_all(&run_path).unwrap_or(());
+    std::fs::create_dir_all(&run_path)?;
+    Ok(run_path)
 }
 
 // Expands sequences into commands and appends any explicit commands.
@@ -557,8 +589,6 @@ fn create_aborted_unknowns_result(command: &str, run_data: &[RunData]) -> Comman
         unknowns.push(TargetRunResult {
             target,
             code: None,
-            stdout_path: None,
-            stderr_path: None,
             error: Some("command task cancelled".to_string()),
             runtime_secs: None,
         });
@@ -589,8 +619,6 @@ async fn process_task_results(
                         let mut trr = TargetRunResult {
                             target: rd.target_path.to_owned(),
                             code: info.status.code(),
-                            stdout_path: Some(rd.logs.stdout_path.to_owned()),
-                            stderr_path: Some(rd.logs.stderr_path.to_owned()),
                             error: None,
                             runtime_secs: Some(info.elapsed.as_secs_f32()),
                         };
@@ -641,8 +669,6 @@ async fn process_task_results(
                         crr.failures.push(TargetRunResult {
                             target: rd.target_path.to_owned(),
                             code: None,
-                            stdout_path: Some(rd.logs.stdout_path.to_owned()),
-                            stderr_path: Some(rd.logs.stderr_path.to_owned()),
                             error: Some(message),
                             runtime_secs: Some(info.elapsed.as_secs_f32()),
                         });
@@ -665,8 +691,6 @@ async fn process_task_results(
                     crr.unknowns.push(TargetRunResult {
                         target: rd.target_path.to_owned(),
                         code: None,
-                        stdout_path: None,
-                        stderr_path: None,
                         error: Some("command task cancelled".to_string()),
                         runtime_secs: None,
                     })
@@ -735,8 +759,6 @@ async fn schedule_task(
             crr.unknowns.push(TargetRunResult {
                 target: task.target.to_string(),
                 code: None,
-                stdout_path: None,
-                stderr_path: None,
                 error: Some("command not executable".to_string()),
                 runtime_secs: None,
             });
@@ -751,8 +773,6 @@ async fn schedule_task(
         let trr = TargetRunResult {
             target: task.target.to_string(),
             code: None,
-            stdout_path: None,
-            stderr_path: None,
             error: Some("command not found".to_string()),
             runtime_secs: None,
         };
@@ -792,7 +812,6 @@ async fn process_run_data_groups(
             ));
             continue;
         }
-
         let mut crr = CommandRunResult::new(command);
 
         let mut js = tokio::task::JoinSet::new();
@@ -857,35 +876,36 @@ async fn process_run_data_groups(
 #[instrument]
 async fn run_internal<'a>(
     cfg: &'a core::Config,
-    run_data_groups: &'a RunDataGroups,
+    run_data_groups: RunDataGroups,
     commands: &'a [&'a String],
-    log_dir: &path::Path,
+    run_path: &path::Path,
     fail_on_undefined: bool,
-    invocation_args: &'a str,
+    invocation: &'a str,
 ) -> Result<RunOutput, MonorailError> {
     info!(num = run_data_groups.groups.len(), "processing groups");
 
     let (results, failed) =
-        process_run_data_groups(cfg, run_data_groups, commands, fail_on_undefined).await?;
+        process_run_data_groups(cfg, &run_data_groups, commands, fail_on_undefined).await?;
 
     let o = RunOutput {
         failed,
-        invocation_args: invocation_args.to_owned(),
+        invocation: invocation.to_owned(),
         results,
+        out: run_data_groups.out,
     };
 
-    store_run_output(&o, log_dir)?;
+    store_run_output(&o, run_path)?;
 
     Ok(o)
 }
 
 // Serialize and store the compressed results of the given RunOutput.
-fn store_run_output(run_output: &RunOutput, log_dir: &path::Path) -> Result<(), MonorailError> {
+fn store_run_output(run_output: &RunOutput, run_path: &path::Path) -> Result<(), MonorailError> {
     let run_result_file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(log_dir.join(result::RESULT_OUTPUT_FILE_NAME))
+        .open(run_path.join(result::RESULT_OUTPUT_FILE_NAME))
         .map_err(|e| MonorailError::Generic(e.to_string()))?;
     let bw = BufWriter::new(run_result_file);
     let mut encoder = zstd::stream::write::Encoder::new(bw, 3)?;
@@ -900,16 +920,8 @@ pub(crate) struct Logs {
     stderr_path: path::PathBuf,
 }
 impl Logs {
-    fn new(
-        log_dir: &path::Path,
-        command: &str,
-        target_path: &str,
-        hasher: &mut sha2::Sha256,
-    ) -> Result<Self, MonorailError> {
-        hasher.update(target_path);
-        let dir_path = log_dir
-            .join(command)
-            .join(format!("{:x}", hasher.finalize_reset()));
+    fn new(run_path: &path::Path, command: &str, target_hash: &str) -> Result<Self, MonorailError> {
+        let dir_path = run_path.join(command).join(target_hash);
         std::fs::create_dir_all(&dir_path)?;
         Ok(Self {
             stdout_path: dir_path.clone().join(log::STDOUT_FILE),
@@ -1094,7 +1106,7 @@ mod tests {
         target_groups: &[Vec<String>],
     ) -> RunDataGroups {
         let index = core::Index::new(cfg, &cfg.get_target_path_set(), work_path).unwrap();
-        let log_dir = work_path.join("log_dir");
+        let run_path = work_path.join("run_path");
         let arg_map: ArgMap = ArgMap {
             table: HashMap::new(),
         };
@@ -1105,7 +1117,7 @@ mod tests {
             &cfg.targets,
             target_groups,
             work_path,
-            &log_dir,
+            &run_path,
             &arg_map,
         )
         .unwrap()
@@ -1140,8 +1152,6 @@ mod tests {
                 successes: vec![TargetRunResult {
                     target: rd1.target_path.clone(),
                     code: Some(0),
-                    stdout_path: Some(rd1.logs.stdout_path.clone()),
-                    stderr_path: Some(rd1.logs.stderr_path.clone()),
                     error: None,
                     runtime_secs: results[0].successes[0].runtime_secs
                 }],
@@ -1160,7 +1170,7 @@ mod tests {
         let cmd1 = "cmd4".to_string();
         let commands = vec![&cmd1];
         let target_groups = vec![vec!["target1".to_string()]];
-        let log_dir = work_path.join("log_dir");
+        let run_path = work_path.join("run_path");
         let arg_map: ArgMap = ArgMap {
             table: HashMap::new(),
         };
@@ -1171,7 +1181,7 @@ mod tests {
             &c.targets,
             &target_groups,
             work_path,
-            &log_dir,
+            &run_path,
             &arg_map,
         );
         assert!(result.is_ok(), "get_run_data_groups returned an error");
@@ -1189,19 +1199,18 @@ mod tests {
     #[test]
     fn test_store_run_output_success() {
         let temp_dir = tempdir().expect("Failed to create temp dir");
-        let log_dir = temp_dir.path();
+        let run_path = temp_dir.path();
 
         let run_output = RunOutput {
             failed: false,
-            invocation_args: "example args".to_string(),
+            invocation: "example args".to_string(),
+            out: Out::new(&run_path),
             results: vec![
                 CommandRunResult {
                     command: "build".to_string(),
                     successes: vec![TargetRunResult {
                         target: "target1".to_string(),
                         code: Some(0),
-                        stdout_path: Some(log_dir.join("stdout_target1.log")),
-                        stderr_path: Some(log_dir.join("stderr_target1.log")),
                         error: None,
                         runtime_secs: Some(12.3),
                     }],
@@ -1214,8 +1223,6 @@ mod tests {
                     failures: vec![TargetRunResult {
                         target: "target2".to_string(),
                         code: Some(1),
-                        stdout_path: Some(log_dir.join("stdout_target2.log")),
-                        stderr_path: Some(log_dir.join("stderr_target2.log")),
                         error: Some("Compilation error".to_string()),
                         runtime_secs: Some(5.5),
                     }],
@@ -1224,10 +1231,10 @@ mod tests {
             ],
         };
 
-        let result = store_run_output(&run_output, log_dir);
+        let result = store_run_output(&run_output, run_path);
         assert!(result.is_ok(), "store_run_output should succeed");
 
-        let result_file_path = log_dir.join(result::RESULT_OUTPUT_FILE_NAME);
+        let result_file_path = run_path.join(result::RESULT_OUTPUT_FILE_NAME);
         assert!(result_file_path.exists(), "Result file should be created");
 
         let compressed_file = File::open(&result_file_path).expect("Failed to open result file");
