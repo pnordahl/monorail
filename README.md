@@ -97,7 +97,7 @@ monorail config show | jq
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:12:56.287190+00:00",
+  "timestamp": "2024-11-10T10:32:21.846108+00:00",
   "output_dir": "monorail-out",
   "max_retained_runs": 10,
   "change_provider": {
@@ -122,7 +122,10 @@ monorail config show | jq
         "path": "monorail"
       }
     }
-  ]
+  ],
+  "log": {
+    "flush_interval_ms": 500
+  }
 }
 ```
 
@@ -135,9 +138,9 @@ monorail checkpoint update
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:12:56.287190+00:00",
+  "timestamp": "2024-11-10T10:32:29.961560+00:00",
   "checkpoint": {
-    "id": "df5dd3521af1f3d5cd1c4054e03e5573e2d24368",
+    "id": "4b5c5a4ce18a05b0175c1db6a14fb69bf1ca30d3",
     "pending": null
   }
 }
@@ -225,23 +228,33 @@ monorail run -c hello -t rust | jq
 
 ```json
 {
-  "timestamp": "2024-10-27T11:13:32.378921+00:00",
+  "timestamp": "2024-11-10T10:32:57.434933+00:00",
   "failed": false,
-  "invocation_args": "run -c hello -t rust",
+  "invocation": "run -c hello -t rust",
+  "out": {
+    "run": {
+      "path": "/private/tmp/monorail-tutorial/monorail-out/run/1",
+      "files": {
+        "stdout": "stdout.zst",
+        "stderr": "stderr.zst"
+      },
+      "targets": {
+        "rust": "521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3"
+      }
+    }
+  },
   "results": [
     {
       "command": "hello",
-      "successes": [
+      "target_groups": [
         {
-          "target": "rust",
-          "code": 0,
-          "stdout_path": "/tmp/monorail-tutorial/monorail-out/log/2/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst",
-          "stderr_path": "/tmp/monorail-tutorial/monorail-out/log/2/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst",
-          "runtime_secs": 0.001518792
+          "rust": {
+            "status": "success",
+            "code": 0,
+            "runtime_secs": 0.13038129
+          }
         }
-      ],
-      "failures": [],
-      "unknowns": []
+      ]
     }
   ]
 }
@@ -272,7 +285,7 @@ monorail analyze | jq
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:13:55.324761+00:00",
+  "timestamp": "2024-11-10T10:33:40.195249+00:00",
   "targets": [
     "proto",
     "python/app3",
@@ -287,7 +300,7 @@ monorail analyze --changes | jq
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:14:05.187894+00:00",
+  "timestamp": "2024-11-10T10:35:22.595337+00:00",
   "changes": ["... hundreds of entries ..."],
   "targets": [
     "proto",
@@ -380,7 +393,7 @@ monorail analyze --target-groups | jq
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:15:12.382101+00:00",
+  "timestamp": "2024-11-10T10:36:09.013839+00:00",
   "targets": [
     "python/app3",
     "rust"
@@ -420,7 +433,7 @@ monorail analyze --target-groups | jq
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:15:33.233479+00:00",
+  "timestamp": "2024-11-10T10:36:34.260394+00:00",
   "targets": [
     "proto",
     "python/app3",
@@ -455,41 +468,65 @@ monorail result show | jq
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:15:45.900643+00:00",
+  "timestamp": "2024-11-10T10:36:49.883069+00:00",
   "failed": false,
-  "invocation_args": "run -c hello -t rust",
+  "invocation": "run -c hello -t rust",
+  "out": {
+    "run": {
+      "path": "/private/tmp/monorail-tutorial/monorail-out/run/1",
+      "files": {
+        "result": "result.json.zst",
+        "stdout": "stdout.zst",
+        "stderr": "stderr.zst"
+      },
+      "targets": {
+        "rust": "521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3"
+      }
+    }
+  },
   "results": [
     {
       "command": "hello",
-      "successes": [
+      "target_groups": [
         {
-          "target": "rust",
-          "code": 0,
-          "stdout_path": "/tmp/monorail-tutorial/monorail-out/log/2/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst",
-          "stderr_path": "/tmp/monorail-tutorial/monorail-out/log/2/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst",
-          "runtime_secs": 0.001518792
+          "rust": {
+            "status": "success",
+            "code": 0,
+            "runtime_secs": 0.13038129
+          }
         }
-      ],
-      "failures": [],
-      "unknowns": []
+      ]
     }
   ]
 }
 ```
 
-Interpreting this result is straightforward. The run succeeded because `failed` is `false`, and various data about which commands and targets ran is provided. 
+This output contains information about the last run, such as if the run `failed`, various metadata about the location of artifacts on disk, and a breakdown by command how each target group's execution proceeded.
 
-The log files are available on disk to query, so if you prefer to use external tools you can do so (just note that you'll need `zstd` installed to decompress the archives):
+`monorail` provides APIs for accessing the logs and results of runs, but if you have a use case necessitating external tools you can process this structured output. For example, this extracts all of the log files for the last run and decompresses them with `zstd` (note that if you run this example, you'll need it installed):
 
 ```sh
-monorail result show | jq -r '.results[] | .failures + .successes + .unknowns | .[]  | .stderr_path,.stdout_path' | xargs -I {} zstd -dc {}
+monorail result show | jq -r '
+  .out as $out |
+  .results[] |
+  .command as $command |
+  .target_groups[] |
+  to_entries[] | 
+  (
+    [$out.run.path, $command, $out.run.targets[.key]] as $base_path |
+    {
+      stdout: ($base_path + [$out.run.files.stdout]) | join("/"),
+      stderr: ($base_path + [$out.run.files.stderr]) | join("/")
+    }
+  ) | .stdout, .stderr
+' | xargs -I {} zstd -dc {}
 ```
 ```
 An error message
 Hello, world!
 ```
 
-However, `monorail` provides a convenient API (which we already saw above) for doing so in a way that makes viewing multiple logs easier to read:
+However, as mentioned `monorail` provides a convenient API (which we already saw above) for doing so in a way that makes viewing multiple logs easier to read:
 
 ```sh
 monorail log show --stderr --stdout
@@ -538,13 +575,15 @@ monorail -v run -c hello -t rust
 ```
 As this command executes, you'll see internal progress due to the inclusion of the `-v` flag:
 
-```
-{"timestamp":"2024-10-27T11:16:33.827760+00:00","level":"INFO","message":"Connected to log stream server","address":"127.0.0.1:9201"}
-{"timestamp":"2024-10-27T11:16:33.829118+00:00","level":"INFO","message":"processing groups","num":1}
-{"timestamp":"2024-10-27T11:16:33.829131+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
-{"timestamp":"2024-10-27T11:16:33.829143+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
-{"timestamp":"2024-10-27T11:16:34.393215+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
-{"timestamp":"2024-10-27T11:16:34.394552+00:00","failed":false,"invocation_args":"-v run -c hello -t rust","results":[{"command":"hello","successes":[{"target":"rust","code":0,"stdout_path":"/tmp/monorail-tutorial/monorail-out/log/3/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst","stderr_path":"/tmp/monorail-tutorial/monorail-out/log/3/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst","runtime_secs":0.5639998}],"failures":[],"unknowns":[]}]}
+```json
+{"timestamp":"2024-11-10T11:16:48.802518+00:00","level":"INFO","message":"Connected to log stream server","address":"127.0.0.1:9201"}
+{"timestamp":"2024-11-10T11:16:48.801236+00:00","level":"INFO","message":"processing plan"}
+{"timestamp":"2024-11-10T11:16:48.802296+00:00","level":"INFO","message":"processing commands","num":1}
+{"timestamp":"2024-11-10T11:16:48.802605+00:00","level":"INFO","message":"processing target groups","num":1,"command":"hello"}
+{"timestamp":"2024-11-10T11:16:48.802646+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
+{"timestamp":"2024-11-10T11:16:48.802652+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
+{"timestamp":"2024-11-10T11:16:49.372712+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
+{"timestamp":"2024-11-10T11:16:49.373482+00:00","failed":false,"invocation":"-v run -c hello -t rust","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/3","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3"}}},"results":[{"command":"hello","target_groups":[{"rust":{"status":"success","code":0,"runtime_secs":0.57000625}}]}]
 ```
 
 ... as well as log statements from the command itself in your log tailing window:
@@ -645,7 +684,7 @@ monorail analyze --target-groups | jq
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:17:24.753641+00:00",
+  "timestamp": "2024-11-10T11:17:59.095431+00:00",
   "targets": [
     "proto",
     "python/app3",
@@ -673,17 +712,19 @@ We have already seen an example of explictly choosing target(s) to run commands 
 monorail -v run -c hello
 ```
 ```json
-{"timestamp":"2024-10-27T11:17:44.298254+00:00","level":"INFO","message":"Connected to log stream server","address":"127.0.0.1:9201"}
-{"timestamp":"2024-10-27T11:17:44.299285+00:00","level":"INFO","message":"processing groups","num":2}
-{"timestamp":"2024-10-27T11:17:44.299295+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
-{"timestamp":"2024-10-27T11:17:44.299304+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"proto"}
-{"timestamp":"2024-10-27T11:17:44.447297+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"proto"}
-{"timestamp":"2024-10-27T11:17:44.447637+00:00","level":"INFO","message":"processing targets","num":2,"command":"hello"}
-{"timestamp":"2024-10-27T11:17:44.447686+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
-{"timestamp":"2024-10-27T11:17:44.448154+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"python/app3"}
-{"timestamp":"2024-10-27T11:17:44.577691+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"python/app3"}
-{"timestamp":"2024-10-27T11:17:44.997866+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
-{"timestamp":"2024-10-27T11:17:44.999339+00:00","failed":false,"invocation_args":"-v run -c hello","results":[{"command":"hello","successes":[{"target":"proto","code":0,"stdout_path":"/tmp/monorail-tutorial/monorail-out/log/4/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stdout.zst","stderr_path":"/tmp/monorail-tutorial/monorail-out/log/4/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stderr.zst","runtime_secs":0.1479375}],"failures":[],"unknowns":[]},{"command":"hello","successes":[{"target":"python/app3","code":0,"stdout_path":"/tmp/monorail-tutorial/monorail-out/log/4/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stdout.zst","stderr_path":"/tmp/monorail-tutorial/monorail-out/log/4/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stderr.zst","runtime_secs":0.12952638},{"target":"rust","code":0,"stdout_path":"/tmp/monorail-tutorial/monorail-out/log/4/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst","stderr_path":"/tmp/monorail-tutorial/monorail-out/log/4/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst","runtime_secs":0.5501715}],"failures":[],"unknowns":[]}]}
+{"timestamp":"2024-11-10T11:21:10.118903+00:00","level":"INFO","message":"processing plan"}
+{"timestamp":"2024-11-10T11:21:10.119183+00:00","level":"INFO","message":"Connected to log stream server","address":"127.0.0.1:9201"}
+{"timestamp":"2024-11-10T11:21:10.119373+00:00","level":"INFO","message":"processing commands","num":1}
+{"timestamp":"2024-11-10T11:21:10.119383+00:00","level":"INFO","message":"processing target groups","num":2,"command":"hello"}
+{"timestamp":"2024-11-10T11:21:10.119410+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
+{"timestamp":"2024-11-10T11:21:10.119419+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"proto"}
+{"timestamp":"2024-11-10T11:21:10.121374+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"proto"}
+{"timestamp":"2024-11-10T11:21:10.121587+00:00","level":"INFO","message":"processing targets","num":2,"command":"hello"}
+{"timestamp":"2024-11-10T11:21:10.121602+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
+{"timestamp":"2024-11-10T11:21:10.121846+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"python/app3"}
+{"timestamp":"2024-11-10T11:21:10.144093+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"python/app3"}
+{"timestamp":"2024-11-10T11:21:10.685876+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
+{"timestamp":"2024-11-10T11:21:10.687816+00:00","failed":false,"invocation":"-v run -c hello","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/6","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"python/app3":"585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7","proto":"1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6","rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3"}}},"results":[{"command":"hello","target_groups":[{"proto":{"status":"success","code":0,"runtime_secs":0.001930458}},{"python/app3":{"status":"success","code":0,"runtime_secs":0.02222046},"rust":{"status":"success","code":0,"runtime_secs":0.56421417}}]}]}
 ```
 
 In this sequence of events: the `hello` command is scheduled and executed to completion for `proto` prior to the same for `python/app3` and `rust`. This is because both of the latter depend on `proto`. A practical scenario where this is relevant is building protobuf files for use by both `python/app3` and `rust`. By encoding this dependency in `Monorail.json`, we have ensured that when protobuf files in `proto` change, we have definitely compiled them by the time we execute commands for `python/app3` and `rust`.
@@ -694,25 +735,28 @@ You can also execute multiple commands. Each command in `-t <command1> <command2
 monorail -v run -c hello build
 ```
 ```json
-{"timestamp":"2024-10-27T11:18:04.689+00:00","level":"INFO","message":"Connected to log stream server","address":"127.0.0.1:9201"}
-{"timestamp":"2024-10-27T11:18:04.690384+00:00","level":"INFO","message":"processing groups","num":4}
-{"timestamp":"2024-10-27T11:18:04.690400+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
-{"timestamp":"2024-10-27T11:18:04.690408+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"proto"}
-{"timestamp":"2024-10-27T11:18:04.692275+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"proto"}
-{"timestamp":"2024-10-27T11:18:04.692456+00:00","level":"INFO","message":"processing targets","num":2,"command":"hello"}
-{"timestamp":"2024-10-27T11:18:04.692474+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
-{"timestamp":"2024-10-27T11:18:04.692706+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"python/app3"}
-{"timestamp":"2024-10-27T11:18:04.715289+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"python/app3"}
-{"timestamp":"2024-10-27T11:18:05.247114+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
-{"timestamp":"2024-10-27T11:18:05.248133+00:00","level":"INFO","message":"processing targets","num":1,"command":"build"}
-{"timestamp":"2024-10-27T11:18:05.248190+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"proto"}
-{"timestamp":"2024-10-27T11:18:05.248986+00:00","level":"INFO","message":"processing targets","num":2,"command":"build"}
-{"timestamp":"2024-10-27T11:18:05.249005+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"rust"}
-{"timestamp":"2024-10-27T11:18:05.249013+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"python/app3"}
-{"timestamp":"2024-10-27T11:18:05.250504+00:00","failed":false,"invocation_args":"-v run -c hello build","results":[{"command":"hello","successes":[{"target":"proto","code":0,"stdout_path":"/tmp/monorail-tutorial/monorail-out/log/5/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stdout.zst","stderr_path":"/tmp/monorail-tutorial/monorail-out/log/5/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stderr.zst","runtime_secs":0.001844916}],"failures":[],"unknowns":[]},{"command":"hello","successes":[{"target":"python/app3","code":0,"stdout_path":"/tmp/monorail-tutorial/monorail-out/log/5/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stdout.zst","stderr_path":"/tmp/monorail-tutorial/monorail-out/log/5/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stderr.zst","runtime_secs":0.022576958},{"target":"rust","code":0,"stdout_path":"/tmp/monorail-tutorial/monorail-out/log/5/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst","stderr_path":"/tmp/monorail-tutorial/monorail-out/log/5/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst","runtime_secs":0.5545724}],"failures":[],"unknowns":[]},{"command":"build","successes":[],"failures":[],"unknowns":[{"target":"proto","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0}]},{"command":"build","successes":[],"failures":[],"unknowns":[{"target":"rust","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0},{"target":"python/app3","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0}]}]}
+{"timestamp":"2024-11-10T11:21:40.781055+00:00","level":"INFO","message":"processing plan"}
+{"timestamp":"2024-11-10T11:21:40.781333+00:00","level":"INFO","message":"Connected to log stream server","address":"127.0.0.1:9201"}
+{"timestamp":"2024-11-10T11:21:40.781496+00:00","level":"INFO","message":"processing commands","num":2}
+{"timestamp":"2024-11-10T11:21:40.781502+00:00","level":"INFO","message":"processing target groups","num":2,"command":"hello"}
+{"timestamp":"2024-11-10T11:21:40.781529+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
+{"timestamp":"2024-11-10T11:21:40.781542+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"proto"}
+{"timestamp":"2024-11-10T11:21:40.783250+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"proto"}
+{"timestamp":"2024-11-10T11:21:40.783462+00:00","level":"INFO","message":"processing targets","num":2,"command":"hello"}
+{"timestamp":"2024-11-10T11:21:40.783472+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
+{"timestamp":"2024-11-10T11:21:40.783680+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"python/app3"}
+{"timestamp":"2024-11-10T11:21:40.805540+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"python/app3"}
+{"timestamp":"2024-11-10T11:21:41.343898+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
+{"timestamp":"2024-11-10T11:21:41.344924+00:00","level":"INFO","message":"processing target groups","num":2,"command":"build"}
+{"timestamp":"2024-11-10T11:21:41.345047+00:00","level":"INFO","message":"processing targets","num":1,"command":"build"}
+{"timestamp":"2024-11-10T11:21:41.345066+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"proto"}
+{"timestamp":"2024-11-10T11:21:41.345703+00:00","level":"INFO","message":"processing targets","num":2,"command":"build"}
+{"timestamp":"2024-11-10T11:21:41.345719+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"rust"}
+{"timestamp":"2024-11-10T11:21:41.345729+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"python/app3"}
+{"timestamp":"2024-11-10T11:21:41.347199+00:00","failed":false,"invocation":"-v run -c hello build","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/7","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3","python/app3":"585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7","proto":"1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6"}}},"results":[{"command":"hello","target_groups":[{"proto":{"status":"success","code":0,"runtime_secs":0.001693833}},{"python/app3":{"status":"success","code":0,"runtime_secs":0.02183325},"rust":{"status":"success","code":0,"runtime_secs":0.5603645}}]},{"command":"build","target_groups":[{"proto":{"status":"undefined"}},{"python/app3":{"status":"undefined"},"rust":{"status":"undefined"}}]}]}
 ```
 
-You might notice the exit code of 0 and `"failed":false`, and that's because by default it is not required for a target to define a command. You can override this behavior with `--fail-on-undefined`, but in general this allows targets to define only the commands they need and eliminates the need for "stubs" that may never be implemented. One exception to this is when providing a list of targets to `run`, where `--fail-on-undefined` defaults to true. The reason for this is that when executing a command directly for targets, one expects that command to exist.
+You might notice the exit code of 0 and `"failed":false`, and that's because by default it is not required for a target to define a command. You can override this behavior with `--fail-on-undefined`, but in general this allows targets to define only the commands they need and eliminates the need for "stubs" that may never be implemented.
 
 ### Running multiple commands with sequences
 
@@ -735,21 +779,25 @@ Now run the sequence with `--sequences` or `-s`:
 monorail -v run -s dev
 ```
 ```json
-{"timestamp":"2024-11-01T11:13:03.550061+00:00","level":"INFO","message":"processing groups","num":4}
-{"timestamp":"2024-11-01T11:13:03.550115+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
-{"timestamp":"2024-11-01T11:13:03.550155+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"proto"}
-{"timestamp":"2024-11-01T11:13:03.552012+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"proto"}
-{"timestamp":"2024-11-01T11:13:03.554001+00:00","level":"INFO","message":"processing targets","num":2,"command":"hello"}
-{"timestamp":"2024-11-01T11:13:03.554036+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
-{"timestamp":"2024-11-01T11:13:03.554253+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"python/app3"}
-{"timestamp":"2024-11-01T11:13:03.575991+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"python/app3"}
-{"timestamp":"2024-11-01T11:13:04.125682+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
-{"timestamp":"2024-11-01T11:13:04.126924+00:00","level":"INFO","message":"processing targets","num":1,"command":"build"}
-{"timestamp":"2024-11-01T11:13:04.127075+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"proto"}
-{"timestamp":"2024-11-01T11:13:04.127920+00:00","level":"INFO","message":"processing targets","num":2,"command":"build"}
-{"timestamp":"2024-11-01T11:13:04.127978+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"rust"}
-{"timestamp":"2024-11-01T11:13:04.128022+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"python/app3"}
-{"timestamp":"2024-11-01T11:13:04.129937+00:00","failed":false,"invocation_args":"-v run -s dev","results":[{"command":"hello","successes":[{"target":"proto","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6/stderr.zst","runtime_secs":0.001837875}],"failures":[],"unknowns":[]},{"command":"hello","successes":[{"target":"python/app3","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7/stderr.zst","runtime_secs":0.021706708},{"target":"rust","code":0,"stdout_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stdout.zst","stderr_path":"/Users/patrick/lab/junk/monorail-tutorial/monorail-out/run/5/hello/521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3/stderr.zst","runtime_secs":0.57150763}],"failures":[],"unknowns":[]},{"command":"build","successes":[],"failures":[],"unknowns":[{"target":"proto","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0}]},{"command":"build","successes":[],"failures":[],"unknowns":[{"target":"rust","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0},{"target":"python/app3","code":null,"stdout_path":null,"stderr_path":null,"error":"command not found","runtime_secs":0.0}]}]}
+{"timestamp":"2024-11-10T11:23:30.657032+00:00","level":"INFO","message":"processing plan"}
+{"timestamp":"2024-11-10T11:23:30.657324+00:00","level":"INFO","message":"Connected to log stream server","address":"127.0.0.1:9201"}
+{"timestamp":"2024-11-10T11:23:30.657508+00:00","level":"INFO","message":"processing commands","num":2}
+{"timestamp":"2024-11-10T11:23:30.657515+00:00","level":"INFO","message":"processing target groups","num":2,"command":"hello"}
+{"timestamp":"2024-11-10T11:23:30.657544+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
+{"timestamp":"2024-11-10T11:23:30.657554+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"proto"}
+{"timestamp":"2024-11-10T11:23:30.659575+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"proto"}
+{"timestamp":"2024-11-10T11:23:30.659799+00:00","level":"INFO","message":"processing targets","num":2,"command":"hello"}
+{"timestamp":"2024-11-10T11:23:30.659810+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
+{"timestamp":"2024-11-10T11:23:30.660046+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"python/app3"}
+{"timestamp":"2024-11-10T11:23:30.683126+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"python/app3"}
+{"timestamp":"2024-11-10T11:23:31.229140+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
+{"timestamp":"2024-11-10T11:23:31.230339+00:00","level":"INFO","message":"processing target groups","num":2,"command":"build"}
+{"timestamp":"2024-11-10T11:23:31.230440+00:00","level":"INFO","message":"processing targets","num":1,"command":"build"}
+{"timestamp":"2024-11-10T11:23:31.230459+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"proto"}
+{"timestamp":"2024-11-10T11:23:31.231144+00:00","level":"INFO","message":"processing targets","num":2,"command":"build"}
+{"timestamp":"2024-11-10T11:23:31.231158+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"rust"}
+{"timestamp":"2024-11-10T11:23:31.231171+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"python/app3"}
+{"timestamp":"2024-11-10T11:23:31.232863+00:00","failed":false,"invocation":"-v run -s dev","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/8","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"proto":"1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6","rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3","python/app3":"585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7"}}},"results":[{"command":"hello","target_groups":[{"proto":{"status":"success","code":0,"runtime_secs":0.00200725}},{"python/app3":{"status":"success","code":0,"runtime_secs":0.023067666},"rust":{"status":"success","code":0,"runtime_secs":0.56926215}}]},{"command":"build","target_groups":[{"proto":{"status":"undefined"}},{"rust":{"status":"undefined"},"python/app3":{"status":"undefined"}}]}]}
 ```
 
 When you run a sequence, it is first expanded into the commands it maps to. Then, any commands provided with `--commands` or `-c` are added to this list. For example, `monorail run -s dev -c foo bar` is equivalent to `monorail run -c hello build foo bar`. Sequences are useful for defining commands for use in specific contexts, such as setting up a repository for a new user, general development, and CI/CD.
@@ -763,7 +811,7 @@ monorail target show --commands | jq
 ```
 ```json
 {
-  "timestamp": "2024-11-01T01:27:28.409154+00:00",
+  "timestamp": "2024-11-10T11:23:48.655393+00:00",
   "targets": [
     {
       "path": "rust",
@@ -772,8 +820,9 @@ monorail target show --commands | jq
       ],
       "commands": {
         "hello": {
-          "path": "/tmp/monorail-tutorial/monorail/hello.sh",
-          "args": [],
+          "name": "hello",
+          "path": "/private/tmp/monorail-tutorial/rust/monorail/hello.sh",
+          "args": null,
           "is_executable": true
         }
       }
@@ -785,8 +834,9 @@ monorail target show --commands | jq
       ],
       "commands": {
         "hello": {
-          "path": "/tmp/monorail-tutorial/monorail/hello.py",
-          "args": [],
+          "name": "hello",
+          "path": "/private/tmp/monorail-tutorial/python/app3/monorail/hello.py",
+          "args": null,
           "is_executable": true
         }
       }
@@ -798,13 +848,14 @@ monorail target show --commands | jq
       ],
       "commands": {
         "hello": {
-          "path": "/tmp/monorail-tutorial/monorail/hello.awk",
-          "args": [],
+          "name": "hello",
+          "path": "/private/tmp/monorail-tutorial/proto/monorail/hello.awk",
+          "args": null,
           "is_executable": true
         }
       }
     }
-  ],
+  ]
 }
 ```
 
@@ -823,9 +874,9 @@ monorail checkpoint show | jq
 ```
 ```json
 {
-  "timestamp": "2024-11-02T21:17:32.634952+00:00",
+  "timestamp": "2024-11-10T11:24:10.154040+00:00",
   "checkpoint": {
-    "id": "df5dd3521af1f3d5cd1c4054e03e5573e2d24368",
+    "id": "4b5c5a4ce18a05b0175c1db6a14fb69bf1ca30d3",
     "pending": null
   }
 }
@@ -839,24 +890,24 @@ monorail checkpoint update --pending | jq
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:19:58.311279+00:00",
+  "timestamp": "2024-11-10T11:24:19.481342+00:00",
   "checkpoint": {
-    "id": "40f5a4e3e01bdd2bc8f1053d9158e25cf274ca99",
+    "id": "4b5c5a4ce18a05b0175c1db6a14fb69bf1ca30d3",
     "pending": {
-      "proto/LICENSE.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "rust/app1/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9",
-      "python/app3/tests/test_hello.py": "72b3668ed95f4f246150f5f618e71f6cdbd397af785cd6f1137ee87524566948",
-      "rust/app2/Cargo.toml": "111f4cf0fd1b6ce6f690a5f938599be41963905db7d1169ec02684b00494e383",
-      "rust/app2/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9",
-      "rust/monorail/hello.sh": "c1b9355995507cd3e90727bc79a0d6716b3f921a29b003f9d7834882218e2020",
-      "Monorail.json": "cdea86b01e3e6f719abecde8e127ba3d450dcaccfd2f9e5f9ffb27dd0ad2dadb",
-      ".gitignore": "c1cf4f9ff4b1419420b8508426051e8925e2888b94b0d830e27b9071989e8e7d",
-      "proto/README.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "proto/monorail/hello.awk": "5af404fedc153710aec00c8bf788d8f71b00c733c506d4c28fda1b7d618e4af6",
       "python/app3/monorail/hello.py": "fad357d1f5adadb0e270dfcf1029c6ed76e2565e62c811613eb315de10143ceb",
-      "rust/Cargo.toml": "a35f77bcdb163b0880db4c5efeb666f96496bcb409b4cd52ba6df517fb4d625b",
+      "rust/app1/Cargo.toml": "044de847669ad2d9681ba25c4c71e584b5f12d836b9a49e71b4c8d68119e5592",
+      "proto/LICENSE.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "Monorail.json": "b02cc0db02ef8c35ba8c285336748810c590950c263b5555f1781ac80f49a6da",
+      "proto/README.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "rust/app2/Cargo.toml": "111f4cf0fd1b6ce6f690a5f938599be41963905db7d1169ec02684b00494e383",
+      ".gitignore": "c1cf4f9ff4b1419420b8508426051e8925e2888b94b0d830e27b9071989e8e7d",
+      "rust/monorail/hello.sh": "c1b9355995507cd3e90727bc79a0d6716b3f921a29b003f9d7834882218e2020",
       "python/app3/hello.py": "3639634f2916441a55e4b9be3497673f110014d0ce3b241c93a9794ffcf2c910",
-      "rust/app1/Cargo.toml": "044de847669ad2d9681ba25c4c71e584b5f12d836b9a49e71b4c8d68119e5592"
+      "python/app3/tests/test_hello.py": "72b3668ed95f4f246150f5f618e71f6cdbd397af785cd6f1137ee87524566948",
+      "rust/Cargo.toml": "a35f77bcdb163b0880db4c5efeb666f96496bcb409b4cd52ba6df517fb4d625b",
+      "rust/app2/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9",
+      "proto/monorail/hello.awk": "5af404fedc153710aec00c8bf788d8f71b00c733c506d4c28fda1b7d618e4af6",
+      "rust/app1/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9"
     }
   }
 }
@@ -869,18 +920,23 @@ monorail analyze | jq
 ```
 ```json
 {
-  "timestamp": "2024-10-27T11:20:10.471386+00:00",
+  "timestamp": "2024-11-10T11:24:30.349076+00:00",
   "targets": []
 }
 ```
+
+... and thus there's nothing to run:
 
 ```sh
 monorail -v run -c hello build
 ```
 ```json
-{"timestamp":"2024-10-27T11:20:21.499439+00:00","level":"INFO","message":"Connected to log stream server","address":"127.0.0.1:9201"}
-{"timestamp":"2024-10-27T11:20:21.500174+00:00","level":"INFO","message":"processing groups","num":0}
-{"timestamp":"2024-10-27T11:20:21.500453+00:00","failed":false,"invocation_args":"-v run -c hello build","results":[]}
+{"timestamp":"2024-11-10T11:25:21.765947+00:00","level":"INFO","message":"processing plan"}
+{"timestamp":"2024-11-10T11:25:21.766158+00:00","level":"INFO","message":"Connected to log stream server","address":"127.0.0.1:9201"}
+{"timestamp":"2024-11-10T11:25:21.766272+00:00","level":"INFO","message":"processing commands","num":2}
+{"timestamp":"2024-11-10T11:25:21.766282+00:00","level":"INFO","message":"processing target groups","num":0,"command":"hello"}
+{"timestamp":"2024-11-10T11:25:21.766285+00:00","level":"INFO","message":"processing target groups","num":0,"command":"build"}
+{"timestamp":"2024-11-10T11:25:21.766730+00:00","failed":false,"invocation":"-v run -c hello build","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/9","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{}}},"results":[{"command":"hello","target_groups":[]},{"command":"build","target_groups":[]}]}
 ```
 
 You can also freely `monorail checkpoint delete` and essentially bypass change detection entirely, causing all targets will be considered changed. You can also manually set the checkpoint with `monorail checkpoint update -i <id>`, where `<id>` is a change provider reference (e.g. for git, this is usually a commit SHA).

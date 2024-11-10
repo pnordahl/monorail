@@ -493,13 +493,8 @@ fn handle_run<'a>(
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
     let i = app::run::HandleRunInput::try_from(matches).unwrap();
-    let invocation_args = env::args().skip(1).collect::<Vec<_>>().join(" ");
-    let o = rt.block_on(app::run::handle_run(
-        config,
-        &i,
-        &invocation_args,
-        work_path,
-    ))?;
+    let invocation = env::args().skip(1).collect::<Vec<_>>().join(" ");
+    let o = rt.block_on(app::run::handle_run(config, &i, &invocation, work_path))?;
     let mut code = HANDLE_OK;
     if o.failed {
         code = HANDLE_ERR;

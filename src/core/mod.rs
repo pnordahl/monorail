@@ -123,7 +123,7 @@ impl Config {
     pub(crate) fn get_tracking_path(&self, work_path: &path::Path) -> path::PathBuf {
         work_path.join(&self.output_dir).join("tracking")
     }
-    pub(crate) fn get_log_path(&self, work_path: &path::Path) -> path::PathBuf {
+    pub(crate) fn get_run_path(&self, work_path: &path::Path) -> path::PathBuf {
         work_path.join(&self.output_dir).join("run")
     }
     fn default_output_path() -> String {

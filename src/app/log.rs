@@ -60,7 +60,7 @@ pub(crate) fn log_show<'a>(
             "No stream selected; provide one or both of: --stdout, --stderr",
         ));
     }
-    let log_id = match input.id {
+    let run_id = match input.id {
         Some(id) => *id,
         None => {
             let tracking_table = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
@@ -69,11 +69,11 @@ pub(crate) fn log_show<'a>(
         }
     };
 
-    let log_dir = cfg.get_log_path(work_path).join(format!("{}", log_id));
-    if !log_dir.try_exists()? {
+    let run_dir = cfg.get_run_path(work_path).join(format!("{}", run_id));
+    if !run_dir.try_exists()? {
         return Err(MonorailError::Generic(format!(
             "Log path {} does not exist",
-            &log_dir.display().to_string()
+            &run_dir.display().to_string()
         )));
     }
 
@@ -92,8 +92,8 @@ pub(crate) fn log_show<'a>(
     }
 
     let mut stdout = std::io::stdout();
-    // open directory at log_dir
-    for fn_entry in log_dir.read_dir()? {
+    // open directory at run_dir
+    for fn_entry in run_dir.read_dir()? {
         let fn_path = fn_entry?.path();
         if fn_path.is_dir() {
             let command = fn_path.file_name().unwrap().to_str().unwrap();
