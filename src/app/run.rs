@@ -32,6 +32,7 @@ pub(crate) struct HandleRunInput<'a> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct OutRunFiles {
+    result: String,
     stdout: String,
     stderr: String,
 }
@@ -51,8 +52,9 @@ impl Out {
             run: OutRun {
                 path: run_path.display().to_string(),
                 files: OutRunFiles {
-                    stdout: "stdout.zst".to_string(),
-                    stderr: "stderr.zst".to_string(),
+                    result: result::RESULT_OUTPUT_FILE_NAME.to_string(),
+                    stdout: log::STDOUT_FILE.to_string(),
+                    stderr: log::STDERR_FILE.to_string(),
                 },
                 targets: HashMap::new(),
             },
@@ -640,7 +642,7 @@ fn create_skipped_result(command: &str, target_groups: &[Vec<PlanTarget>]) -> Co
             target_group.insert(
                 plan_target.path.to_string(),
                 TargetRunResult {
-                    status: status,
+                    status,
                     code: None,
                     runtime_secs: None,
                 },
@@ -863,12 +865,17 @@ async fn process_plan(
     let mut results = Vec::new();
     let mut failed = false;
 
+    info!(
+        num = plan.command_target_groups.len(),
+        "processing commands"
+    );
+
     for plan_command_target_group in &plan.command_target_groups {
         let command = &all_commands[plan_command_target_group.command_index];
         info!(
             num = plan_command_target_group.target_groups.len(),
             command = command,
-            "processing command target group",
+            "processing target groups",
         );
         if failed {
             results.push(create_skipped_result(
@@ -889,6 +896,11 @@ async fn process_plan(
             let (mut compressor, compressor_clients) = initialize_compressor(plan_targets, 2)?;
             let compressor_handle = thread::spawn(move || compressor.run());
             // schedule all plantargets for this command
+            info!(
+                num = plan_targets.len(),
+                command = command,
+                "processing targets",
+            );
             for (id, plan_target) in plan_targets.iter().enumerate() {
                 let target = sync::Arc::new(plan_target.path.clone());
                 if !failed {
@@ -931,7 +943,7 @@ async fn process_plan(
             }
             failed = process_task_results(
                 js,
-                &plan_targets,
+                plan_targets,
                 &token,
                 abort_table,
                 command,
@@ -966,13 +978,8 @@ async fn run_internal<'a>(
     fail_on_undefined: bool,
     invocation: &'a str,
 ) -> Result<RunOutput, MonorailError> {
-    info!(
-        num = plan.command_target_groups.len(),
-        "processing command target groups"
-    );
-
+    info!("processing plan");
     let (results, failed) = process_plan(cfg, &plan, commands, fail_on_undefined).await?;
-
     let o = RunOutput {
         failed,
         invocation: invocation.to_owned(),
@@ -1292,7 +1299,7 @@ mod tests {
         let run_output = RunOutput {
             failed: false,
             invocation: "example args".to_string(),
-            out: Out::new(&run_path),
+            out: Out::new(run_path),
             results: vec![
                 CommandRunResult {
                     command: "build".to_string(),
