@@ -72,7 +72,7 @@ Some APIs require a [configuration file](#config). Manually specifying the file 
 
 - [Config](#config)
 - [Targets](#targets)
-- [Run](#run)
+- [Commands](#commands)
 - [Logs](#logs)
 - [Results](#results)
 - [Analyze](#analyze)
