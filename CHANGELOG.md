@@ -1,5 +1,14 @@
 # Change Log
 
+## [3.3.1] - 2024-11-11
+
+### Changed
+- Configuration `output_dir` changed to `out_dir` for consistency
+
+### Fixed
+- Graph cycle detection when specific targets are specified to `analyze` and `run`
+
+
 ## [3.3.0] - 2024-11-08
 
 ### Changed

@@ -5,7 +5,7 @@
 const reference = {
 	// Directory to place logs, caches, and other runtime outputs.
 	// Optional, default: "monorail-out"
-	"output_dir": "monorail-out",
+	"out_dir": "monorail-out",
 
 	// Number of historical run results and logs to retain on disk.
 	// Optional, default: 10
