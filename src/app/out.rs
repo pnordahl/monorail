@@ -11,12 +11,12 @@ pub(crate) struct OutDeleteOutput {
     recovered_mb: f64,
 }
 pub(crate) fn out_delete(
-    output_dir: &str,
+    out_dir: &str,
     input: &OutDeleteInput,
 ) -> Result<OutDeleteOutput, MonorailError> {
-    let recovered_mb = calculate_dir_size_in_mb(output_dir)?;
+    let recovered_mb = calculate_dir_size_in_mb(out_dir)?;
     if input.all {
-        let tlds = get_tlds(output_dir)?;
+        let tlds = get_tlds(out_dir)?;
         for d in tlds.iter() {
             std::fs::remove_dir_all(d)?;
         }

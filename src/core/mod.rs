@@ -69,7 +69,7 @@ impl Default for LogConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default = "Config::default_output_path")]
-    pub(crate) output_dir: String,
+    pub(crate) out_dir: String,
     #[serde(default = "Config::default_max_retained_runs")]
     pub(crate) max_retained_runs: usize,
     #[serde(default)]
@@ -121,10 +121,10 @@ impl Config {
         o
     }
     pub(crate) fn get_tracking_path(&self, work_path: &path::Path) -> path::PathBuf {
-        work_path.join(&self.output_dir).join("tracking")
+        work_path.join(&self.out_dir).join("tracking")
     }
     pub(crate) fn get_run_path(&self, work_path: &path::Path) -> path::PathBuf {
-        work_path.join(&self.output_dir).join("run")
+        work_path.join(&self.out_dir).join("run")
     }
     fn default_output_path() -> String {
         "monorail-out".to_string()

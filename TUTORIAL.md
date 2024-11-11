@@ -51,7 +51,7 @@ monorail config show | jq
 ```json
 {
   "timestamp": "2024-11-10T10:32:21.846108+00:00",
-  "output_dir": "monorail-out",
+  "out_dir": "monorail-out",
   "max_retained_runs": 10,
   "change_provider": {
     "use": "git"

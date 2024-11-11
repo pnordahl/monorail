@@ -483,7 +483,7 @@ fn handle_out_delete<'a>(
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
     let i = app::out::OutDeleteInput::try_from(matches)?;
-    let res = app::out::out_delete(&config.output_dir, &i);
+    let res = app::out::out_delete(&config.out_dir, &i);
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
