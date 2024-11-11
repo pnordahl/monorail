@@ -1,6 +1,6 @@
 use crate::core::error::{GraphError, MonorailError};
 use std::cmp::{Eq, PartialEq};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Eq, PartialEq)]
 enum CycleState {
@@ -67,15 +67,37 @@ impl Dag {
     // Walk the graph from node and mark all descendents with the provided visibility.
     // By default, all nodes are false, and calling this is required to make a
     // subtree visible during graph traversals.
-    pub fn set_subtree_visibility(&mut self, node: usize, visible: bool) {
+    pub fn set_subtree_visibility(
+        &mut self,
+        node: usize,
+        visible: bool,
+    ) -> Result<(), MonorailError> {
         let mut work: VecDeque<usize> = VecDeque::new();
+        let mut visited = HashSet::new();
+        let mut active = HashSet::new();
         work.push_front(node);
         while let Some(n) = work.pop_front() {
             self.visibility[n] = visible;
-            for depn in &self.adj_list[n] {
-                work.push_back(*depn);
+            visited.insert(n);
+            active.remove(&n);
+            for &depn in &self.adj_list[n] {
+                if active.contains(&depn) {
+                    let label = self.node2label.get(&depn).ok_or_else(|| {
+                        MonorailError::DependencyGraph(GraphError::LabelNotFound(depn))
+                    })?;
+                    return Err(MonorailError::DependencyGraph(GraphError::Cycle(
+                        depn,
+                        label.to_owned(),
+                    )));
+                }
+                if !visited.contains(&depn) {
+                    work.push_back(depn);
+                    active.insert(depn);
+                }
             }
         }
+
+        Ok(())
     }
 
     // Uses Kahn's Algorithm to walk the graph and build lists of nodes that are independent of each other at that level. In addition, this function will compute a cycle detection if it is not yet known.
@@ -207,10 +229,21 @@ mod tests {
             ("3", 3, vec![1], true),
         ]);
 
-        dag.set_subtree_visibility(1, false);
+        dag.set_subtree_visibility(1, false).unwrap();
         assert!(dag.visibility[0]);
         assert!(!dag.visibility[1]);
         assert!(!dag.visibility[2]);
         assert!(dag.visibility[3]);
+    }
+
+    #[test]
+    fn test_dag_set_subtree_visibility_cycle() {
+        let mut dag = fill_dag(vec![
+            ("0", 0, vec![1, 2], false),
+            ("1", 1, vec![2], false),
+            ("2", 2, vec![0], false),
+            ("3", 3, vec![1], false),
+        ]);
+        assert!(dag.set_subtree_visibility(0, true).is_err());
     }
 }

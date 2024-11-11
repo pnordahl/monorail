@@ -119,7 +119,8 @@ pub fn build() -> clap::Command {
     Command::new(CMD_MONORAIL)
     .version(env!("CARGO_PKG_VERSION"))
     .author("Patrick Nordahl <plnordahl@gmail.com>")
-    .about("An overlay for effective monorepo development.")
+    .about("A tool for effective polyglot, multi-project monorepo development.")
+    .arg_required_else_help(true)
     .arg(
         Arg::new(ARG_CONFIG_FILE)
             .short('f')
@@ -144,13 +145,20 @@ pub fn build() -> clap::Command {
             .help("Emit additional workflow, result, and error logging. Specifying this flag multiple times (up to 3) increases the verbosity.")
             .action(ArgAction::Count),
     )
-    .subcommand(Command::new(CMD_CONFIG).about("Parse and display configuration").subcommand(Command::new(CMD_SHOW).about("Show configuration, including runtime default values")))
+    .subcommand(
+        Command::new(CMD_CONFIG)
+        .arg_required_else_help(true)
+        .about("Parse and display configuration")
+        .subcommand(
+            Command::new(CMD_SHOW)
+            .about("Show configuration, including runtime default values")))
     .subcommand(Command::new(CMD_CHECKPOINT)
         .about("Show, update, or delete the tracking checkpoint")
         .subcommand(
         Command::new(CMD_UPDATE)
             .about("Update the tracking checkpoint")
             .after_help(r#"This command updates the tracking checkpoint with data appropriate for the configured vcs."#)
+            .arg_required_else_help(true)
             .arg(arg_git_path.clone())
             .arg(
                 Arg::new(ARG_PENDING)
@@ -181,6 +189,7 @@ pub fn build() -> clap::Command {
     )
     .subcommand(Command::new(CMD_TARGET)
         .about("Display targets and target groups")
+        .arg_required_else_help(true)
         .subcommand(
         Command::new(CMD_SHOW)
             .about("List targets and their properties.")
@@ -204,6 +213,7 @@ pub fn build() -> clap::Command {
     .subcommand(Command::new(CMD_RUN)
         .about("Run target-defined commands.")
         .after_help(r#"Execute the provided commands for a graph traversal rooted at the targets specified (optional), or inferred target groups via change detection and graph analysis."#)
+        .arg_required_else_help(true)
         .arg(arg_git_path.clone())
         .arg(arg_begin.clone())
         .arg(arg_end.clone())
@@ -285,7 +295,11 @@ pub fn build() -> clap::Command {
         )
 
     )
-    .subcommand(Command::new(CMD_RESULT).about("Show historical results from runs").subcommand(Command::new(CMD_SHOW).about("Show results from `run` invocations")))
+    .subcommand(Command::new(CMD_RESULT)
+        .about("Show historical results from runs")
+        .arg_required_else_help(true)
+        .subcommand(Command::new(CMD_SHOW)
+            .about("Show results from `run` invocations")))
     /*
 
     log --tail --result (-r) <id> --command (-f) [f1 f2 ... fN] --target (-t) [t1 t2 ... tN] --stdout --stderr
@@ -295,6 +309,7 @@ pub fn build() -> clap::Command {
     .subcommand(
         Command::new(CMD_LOG)
         .about("Show historical or tail real-time logs")
+        .arg_required_else_help(true)
         .subcommand(
             Command::new(CMD_SHOW).about("Display run logs")
                 .after_help(r#"This command shows logs for current or historical run invocations."#)
@@ -357,6 +372,7 @@ pub fn build() -> clap::Command {
     .subcommand(
         Command::new(CMD_OUT)
         .about("Manipulate data in the monorail output directory")
+        .arg_required_else_help(true)
         .subcommand(
             Command::new(CMD_DELETE).about("Display run logs")
                 .after_help(r#""#)

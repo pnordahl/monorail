@@ -289,7 +289,7 @@ impl<'a> Index<'a> {
             let node = dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
                 MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t.to_owned().clone()))
             })?;
-            dag.set_subtree_visibility(node, true);
+            dag.set_subtree_visibility(node, true)?;
         }
 
         targets.sort();
