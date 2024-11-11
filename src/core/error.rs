@@ -6,6 +6,7 @@ use std::{fmt, io, num, str};
 pub enum GraphError {
     LabelNotFound(usize),
     Cycle(usize, String),
+    Connected,
     DuplicateLabel(String),
     LabelNodeNotFound(String),
 }
@@ -17,6 +18,9 @@ impl fmt::Display for GraphError {
             }
             GraphError::Cycle(node, label) => {
                 write!(f, "Cycle detected at node: {}, label: {}", node, label)
+            }
+            GraphError::Connected => {
+                write!(f, "Graph is fully connected, with no free nodes",)
             }
             GraphError::DuplicateLabel(label) => {
                 write!(f, "Duplicate label provided: {}", label)

@@ -374,7 +374,7 @@ pub fn build() -> clap::Command {
         .about("Manipulate data in the monorail output directory")
         .arg_required_else_help(true)
         .subcommand(
-            Command::new(CMD_DELETE).about("Display run logs")
+            Command::new(CMD_DELETE).about("Delete files from the output dir")
                 .after_help(r#""#)
                 .arg(
                 Arg::new(ARG_ALL)
