@@ -1,5 +1,16 @@
 # Change Log
 
+## [3.4.1] - 2024-11-12
+
+### Changed
+
+- `--arg, --arg-map, and --arg-map` may all be specified simultaneously, and are processed with a precendece order
+- Support for multiple `--arg-map` and `--arg-map-file` arguments and merging of them
+
+### Removed
+
+- `command.definitions.args` has been removed in favor of multiple arg-map/arg-map-file support
+
 ## [3.3.1] - 2024-11-11
 
 ### Changed

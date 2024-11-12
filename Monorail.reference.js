@@ -84,11 +84,7 @@ const reference = {
 						// Path to an executable to use for this command.
 						// Optional. default: <commands.path>/<command_name>.<extension>,
 						// where <extension> is discovered on the filesystem.
-						"path": "path/within/repository",
-						// Array of flags, switches, and arguments to
-						// provide when running the command executable.
-						// Optional, default: []
-						"args": []
+						"path": "path/within/repository"
 					}
 				}
 			}

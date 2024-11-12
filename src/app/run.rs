@@ -24,8 +24,8 @@ pub(crate) struct HandleRunInput<'a> {
     pub(crate) sequences: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
     pub(crate) args: Vec<&'a String>,
-    pub(crate) arg_map: Option<&'a String>,
-    pub(crate) arg_map_file: Option<&'a String>,
+    pub(crate) arg_map: Vec<&'a String>,
+    pub(crate) arg_map_file: Vec<&'a String>,
     pub(crate) include_deps: bool,
     pub(crate) fail_on_undefined: bool,
 }
@@ -132,12 +132,54 @@ pub(crate) struct RunOutput {
     results: Vec<CommandRunResult>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Debug, Deserialize, Default)]
 struct ArgMap {
     table: HashMap<String, HashMap<String, Vec<String>>>,
 }
 impl ArgMap {
+    fn merge(
+        src: HashMap<String, HashMap<String, Vec<String>>>,
+        dest: &mut HashMap<String, HashMap<String, Vec<String>>>,
+    ) {
+        for (src_target, src_commands) in src {
+            let dest_commands = dest.entry(src_target).or_default();
+            for (src_command, mut src_args) in src_commands {
+                dest_commands
+                    .entry(src_command)
+                    .or_default()
+                    .append(&mut src_args);
+            }
+        }
+    }
     fn new(input: &HandleRunInput<'_>) -> Result<Self, MonorailError> {
+        let mut table = HashMap::new();
+
+        // first process files
+        for f in &input.arg_map_file {
+            let p = path::Path::new(f);
+            let f = fs::File::open(p).map_err(MonorailError::from)?;
+            let br = io::BufReader::new(f);
+            let src: HashMap<String, HashMap<String, Vec<String>>> = serde_json::from_reader(br)
+                .map_err(|e| {
+                    MonorailError::Generic(format!(
+                        "File arg map at {} contains invalid JSON; {}",
+                        p.display(),
+                        e
+                    ))
+                })?;
+            ArgMap::merge(src, &mut table);
+        }
+
+        // next, argmap literals
+        for s in &input.arg_map {
+            let src: HashMap<String, HashMap<String, Vec<String>>> = serde_json::from_str(s)
+                .map_err(|e| {
+                    MonorailError::Generic(format!("Inline arg map contains invalid JSON; {}", e))
+                })?;
+            ArgMap::merge(src, &mut table);
+        }
+
+        // finally, args
         if !input.args.is_empty() {
             if input.commands.len() != 1 {
                 return Err(MonorailError::from(
@@ -149,42 +191,21 @@ impl ArgMap {
                     "When providing --arg, only one target may be specified",
                 ));
             }
-            Ok(Self {
-                table: HashMap::from([(
-                    input
-                        .targets
-                        .iter()
-                        .next()
-                        .ok_or(MonorailError::from("Could not extract target"))?
-                        .to_string(),
-                    HashMap::from([(
-                        input.commands[0].to_string(),
-                        input.args.iter().map(|s| s.to_string()).collect(),
-                    )]),
+            let src = HashMap::from([(
+                input
+                    .targets
+                    .iter()
+                    .next()
+                    .ok_or(MonorailError::from("Could not extract target"))?
+                    .to_string(),
+                HashMap::from([(
+                    input.commands[0].to_string(),
+                    input.args.iter().map(|s| s.to_string()).collect(),
                 )]),
-            })
-        } else if let Some(am) = input.arg_map {
-            let table: HashMap<String, HashMap<String, Vec<String>>> = serde_json::from_str(am)
-                .map_err(|e| {
-                    MonorailError::Generic(format!("Inline arg map contains invalid JSON; {}", e))
-                })?;
-            Ok(Self { table })
-        } else if let Some(amf) = input.arg_map_file {
-            let p = path::Path::new(amf);
-            let f = fs::File::open(p).map_err(MonorailError::from)?;
-            let br = io::BufReader::new(f);
-            let table: HashMap<String, HashMap<String, Vec<String>>> = serde_json::from_reader(br)
-                .map_err(|e| {
-                    MonorailError::Generic(format!(
-                        "File arg map at {} contains invalid JSON; {}",
-                        p.display(),
-                        e
-                    ))
-                })?;
-            Ok(Self { table })
-        } else {
-            Ok(Default::default())
+            )]);
+            ArgMap::merge(src, &mut table);
         }
+        Ok(Self { table })
     }
     fn get_args<'a>(&'a self, target: &'a str, command: &'a str) -> Option<&'a [String]> {
         if let Some(cmd_map) = &self.table.get(target) {
@@ -250,22 +271,13 @@ pub(crate) async fn handle_run<'a>(
                 for t in input.targets.iter() {
                     tg.push(vec![t.to_string()]);
                 }
-                debug!("Synthesizing target groups");
+                debug!("Synthesized target groups");
                 tg
             };
             (index, target_groups)
         }
     };
 
-    // let run_data_groups = get_run_data_groups(
-    //     &index,
-    //     &commands,
-    //     &cfg.targets,
-    //     &target_groups,
-    //     work_path,
-    //     &run_path,
-    //     &arg_map,
-    // )?;
     let plan = get_plan(
         &index,
         &commands,
@@ -351,7 +363,6 @@ fn get_plan<'a>(
                     .get(target_index)
                     .ok_or(MonorailError::from("Target not found"))?;
                 let commands_path = work_path.join(target_path).join(&tar.commands.path);
-                let mut command_args = None;
                 let command_path = match &tar.commands.definitions {
                     Some(definitions) => match definitions.get(cmd.as_str()) {
                         Some(def) => {
@@ -361,41 +372,17 @@ fn get_plan<'a>(
                                 &commands_path,
                                 work_path,
                             );
-                            debug!(
-                                command_path = &app_target_command
-                                    .path
-                                    .as_ref()
-                                    .unwrap_or(&path::PathBuf::new())
-                                    .display()
-                                    .to_string(),
-                                command_args = &app_target_command
-                                    .args
-                                    .as_ref()
-                                    .unwrap_or(&vec![])
-                                    .join(" "),
-                                "Using defined command"
-                            );
-                            command_args = app_target_command.args;
                             app_target_command.path
                         }
                         None => file::find_file_by_stem(cmd, &commands_path),
                     },
                     None => file::find_file_by_stem(cmd, &commands_path),
                 };
-                // now, append any runtime args to existing config args, if present
-                let arg_map_args = arg_map.get_args(&tar.path, cmd);
-                if let Some(ref mut args) = command_args {
-                    if let Some(am_args) = arg_map_args {
-                        args.extend_from_slice(am_args);
-                    }
-                } else if let Some(am_args) = arg_map_args {
-                    command_args = Some(am_args.to_owned());
-                }
                 plan_targets.push(PlanTarget {
                     path: target_path.to_owned(),
                     command_work_path: work_path.join(target_path),
                     command_path,
-                    command_args,
+                    command_args: arg_map.get_args(&tar.path, cmd).map(|x| x.to_vec()),
                     logs,
                 });
             }
@@ -420,7 +407,7 @@ pub(crate) fn spawn_task(
 ) -> Result<tokio::process::Child, MonorailError> {
     debug!(
         command_path = command_path.display().to_string(),
-        command_args = command_args.clone().unwrap_or_default().join(", "),
+        command_args = command_args.clone().unwrap_or_default().join(" "),
         "Spawn task"
     );
     let mut cmd = tokio::process::Command::new(command_path);
@@ -674,7 +661,7 @@ async fn process_task_results(
                                 status = status.as_str(),
                                 command = command,
                                 target = &plan_target.path,
-                                "task"
+                                "Task"
                             );
                             result_target_group.insert(
                                 plan_target.path.to_string(),
@@ -693,7 +680,7 @@ async fn process_task_results(
                                 status = status.as_str(),
                                 command = command,
                                 target = &plan_target.path,
-                                "task"
+                                "Task"
                             );
                             result_target_group.insert(
                                 plan_target.path.to_string(),
@@ -716,7 +703,7 @@ async fn process_task_results(
                             command = command,
                             target = &plan_target.path,
                             error = &info.error,
-                            "task"
+                            "Task"
                         );
                         result_target_group.insert(
                             plan_target.path.to_string(),
@@ -740,7 +727,7 @@ async fn process_task_results(
                         status = status.as_str(),
                         command = command,
                         target = &plan_target.path,
-                        "task"
+                        "Task"
                     );
 
                     result_target_group.insert(
@@ -802,7 +789,7 @@ async fn schedule_task(
                 status = status.as_str(),
                 command = *task.command,
                 target = &plan_target.path,
-                "task"
+                "Task"
             );
             let task_id = task.id;
             let child = spawn_task(
@@ -818,7 +805,7 @@ async fn schedule_task(
                 status = status.as_str(),
                 command = *task.command,
                 target = &plan_target.path,
-                "task"
+                "Task"
             );
             result_target_group.insert(
                 plan_target.path.to_string(),
@@ -836,7 +823,7 @@ async fn schedule_task(
             status = status.as_str(),
             command = *task.command,
             target = &plan_target.path,
-            "task"
+            "Task"
         );
         result_target_group.insert(
             plan_target.path.to_string(),
@@ -867,7 +854,7 @@ async fn process_plan(
 
     info!(
         num = plan.command_target_groups.len(),
-        "processing commands"
+        "Processing commands"
     );
 
     for plan_command_target_group in &plan.command_target_groups {
@@ -875,7 +862,7 @@ async fn process_plan(
         info!(
             num = plan_command_target_group.target_groups.len(),
             command = command,
-            "processing target groups",
+            "Processing target groups",
         );
         if failed {
             results.push(create_skipped_result(
@@ -899,7 +886,7 @@ async fn process_plan(
             info!(
                 num = plan_targets.len(),
                 command = command,
-                "processing targets",
+                "Processing targets",
             );
             for (id, plan_target) in plan_targets.iter().enumerate() {
                 let target = sync::Arc::new(plan_target.path.clone());
@@ -978,7 +965,7 @@ async fn run_internal<'a>(
     fail_on_undefined: bool,
     invocation: &'a str,
 ) -> Result<RunOutput, MonorailError> {
-    info!("processing plan");
+    info!("Processing plan");
     let (results, failed) = process_plan(cfg, &plan, commands, fail_on_undefined).await?;
     let o = RunOutput {
         failed,
@@ -1036,8 +1023,8 @@ mod tests {
         commands: Vec<&'a String>,
         targets: HashSet<&'a String>,
         args: Vec<&'a String>,
-        arg_map: Option<&'a String>,
-        arg_map_file: Option<&'a String>,
+        arg_map: Vec<&'a String>,
+        arg_map_file: Vec<&'a String>,
     ) -> HandleRunInput<'a> {
         HandleRunInput {
             git_opts: git::GitOptions::default(),
@@ -1070,8 +1057,8 @@ mod tests {
             vec![&command],
             HashSet::from([&target]),
             vec![&arg1],
-            None,
-            None,
+            vec![],
+            vec![],
         );
 
         let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
@@ -1093,8 +1080,8 @@ mod tests {
             vec![&command1, &command2],
             HashSet::from([&target]),
             vec![&arg],
-            None,
-            None,
+            vec![],
+            vec![],
         );
 
         let result = ArgMap::new(&input);
@@ -1112,8 +1099,8 @@ mod tests {
             vec![&command],
             HashSet::from([&target1, &target2]),
             vec![&arg],
-            None,
-            None,
+            vec![],
+            vec![],
         );
 
         let result = ArgMap::new(&input);
@@ -1123,7 +1110,7 @@ mod tests {
     #[test]
     fn test_arg_map_valid_inline_json() {
         let json = ARG_MAP_JSON.to_string();
-        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], Some(&json), None);
+        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&json], vec![]);
 
         let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
         let args = arg_map
@@ -1137,7 +1124,7 @@ mod tests {
     fn test_arg_map_invalid_inline_json() {
         let invalid_json = r#"{lkjsdf"#.to_string();
         let input =
-            setup_handle_run_input(vec![], HashSet::new(), vec![], Some(&invalid_json), None);
+            setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&invalid_json], vec![]);
 
         let result = ArgMap::new(&input);
         assert!(result.is_err());
@@ -1157,8 +1144,8 @@ mod tests {
             vec![&command],
             HashSet::from([&target]),
             vec![],
-            None,
-            Some(&path_str),
+            vec![],
+            vec![&path_str],
         );
         let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
 
@@ -1175,7 +1162,7 @@ mod tests {
         std::fs::write(&path, r#"{lksjdfklj"#).expect("Failed to write test file");
         let path_str = path.display().to_string();
 
-        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], None, Some(&path_str));
+        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], vec![], vec![&path_str]);
         let result = ArgMap::new(&input);
 
         assert!(result.is_err());
@@ -1184,7 +1171,7 @@ mod tests {
     #[test]
     fn test_arg_map_get_args_nonexistent() {
         let json = ARG_MAP_JSON.to_string();
-        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], Some(&json), None);
+        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&json], vec![]);
 
         let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
         let args = arg_map.get_args("nonexistent_target", "nonexistent_command");
@@ -1257,7 +1244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_run_data_groups() {
+    async fn test_get_plan() {
         let td = tempdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
@@ -1288,7 +1275,7 @@ mod tests {
         let plan_target = &plan.command_target_groups[0].target_groups[0][0];
         assert_eq!(plan_target.path, "target1");
         assert!(plan_target.command_path.is_some());
-        assert_eq!(plan_target.command_args, Some(vec!["arg1".to_string()]));
+        assert_eq!(plan_target.command_args, None);
     }
 
     #[test]

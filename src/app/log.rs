@@ -455,16 +455,16 @@ impl Compressor {
                                 trace!(
                                     encoder_index = encoder_index,
                                     thread_id = x,
-                                    "encoder finish"
+                                    "Encoder finish"
                                 );
                                 encoders[encoder_index].do_finish()?;
                             }
                             CompressRequest::Shutdown => {
-                                trace!("compressor shutdown");
+                                trace!("Compressor shutdown");
                                 break;
                             }
                             CompressRequest::Data(encoder_index, data) => {
-                                trace!(lines = data.len(), thread_id = x, "encoder write");
+                                trace!(lines = data.len(), thread_id = x, "Encoder write");
                                 for v in data.iter() {
                                     encoders[encoder_index].write_all(v)?;
                                 }
@@ -472,7 +472,7 @@ impl Compressor {
                         }
                     }
                     for mut enc in encoders {
-                        trace!(thread_id = x, "encoder finish");
+                        trace!(thread_id = x, "Encoder finish");
                         enc.do_finish()?;
                     }
                     Ok::<(), MonorailError>(())

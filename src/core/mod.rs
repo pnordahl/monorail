@@ -139,8 +139,6 @@ impl Config {
 pub(crate) struct CommandDefinition {
     #[serde(default)]
     pub(crate) path: String,
-    #[serde(default)]
-    pub(crate) args: Vec<String>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
