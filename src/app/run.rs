@@ -1047,16 +1047,57 @@ mod tests {
       }
     }"#;
 
+    const ARG_MAP_JSON2: &str = r#"{
+      "rust/crate1": {
+        "build": [
+          "--force"
+        ]
+      }
+    }"#;
+
     #[test]
-    fn test_arg_map_single_command_target() {
+    fn test_arg_map_single_command_target_all() {
+        let td = tempdir().unwrap();
         let command = "build".to_string();
         let target = "rust/crate1".to_string();
-        let arg1 = "--release".to_string();
+        let arg1 = "--plorp".to_string();
+        let argmap = ARG_MAP_JSON.to_string();
+
+        let path = td.path().join("test_arg_map.json");
+        std::fs::write(&path, r#"{"rust/crate1":{"build":["--burp"]}}"#)
+            .expect("Failed to write test file");
+        let path_str = path.display().to_string();
 
         let input = setup_handle_run_input(
             vec![&command],
             HashSet::from([&target]),
             vec![&arg1],
+            vec![&argmap],
+            vec![&path_str],
+        );
+
+        let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
+        let args = arg_map
+            .get_args("rust/crate1", "build")
+            .expect("Args not found");
+
+        assert_eq!(
+            args,
+            &vec!["--burp".to_string(), "--release".to_string(), arg1]
+        );
+    }
+
+    #[test]
+    fn test_arg_map_single_command_target() {
+        let command = "build".to_string();
+        let target = "rust/crate1".to_string();
+        let arg1 = "--release".to_string();
+        let arg2 = "--force".to_string();
+
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target]),
+            vec![&arg1, &arg2],
             vec![],
             vec![],
         );
@@ -1066,7 +1107,7 @@ mod tests {
             .get_args("rust/crate1", "build")
             .expect("Args not found");
 
-        assert_eq!(args, &vec!["--release".to_string()]);
+        assert_eq!(args, &vec![arg1, arg2]);
     }
 
     #[test]
@@ -1110,14 +1151,16 @@ mod tests {
     #[test]
     fn test_arg_map_valid_inline_json() {
         let json = ARG_MAP_JSON.to_string();
-        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&json], vec![]);
+        let json2 = ARG_MAP_JSON2.to_string();
+        let input =
+            setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&json, &json2], vec![]);
 
         let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
         let args = arg_map
             .get_args("rust/crate1", "build")
             .expect("Args not found");
 
-        assert_eq!(args, &vec!["--release".to_string()]);
+        assert_eq!(args, &vec!["--release".to_string(), "--force".to_string()]);
     }
 
     #[test]
@@ -1140,19 +1183,23 @@ mod tests {
         std::fs::write(&path, ARG_MAP_JSON).expect("Failed to write test file");
         let path_str = path.display().to_string();
 
+        let path2 = td.path().join("test_arg_map2.json");
+        std::fs::write(&path2, ARG_MAP_JSON2).expect("Failed to write test file");
+        let path_str2 = path2.display().to_string();
+
         let input = setup_handle_run_input(
             vec![&command],
             HashSet::from([&target]),
             vec![],
             vec![],
-            vec![&path_str],
+            vec![&path_str, &path_str2],
         );
         let arg_map = ArgMap::new(&input).expect("Expected valid ArgMap");
 
         let args = arg_map
             .get_args("rust/crate1", "build")
             .expect("Args not found");
-        assert_eq!(args, &vec!["--release".to_string()]);
+        assert_eq!(args, &vec!["--release".to_string(), "--force".to_string()]);
     }
 
     #[test]
