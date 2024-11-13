@@ -297,6 +297,39 @@ monorail run -c build -t target1 target2 --deps
 
 This will run `build` first for `dep1`, and then `target1` and `target2` in parallel.
 
+#### Arguments
+
+Commands can be provided with runtime positional arguments by providing the `--arg (-a)`, `--arg-map (-m)`, and `--arg-map-file (-f)` switches to `monorail run`. For In your command executables, capture these positional arguments as you would in any program in that language. For example:
+
+```sh
+monorail run -c build -t target1 --arg '--release' --arg '-v'
+```
+
+This will provide `--release` and `-v` as the first and second positional arguments to the `build` command for `target1`.
+
+Note that when using `--arg`, you must specify exactly one command and target. For more flexibility, use `--arg-map` and/or `--arg-map-file`, which allow for specifying argument arrays for specific command-target combinations. For example:
+
+```sh
+monorail run -c build test --arg-map '{"target1":{"build":["--release"],"test":["--release"]}}'
+```
+
+This will provide the specified arguments to the appropriate command-target combinations. Multiple `--arg-map` flags may be provided, and if so keys that appear in both have their arrays appended to each other in the order specified. For example:
+
+```sh
+monorail run -c build test --arg-map '{"target1":{"build":["--release"],"test":["--release"]}}' --arg-map '{"target1":{"build":["-v"]}}'
+```
+
+In this case, `build` appears twice for `target1` so the arrays are combined in order, and the final arguments array for `target1` is `[--release, -v]`.
+
+Additionally, you can provide the `--arg-map-file` switch zero or more times with a filesystem path to a JSON file containing an argument mapping. The structure of this file is identical to the one described above for `--arg-map`. As with that switch, files provided are merged from left to right. For example
+
+```sh
+monorail run -c build -f target1/argmap1.json -f target1/argmap2.json
+```
+
+Would merge the keys and values from each file in turn in order.
+
+
 #### Sequences
 
 A sequence is an array of commands, and is specified in `Monorail.json`. It's useful for bundling together related commands into a convenient alias, and when used with `run` simply expands into the list of commands it references. For example:
