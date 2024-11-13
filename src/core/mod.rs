@@ -134,13 +134,13 @@ impl Config {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CommandDefinition {
     #[serde(default)]
     pub(crate) path: String,
 }
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Target {
     // The filesystem path, relative to the repository root.
@@ -157,9 +157,56 @@ pub(crate) struct Target {
     // Configuration and optional overrides for commands.
     #[serde(default)]
     pub(crate) commands: TargetCommands,
+
+    // Configuration and optional overrides for argmaps.
+    #[serde(default)]
+    pub(crate) argmaps: TargetArgMaps,
+}
+impl Target {
+    pub(crate) fn get_argmap_base_path(&self, work_path: &path::Path) -> path::PathBuf {
+        work_path
+            .join(&self.path)
+            .join(&self.argmaps.path)
+            .join(&self.argmaps.base)
+    }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TargetArgMaps {
+    // Relative path from this target's `path` to a directory containing
+    // base argmap files to be used when this target is involved in
+    // `monorail run`. These argmaps are the first loaded, so any runtime
+    // instances of --args, --target-argmap, and/or --target-argmap-files are merged
+    // into
+    #[serde(default = "TargetArgMaps::default_path")]
+    pub(crate) path: String,
+
+    // A default argmap to load for this target.
+    #[serde(default = "TargetArgMaps::default_base")]
+    pub(crate) base: String,
+}
+
+impl Default for TargetArgMaps {
+    fn default() -> Self {
+        Self {
+            path: Self::default_path(),
+            base: Self::default_base(),
+        }
+    }
+}
+impl TargetArgMaps {
+    fn default_path() -> String {
+        "monorail/argmap".into()
+    }
+}
+impl TargetArgMaps {
+    fn default_base() -> String {
+        "base.json".into()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TargetCommands {
     // Relative path from this target's `path` to a directory containing
@@ -183,13 +230,14 @@ impl Default for TargetCommands {
 }
 impl TargetCommands {
     fn default_path() -> String {
-        "monorail".into()
+        "monorail/cmd".into()
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct Index<'a> {
     pub(crate) targets: Vec<String>,
+    pub(crate) target2index: HashMap<&'a str, usize>,
     pub(crate) targets_trie: Trie<u8>,
     pub(crate) ignores: Trie<u8>,
     pub(crate) uses: Trie<u8>,
@@ -204,6 +252,7 @@ impl<'a> Index<'a> {
         work_path: &path::Path,
     ) -> Result<Self, MonorailError> {
         let mut targets = vec![];
+        let mut target2index = HashMap::new();
         let mut targets_builder = TrieBuilder::new();
         let mut ignores_builder = TrieBuilder::new();
         let mut uses_builder = TrieBuilder::new();
@@ -213,6 +262,7 @@ impl<'a> Index<'a> {
         let mut dag = graph::Dag::new(cfg.targets.len());
 
         cfg.targets.iter().enumerate().try_for_each(|(i, target)| {
+            target2index.insert(target.path.as_str(), i);
             targets.push(target.path.to_owned());
             let target_path_str = target.path.as_str();
             file::contains_file(&work_path.join(target_path_str))?;
@@ -293,6 +343,7 @@ impl<'a> Index<'a> {
         targets.sort();
         Ok(Self {
             targets,
+            target2index,
             targets_trie,
             ignores: ignores_builder.build(),
             uses: uses_builder.build(),
@@ -300,6 +351,11 @@ impl<'a> Index<'a> {
             ignore2targets,
             dag,
         })
+    }
+    pub(crate) fn get_target_index(&self, target: &str) -> Result<&usize, MonorailError> {
+        self.target2index
+            .get(target)
+            .ok_or(MonorailError::from("Target not found"))
     }
 }
 

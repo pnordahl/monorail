@@ -43,9 +43,10 @@ pub const ARG_STDOUT: &str = "stdout";
 pub const ARG_ID: &str = "id";
 pub const ARG_DEPS: &str = "deps";
 pub const ARG_ARG: &str = "arg";
-pub const ARG_ARG_MAP: &str = "arg-map";
-pub const ARG_ARG_MAP_FILE: &str = "arg-map-file";
+pub const ARG_ARG_MAP: &str = "argmap";
+pub const ARG_ARG_MAP_FILE: &str = "argmap-file";
 pub const ARG_FAIL_ON_UNDEFINED: &str = "fail-on-undefined";
+pub const ARG_NO_BASE_ARGMAPS: &str = "no-base-argmaps";
 
 pub const VAL_JSON: &str = "json";
 
@@ -213,11 +214,10 @@ pub fn build() -> clap::Command {
     .subcommand(Command::new(CMD_RUN)
         .about("Run target-defined commands.")
         .after_help(r#"
-When --arg-map-file, --arg-map, and/or --arg are provided, keys that appear multiple 
-times will have their respective arrays concatenated in the following order:
+When --target-argmap-file, --target-argmap, and/or --arg are provided, keys that appear multiple times will have their respective arrays concatenated in the following order, after any base argmaps for targets involved in the run:
 
-    1. Each --arg-map-file, in the order provided
-    2. Each --arg-map literal, in the order provided
+    1. Each --target-argmap-file, in the order provided
+    2. Each --target-argmap literal, in the order provided
     3. Each --arg, in the order provided
 
 Refer to --help for more information on these options.
@@ -275,6 +275,12 @@ Refer to --help for more information on these options.
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new(ARG_NO_BASE_ARGMAPS)
+                .long(ARG_NO_BASE_ARGMAPS)
+                .long_help("Disable loading base argmaps for run targets. By default, all base argmaps are loaded.")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new(ARG_ARG)
                 .short('a')
                 .long(ARG_ARG)
@@ -282,7 +288,7 @@ Refer to --help for more information on these options.
                 .required(false)
                 .action(ArgAction::Append)
                 .help("One or more runtime argument(s) to be provided when executing a command for a single target.")
-                .long_help("This is a shorthand form of the more expressive '--arg-map' and '--arg-map-file', designed for single command + single target use. Providing this flag without specifying exactly one command and one target will result in an error.")
+                .long_help("This is a shorthand form of the more expressive '--target-argmap' and '--target-argmap-file', designed for single command + single target use. Providing this flag without specifying exactly one command and one target will result in an error.")
         )
         .arg(
             Arg::new(ARG_ARG_MAP)
@@ -771,6 +777,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::run::HandleRunInput<'a> {
                 .collect(),
             include_deps: cmd.get_flag(ARG_DEPS),
             fail_on_undefined: cmd.get_flag(ARG_FAIL_ON_UNDEFINED),
+            use_base_argmaps: !cmd.get_flag(ARG_NO_BASE_ARGMAPS),
         })
     }
 }

@@ -1,9 +1,20 @@
 # Change Log
 
-## [3.4.1] - 2024-11-12
+## [3.5.0] - 2024-11-13
+
+### Changed
+- `--arg, --arg-map, and --arg-map` are now `--target-argmap, and --target-argmap`
+- Default commands directory from `monorail` to `monorail/cmd`
+
+### Added
+- Optional per-target base argmaps
+- Default argmaps directory of `monorail/argmap`
 
 ### Changed
 
+## [3.4.1] - 2024-11-12
+
+### Changed
 - `--arg, --arg-map, and --arg-map` may all be specified simultaneously, and are processed with a precendece order
 - Support for multiple `--arg-map` and `--arg-map-file` arguments and merging of them
 

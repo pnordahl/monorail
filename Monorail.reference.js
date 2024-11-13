@@ -60,6 +60,30 @@ const reference = {
 			],
 
 			/*
+			Configuration and overrides for argument mappings.
+			*/
+			"argmaps": {
+				/*
+				Default location within this target path containing argmap 
+				definition files. This is used when locating argmaps for this
+				target automatically when it is changed.
+
+				Optional, default: "monorail/argmap"
+				*/
+				"path": "path/within/this/target",
+
+				/*
+				Path to the default argmap to load for this target. This argmap
+				is loaded prior to any arguments supplied by use of 
+				--arg, --target-argmap, and --target-argmap-file switches on `monorail run`.
+
+				Optional, default: "base.json"
+				*/
+				"base": "path/within/target/argmaps/path"
+			}
+
+
+			/*
 			Configuration and overrides for this targets commands.
 			Optional.
 			*/
@@ -69,7 +93,7 @@ const reference = {
 				executables. This is used when locating executables for a
 				command when no definition path for that command is specified.
 
-				Optional, default: "monorail"
+				Optional, default: "monorail/cmd"
 				*/
 				"path": "path/within/this/target"
 

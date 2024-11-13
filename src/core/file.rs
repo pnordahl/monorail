@@ -9,6 +9,10 @@ use tracing::debug;
 
 use crate::core::error::MonorailError;
 
+pub(crate) async fn exists(path: &path::Path) -> bool {
+    tokio::fs::metadata(path).await.is_ok()
+}
+
 pub(crate) fn contains_file(p: &path::Path) -> Result<(), MonorailError> {
     if p.is_file() {
         return Ok(());
