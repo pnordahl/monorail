@@ -299,36 +299,57 @@ This will run `build` first for `dep1`, and then `target1` and `target2` in para
 
 #### Arguments
 
-Commands can be provided with runtime positional arguments by providing the `--arg (-a)`, `--arg-map (-m)`, and `--arg-map-file (-f)` switches to `monorail run`. For In your command executables, capture these positional arguments as you would in any program in that language. For example:
+Commands can be provided with positional arguments at runtime. There are two mechanism for doing this; the base argmap, and as flags provided to `monorail run`. In your command executables, capture these positional arguments as you would in any program in that language.
+
+##### Base argmap
+The base argmap is an optional file containing argument mappings, which, if provided, is automatically loaded before any other argument mappings provided to `monorail run`. This is useful for specifying static parameterization for commands, especially when a command executable is generic and reused among multiple targets. An example of this useful pattern is shown in https://github.com/pnordahl/monorail-example in the rust crate targets.
+
+For example, here `target1` has a base argmap in the default location:
+
+`target1/monorail/argmap/base.json`
+```json
+{
+  "build": [
+    "--all"
+  ]
+}
+```
+
+You can change both the argmap search path and the base argmap file by specifying them in `Monorail.json`. Refer to the `argmaps` section of `Monorail.reference.js` for more details.
+
+Finally, while base argmaps are often required by commands that are built to expect them, you can disable base argmaps during a `monorail run` with the `--no-base-argmaps` switch.
+
+##### Runtime flags
+
+In addition to the base argmap, `monorail run` accepts `--arg (-a)`, `--target-argmap (-m)`, and `--target-argmap-file (-f)` flags for providing additional argument mappings. 
 
 ```sh
 monorail run -c build -t target1 --arg '--release' --arg '-v'
 ```
 
-This will provide `--release` and `-v` as the first and second positional arguments to the `build` command for `target1`.
+This will first provide `-all` from the base argmap as the first positional argument, and then `--release` and `-v` as the second and third positional arguments to the `build` command for `target1`.
 
-Note that when using `--arg`, you must specify exactly one command and target. For more flexibility, use `--arg-map` and/or `--arg-map-file`, which allow for specifying argument arrays for specific command-target combinations. For example:
+Note that when using `--arg`, you must specify exactly one command and target. For more flexibility, use `--target-argmap` and/or `--target-argmap-file`, which allow for specifying argument arrays for specific command-target combinations. For example:
 
 ```sh
-monorail run -c build test --arg-map '{"target1":{"build":["--release"],"test":["--release"]}}'
+monorail run -c build test --target-argmap '{"target1":{"build":["--release"],"test":["--release"]}}'
 ```
 
-This will provide the specified arguments to the appropriate command-target combinations. Multiple `--arg-map` flags may be provided, and if so keys that appear in both have their arrays appended to each other in the order specified. For example:
+This will provide the specified arguments to the appropriate command-target combinations. Multiple `--target-argmap` flags may be provided, and if so keys that appear in both have their arrays appended to each other in the order specified. For example:
 
 ```sh
-monorail run -c build test --arg-map '{"target1":{"build":["--release"],"test":["--release"]}}' --arg-map '{"target1":{"build":["-v"]}}'
+monorail run -c build test --target-argmap '{"target1":{"build":["--release"],"test":["--release"]}}' --target-argmap '{"target1":{"build":["-v"]}}'
 ```
 
 In this case, `build` appears twice for `target1` so the arrays are combined in order, and the final arguments array for `target1` is `[--release, -v]`.
 
-Additionally, you can provide the `--arg-map-file` switch zero or more times with a filesystem path to a JSON file containing an argument mapping. The structure of this file is identical to the one described above for `--arg-map`. As with that switch, files provided are merged from left to right. For example
+Additionally, you can provide the `--target-argmap-file` flag zero or more times with a filesystem path to a JSON file containing an argument mapping. The structure of this file is identical to the one described above for `--target-argmap`. As with that flag, files provided are merged from left to right. For example
 
 ```sh
-monorail run -c build -f target1/argmap1.json -f target1/argmap2.json
+monorail run -c build -f target1/monorail/argmap/foo.json -f target1/monorail/argmap/bar.json
 ```
 
 Would merge the keys and values from each file in turn in order.
-
 
 #### Sequences
 

@@ -103,7 +103,7 @@ monorail checkpoint update
 These commands will make a rust workspace with two member projects with tests:
 
 ```sh
-mkdir -p rust/monorail
+mkdir -p rust/monorail/cmd
 pushd rust
 cargo init --lib app1
 cargo init --lib app2
@@ -121,7 +121,7 @@ popd
 ### Python
 These commands will make a simple python project with a virtualenv and a test:
 ```sh
-mkdir -p python/app3/monorail
+mkdir -p python/app3/monorail/cmd
 pushd python/app3
 
 python3 -m venv "venv"
@@ -153,7 +153,7 @@ popd
 ```
 ### Protobuf
 ```sh
-mkdir -p proto/monorail
+mkdir -p proto/monorail/cmd
 pushd proto
 touch README.md
 popd
@@ -164,13 +164,13 @@ popd
 Commands will be covered in more depth later in the tutorial (along with logging), but now that we have a valid `Monorail.json` we can execute a command and view logs right away. Run the following to create an executable (in this case, a `bash` script) for the `rust` target:
 
 ```sh
-cat <<EOF > rust/monorail/hello.sh
+cat <<EOF > rust/monorail/cmd/hello.sh
 #!/bin/bash
 
 echo 'Hello, world!'
 echo 'An error message' >&2 
 EOF
-chmod +x rust/monorail/hello.sh
+chmod +x rust/monorail/cmd/hello.sh
 ```
 
 Now execute it:
@@ -312,7 +312,7 @@ monorail analyze --changes | jq
       "path": "rust/app2/src/lib.rs"
     },
     {
-      "path": "rust/monorail/hello.sh",
+      "path": "rust/monorail/cmd/hello.sh",
     }
   ],
   "targets": [
@@ -504,7 +504,7 @@ monorail log tail --stderr --stdout
 This has started a server that will receive logs. For the rest of this tutorial, leave that running in a separate window. Now, let's update our existing command to demonstrate tailing:
 
 ```sh
-cat <<EOF > rust/monorail/hello.sh
+cat <<EOF > rust/monorail/cmd/hello.sh
 #!/bin/bash
 
 for ((i=0; i<20; i++)); do
@@ -604,30 +604,30 @@ cargo test -- --nocapture
 
 ### Defining a command
 
-By default, `monorail` will use the `commands_path` (default: a `monorail` directory in the target path) field of a target as a search path for commands, and by default look for a file with a stem of `{{command}}`, e.g. `{{command}}.sh`. The command we defined earlier in the tutorial, `rust/monorail/hello.sh`, used these defaults; While customizing these defaults is possible via `Monorail.json`, it's not necessary for this tutorial. Let's define two new executables, this time in Python and Awk:
+By default, `monorail` will use the `commands_path` (default: a `monorail` directory in the target path) field of a target as a search path for commands, and by default look for a file with a stem of `{{command}}`, e.g. `{{command}}.sh`. The command we defined earlier in the tutorial, `rust/monorail/cmd/hello.sh`, used these defaults; While customizing these defaults is possible via `Monorail.json`, it's not necessary for this tutorial. Let's define two new executables, this time in Python and Awk:
 
 ```sh
-cat <<EOF > python/app3/monorail/hello.py
+cat <<EOF > python/app3/monorail/cmd/hello.py
 #!venv/bin/python3
 import sys
 
 print("Hello, from python/app3 and virtualenv python!")
 print("An error occurred", file=sys.stderr)
 EOF
-chmod +x python/app3/monorail/hello.py
+chmod +x python/app3/monorail/cmd/hello.py
 ```
 
 NOTE: While we're able to use the venv python3 executable directly in this trivial way, we wouldn't be able to access things that are installed in the environment without first activating the venv in a shell. So, in practice Python projects generally require a command written in a shell script that activates the env and then calls the script.
 
 ```sh
-cat <<EOF > proto/monorail/hello.awk
+cat <<EOF > proto/monorail/cmd/hello.awk
 #!/usr/bin/awk -f
 
 BEGIN {
     print "Hello, from proto and awk!"
 }
 EOF
-chmod +x proto/monorail/hello.awk
+chmod +x proto/monorail/cmd/hello.awk
 ```
 
 As mentioned earlier, commands can be written in any language, and need only be executable. We're using hashbangs to avoid cluttering the tutorial with compilation steps, but commands could be compiled to machine code, stored as something like `hello`, and executed just the same (though this approach wouldn't be portable across OS/architectures). Before we run this command, let's look at the output of analyze:
@@ -774,7 +774,7 @@ monorail target show --commands | jq
       "commands": {
         "hello": {
           "name": "hello",
-          "path": "/private/tmp/monorail-tutorial/rust/monorail/hello.sh",
+          "path": "/private/tmp/monorail-tutorial/rust/monorail/cmd/hello.sh",
           "args": null,
           "is_executable": true
         }
@@ -788,7 +788,7 @@ monorail target show --commands | jq
       "commands": {
         "hello": {
           "name": "hello",
-          "path": "/private/tmp/monorail-tutorial/python/app3/monorail/hello.py",
+          "path": "/private/tmp/monorail-tutorial/python/app3/monorail/cmd/hello.py",
           "args": null,
           "is_executable": true
         }
@@ -802,7 +802,7 @@ monorail target show --commands | jq
       "commands": {
         "hello": {
           "name": "hello",
-          "path": "/private/tmp/monorail-tutorial/proto/monorail/hello.awk",
+          "path": "/private/tmp/monorail-tutorial/proto/monorail/cmd/hello.awk",
           "args": null,
           "is_executable": true
         }
@@ -847,19 +847,19 @@ monorail checkpoint update --pending | jq
   "checkpoint": {
     "id": "4b5c5a4ce18a05b0175c1db6a14fb69bf1ca30d3",
     "pending": {
-      "python/app3/monorail/hello.py": "fad357d1f5adadb0e270dfcf1029c6ed76e2565e62c811613eb315de10143ceb",
+      "python/app3/monorail/cmd/hello.py": "fad357d1f5adadb0e270dfcf1029c6ed76e2565e62c811613eb315de10143ceb",
       "rust/app1/Cargo.toml": "044de847669ad2d9681ba25c4c71e584b5f12d836b9a49e71b4c8d68119e5592",
       "proto/LICENSE.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "Monorail.json": "b02cc0db02ef8c35ba8c285336748810c590950c263b5555f1781ac80f49a6da",
       "proto/README.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "rust/app2/Cargo.toml": "111f4cf0fd1b6ce6f690a5f938599be41963905db7d1169ec02684b00494e383",
       ".gitignore": "c1cf4f9ff4b1419420b8508426051e8925e2888b94b0d830e27b9071989e8e7d",
-      "rust/monorail/hello.sh": "c1b9355995507cd3e90727bc79a0d6716b3f921a29b003f9d7834882218e2020",
+      "rust/monorail/cmd/hello.sh": "c1b9355995507cd3e90727bc79a0d6716b3f921a29b003f9d7834882218e2020",
       "python/app3/hello.py": "3639634f2916441a55e4b9be3497673f110014d0ce3b241c93a9794ffcf2c910",
       "python/app3/tests/test_hello.py": "72b3668ed95f4f246150f5f618e71f6cdbd397af785cd6f1137ee87524566948",
       "rust/Cargo.toml": "a35f77bcdb163b0880db4c5efeb666f96496bcb409b4cd52ba6df517fb4d625b",
       "rust/app2/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9",
-      "proto/monorail/hello.awk": "5af404fedc153710aec00c8bf788d8f71b00c733c506d4c28fda1b7d618e4af6",
+      "proto/monorail/cmd/hello.awk": "5af404fedc153710aec00c8bf788d8f71b00c733c506d4c28fda1b7d618e4af6",
       "rust/app1/src/lib.rs": "536215b9277326854bd1c31401224ddf8f2d7758065c9076182b37621ad68bd9"
     }
   }
