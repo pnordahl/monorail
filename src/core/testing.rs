@@ -17,16 +17,9 @@ pub(crate) const TEST_CONFIG: &str = r#"
                     "cmd2": {
                         "path": "target1/commands/cmd2.sh"
                     },
-                    "cmd3": {
-                        "args": [
-                            "arg1"
-                        ]
-                    },
+                    "cmd3": {},
                     "cmd4": {
-                        "path": "target1/commands/cmd4.sh",
-                        "args": [
-                            "arg1"
-                        ]
+                        "path": "target1/commands/cmd4.sh"
                     }
                 }
             }

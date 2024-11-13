@@ -36,7 +36,6 @@ pub(crate) struct AppTarget<'a> {
 pub(crate) struct AppTargetCommand {
     pub(crate) name: String,
     pub(crate) path: Option<path::PathBuf>,
-    pub(crate) args: Option<Vec<String>>,
     pub(crate) is_executable: bool,
 }
 impl AppTargetCommand {
@@ -46,18 +45,17 @@ impl AppTargetCommand {
         target_command_path: &path::Path,
         work_path: &path::Path,
     ) -> Self {
-        let (p, args) = match def {
-            Some(def) => (
+        let p = match def {
+            Some(def) => {
                 if def.path.is_empty() {
                     // if no path is provided, attempt to discover it
                     file::find_file_by_stem(name, target_command_path)
                 } else {
                     // otherwise, use what was provided instead
                     Some(work_path.join(&def.path))
-                },
-                Some(def.args.clone()),
-            ),
-            None => (file::find_file_by_stem(name, target_command_path), None),
+                }
+            }
+            None => file::find_file_by_stem(name, target_command_path),
         };
         let is_executable = if let Some(ref p) = p {
             file::is_executable(p)
@@ -67,7 +65,6 @@ impl AppTargetCommand {
         Self {
             name: name.to_owned(),
             path: p,
-            args,
             is_executable,
         }
     }

@@ -212,7 +212,16 @@ pub fn build() -> clap::Command {
 
     .subcommand(Command::new(CMD_RUN)
         .about("Run target-defined commands.")
-        .after_help(r#"Execute the provided commands for a graph traversal rooted at the targets specified (optional), or inferred target groups via change detection and graph analysis."#)
+        .after_help(r#"
+When --arg-map-file, --arg-map, and/or --arg are provided, keys that appear multiple 
+times will have their respective arrays concatenated in the following order:
+
+    1. Each --arg-map-file, in the order provided
+    2. Each --arg-map literal, in the order provided
+    3. Each --arg, in the order provided
+
+Refer to --help for more information on these options.
+"#)
         .arg_required_else_help(true)
         .arg(arg_git_path.clone())
         .arg(arg_begin.clone())
@@ -225,7 +234,7 @@ pub fn build() -> clap::Command {
                 .num_args(1..)
                 .value_delimiter(' ')
                 .action(ArgAction::Append)
-                .help("A list of commands that will be executed, in the order specified. If one or more sequences are provided, they will be expanded and executed first.")
+                .help("A list of commands that will be executed, in the order provided. If one or more sequences are provided, they will be expanded and executed first.")
         )
         .arg(
             Arg::new(ARG_SEQUENCES)
@@ -235,7 +244,7 @@ pub fn build() -> clap::Command {
                 .num_args(1..)
                 .value_delimiter(' ')
                 .action(ArgAction::Append)
-                .help("A list of command sequences that will be expanded and executed in the order specified. If one or more commands are provided, they will be executed after all sequences.")
+                .help("A list of command sequences that will be expanded and executed in the order provided. If one or more commands are provided, they will be executed after all sequences.")
         )
         .group(
             ArgGroup::new("commands_and_or_sequences")
@@ -272,26 +281,61 @@ pub fn build() -> clap::Command {
                 .num_args(1..)
                 .required(false)
                 .action(ArgAction::Append)
-                .conflicts_with_all([ARG_ARG_MAP, ARG_ARG_MAP_FILE])
-                .help("One or more runtime argument(s) to be provided when executing a command. This is a shorthand form of the more expressive '--arg-map' and '--arg-map-file', designed for single command + single target use. Providing this flag without specifying exactly one command and one target will result in an error. Arguments supplied are appended to commands.definitions.{{command}}.args, if any are specified in the configuration file.")
+                .help("One or more runtime argument(s) to be provided when executing a command for a single target.")
+                .long_help("This is a shorthand form of the more expressive '--arg-map' and '--arg-map-file', designed for single command + single target use. Providing this flag without specifying exactly one command and one target will result in an error.")
         )
         .arg(
             Arg::new(ARG_ARG_MAP)
                 .long(ARG_ARG_MAP)
                 .short('m')
+                .num_args(1..)
                 .required(false)
-                .num_args(1)
-                .conflicts_with_all([ARG_ARG, ARG_ARG_MAP_FILE])
-                .help("A JSON literal containing nested command-target-args mappings. Arguments supplied are appended to commands.definitions.{{command}}.args, if any are specified in the configuration file."),
+                .action(ArgAction::Append)
+                .help("A list of JSON literals containing nested command-target-argument mappings to use when executing commands.")
+                .long_help(r#"Each object provided is merged from left to right, and keys that appear in multiple mappings have their arrays of arguments concatenated according to the order of the lists provided.
+
+An argmap has the following form:
+
+{
+    "<target>": {
+        "<command>": [
+            "arg1",
+            "arg2",
+            ...
+            "argN"
+        ]
+    }
+}
+
+See `monorail run -h` for information on how this interacts with other arg-related options.
+
+"#),
         )
         .arg(
             Arg::new(ARG_ARG_MAP_FILE)
                 .long(ARG_ARG_MAP_FILE)
                 .short('f')
+                .num_args(1..)
                 .required(false)
-                .num_args(1)
-                .conflicts_with_all([ARG_ARG, ARG_ARG_MAP])
-                .help("A JSON file containing nested command-target-args mappings. Arguments supplied are appended to commands.definitions.{{command}}.args, if any are specified in the configuration file."),
+                .action(ArgAction::Append)
+                .help("A list of files containing nested command-target-args mappings to use when executing commands.")
+                .long_help(r#"Each file provided is merged from left to right, and keys that appear in multiple files have their arrays of arguments concatenated according to the order of the lists provided.
+
+An argmap has the following form:
+
+{
+    "<target>": {
+        "<command>": [
+            "arg1",
+            "arg2",
+            ...
+            "argN"
+        ]
+    }
+}
+
+See `monorail run -h` for information on how this interacts with other arg-related options.
+"#),
         )
 
     )
@@ -300,11 +344,7 @@ pub fn build() -> clap::Command {
         .arg_required_else_help(true)
         .subcommand(Command::new(CMD_SHOW)
             .about("Show results from `run` invocations")))
-    /*
 
-    log --tail --result (-r) <id> --command (-f) [f1 f2 ... fN] --target (-t) [t1 t2 ... tN] --stdout --stderr
-
-    */
     // TODO: monorail log delete [--all] --result [r1 r2 r3 ... rN]
     .subcommand(
         Command::new(CMD_LOG)
@@ -719,8 +759,16 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::run::HandleRunInput<'a> {
                 .into_iter()
                 .flatten()
                 .collect(),
-            arg_map: cmd.get_one::<String>(ARG_ARG_MAP),
-            arg_map_file: cmd.get_one::<String>(ARG_ARG_MAP_FILE),
+            arg_map: cmd
+                .get_many::<String>(ARG_ARG_MAP)
+                .into_iter()
+                .flatten()
+                .collect(),
+            arg_map_file: cmd
+                .get_many::<String>(ARG_ARG_MAP_FILE)
+                .into_iter()
+                .flatten()
+                .collect(),
             include_deps: cmd.get_flag(ARG_DEPS),
             fail_on_undefined: cmd.get_flag(ARG_FAIL_ON_UNDEFINED),
         })
