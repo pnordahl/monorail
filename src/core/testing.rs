@@ -74,6 +74,13 @@ pub(crate) const TEST_CONFIG: &str = r#"
 }
 "#;
 
+pub(crate) fn new_testdir() -> Result<tempfile::TempDir, std::io::Error> {
+    match std::env::var("MONORAIL_TEST_DIR") {
+        Ok(v) => tempfile::tempdir_in(v),
+        Err(_) => tempfile::tempdir(),
+    }
+}
+
 pub(crate) async fn init(repo_path: &path::Path, bare: bool) {
     let mut args = vec!["init", repo_path.to_str().unwrap()];
     if bare {

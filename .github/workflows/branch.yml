@@ -15,6 +15,11 @@ jobs:
   monorail:
     name: monorail
     runs-on: ubuntu-latest
+    env:
+      MONORAIL_TEST_DIR : ${{ github.workspace }}/tmp
+    steps:
+      - name: Create tmp directory
+        run: mkdir -p $MONORAIL_TEST_DIR
     steps:
       - name: prep
         run: |

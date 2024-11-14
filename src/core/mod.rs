@@ -363,7 +363,6 @@ impl<'a> Index<'a> {
 mod tests {
     use super::*;
     use crate::core::testing::*;
-    use tempfile::tempdir;
 
     #[test]
     fn test_trie() {
@@ -384,7 +383,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_index() {
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let l = Index::new(&c, &c.get_target_path_set(), work_path).unwrap();

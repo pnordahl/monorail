@@ -499,11 +499,11 @@ pub(crate) fn get_header(filename: &str, target: &str, command: &str, color: boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::testing::*;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    use tempfile::tempdir;
 
     #[test]
     fn test_compressor_initialization() {
@@ -521,7 +521,7 @@ mod tests {
     fn test_register_paths() {
         let shutdown = Arc::new(AtomicBool::new(false));
         let mut compressor = Compressor::new(2, shutdown.clone());
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = new_testdir().unwrap();
 
         // Register a path and validate the returned CompressorClient
         let test_path = temp_dir.path().join("test_file_1");
@@ -549,7 +549,7 @@ mod tests {
     fn test_run_compressor_with_data_requests() {
         let shutdown = Arc::new(AtomicBool::new(false));
         let mut compressor = Compressor::new(1, shutdown.clone());
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = new_testdir().unwrap();
 
         let test_path = temp_dir.path().join("test_output.zst");
         let client = compressor
@@ -584,7 +584,7 @@ mod tests {
     fn test_shutdown_compressor() {
         let shutdown = Arc::new(AtomicBool::new(false));
         let mut compressor = Compressor::new(2, shutdown.clone());
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = new_testdir().unwrap();
 
         // Register paths
         let test_path_1 = temp_dir.path().join("test_file_1");

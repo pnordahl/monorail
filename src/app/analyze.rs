@@ -384,12 +384,11 @@ pub(crate) fn analyze(
 mod tests {
     use super::*;
     use crate::core::testing::*;
-    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_analyze_empty() {
         let changes = vec![];
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
@@ -412,7 +411,7 @@ mod tests {
             targets: Some(vec![]),
         }];
 
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
@@ -441,7 +440,7 @@ mod tests {
             }]),
         }];
 
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
@@ -469,7 +468,7 @@ mod tests {
             }]),
         }];
 
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
@@ -509,7 +508,7 @@ mod tests {
             ]),
         }];
 
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
@@ -545,7 +544,7 @@ mod tests {
             ]),
         }];
 
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
@@ -595,7 +594,7 @@ mod tests {
             },
         ];
 
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();

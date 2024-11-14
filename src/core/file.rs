@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_contains_file_with_file() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = new_testdir().unwrap();
         let file_path = temp_dir.path().join("test_file.txt");
         fs::write(&file_path, "Hello, world!").unwrap();
 
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn test_contains_file_with_directory_containing_file() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = new_testdir().unwrap();
         let file_path = temp_dir.path().join("test_file.txt");
         fs::write(file_path, "Hello, world!").unwrap();
 
@@ -144,13 +144,13 @@ mod tests {
 
     #[test]
     fn test_contains_file_with_empty_directory() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = new_testdir().unwrap();
         assert!(contains_file(temp_dir.path()).is_err());
     }
 
     #[test]
     fn test_contains_file_with_nested_directory_with_file() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = new_testdir().unwrap();
         let nested_dir = temp_dir.path().join("nested");
         fs::create_dir(&nested_dir).unwrap();
         let nested_file_path = nested_dir.join("nested_file.txt");
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_contains_file_with_nested_empty_directories() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = new_testdir().unwrap();
         let nested_dir = temp_dir.path().join("nested");
         fs::create_dir(nested_dir).unwrap();
 
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_contains_file_with_multiple_directories_one_with_file() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = new_testdir().unwrap();
         let dir1 = temp_dir.path().join("dir1");
         let dir2 = temp_dir.path().join("dir2");
         fs::create_dir(dir1).unwrap();
@@ -186,7 +186,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checksum_is_equal() {
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let repo_path = &td.path();
         init(repo_path, false).await;
         let fname1 = "test1.txt";
@@ -216,7 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_file_checksum() {
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let repo_path = &td.path();
         init(repo_path, false).await;
 

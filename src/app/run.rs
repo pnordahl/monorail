@@ -1107,45 +1107,42 @@ mod tests {
 
     // test_handle_run_cmd_error (failed == true)
 
-    // #[tokio::test]
-    // async fn test_handle_run_cmd_error() {
-    //     let td = tempdir().unwrap();
-    //     let work_path = &td.path();
-    //     let c = new_test_repo(work_path).await;
-    //     let command = "cmd1".to_string();
-    //     let t1 = "target1".to_string();
-    //     let t2 = "target2".to_string();
-    //     let input = setup_handle_run_input(
-    //         vec![&command],
-    //         HashSet::from([&t1, &t2]),
-    //         vec![],
-    //         vec![],
-    //         vec![],
-    //     );
+    #[tokio::test]
+    async fn test_handle_run_cmd_error() {
+        let td = new_testdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let command = "cmd1".to_string();
+        let t1 = "target1".to_string();
+        let t2 = "target2".to_string();
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&t1, &t2]),
+            vec![],
+            vec![],
+            vec![],
+        );
 
-    //     let o = handle_run(&c, &input, "x", work_path).await.unwrap();
-    //     assert!(o.failed);
+        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+        assert!(o.failed);
 
-    //     let crr = &o.results[0];
-    //     assert_eq!(crr.command, "cmd1");
-    //     for tg in &crr.target_groups {
-    //         for (target, trr) in tg {
-    //             if *target == t1 {
-    //                 assert_eq!(trr.status, RunStatus::Error);
-    //                 assert_eq!(trr.code, Some(1));
-    //                 assert!(trr.runtime_secs.is_some());
-    //             } else if *target == t2 {
-    //                 assert_eq!(trr.status, RunStatus::Skipped);
-    //                 assert_eq!(trr.code, None);
-    //                 assert!(trr.runtime_secs.is_none());
-    //             }
-    //         }
-    //     }
-    // }
+        let crr = &o.results[0];
+        assert_eq!(crr.command, "cmd1");
+
+        for tg in &crr.target_groups {
+            for (target, trr) in tg {
+                if *target == t1 {
+                    assert_eq!(trr.status, RunStatus::Error);
+                    assert_eq!(trr.code, Some(1));
+                    assert!(trr.runtime_secs.is_some());
+                }
+            }
+        }
+    }
 
     #[tokio::test]
     async fn test_handle_run() {
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let command = "cmd0".to_string();
@@ -1196,7 +1193,7 @@ mod tests {
 
     #[test]
     fn test_argmap_single_command_target_all() {
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let command = "build".to_string();
         let target = "rust/crate1".to_string();
         let arg1 = "--plorp".to_string();
@@ -1326,7 +1323,7 @@ mod tests {
 
     #[test]
     fn test_argmap_valid_file() {
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let command = "build".to_string();
         let target = "rust/crate1".to_string();
 
@@ -1358,7 +1355,7 @@ mod tests {
 
     #[test]
     fn test_argmap_invalid_file() {
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let path = td.path().join("invalid_argmap.json");
         std::fs::write(&path, r#"{lksjdfklj"#).expect("Failed to write test file");
         let path_str = path.display().to_string();
@@ -1410,7 +1407,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_plan() {
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let cfg = new_test_repo(work_path).await;
         let cmd1 = "cmd2".to_string();
@@ -1450,7 +1447,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_plan() {
-        let td = tempdir().unwrap();
+        let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
