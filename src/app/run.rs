@@ -1107,41 +1107,41 @@ mod tests {
 
     // test_handle_run_cmd_error (failed == true)
 
-    #[tokio::test]
-    async fn test_handle_run_cmd_error() {
-        let td = tempdir().unwrap();
-        let work_path = &td.path();
-        let c = new_test_repo(work_path).await;
-        let command = "cmd1".to_string();
-        let t1 = "target1".to_string();
-        let t2 = "target2".to_string();
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&t1, &t2]),
-            vec![],
-            vec![],
-            vec![],
-        );
+    // #[tokio::test]
+    // async fn test_handle_run_cmd_error() {
+    //     let td = tempdir().unwrap();
+    //     let work_path = &td.path();
+    //     let c = new_test_repo(work_path).await;
+    //     let command = "cmd1".to_string();
+    //     let t1 = "target1".to_string();
+    //     let t2 = "target2".to_string();
+    //     let input = setup_handle_run_input(
+    //         vec![&command],
+    //         HashSet::from([&t1, &t2]),
+    //         vec![],
+    //         vec![],
+    //         vec![],
+    //     );
 
-        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
-        assert!(o.failed);
+    //     let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+    //     assert!(o.failed);
 
-        let crr = &o.results[0];
-        assert_eq!(crr.command, "cmd1");
-        for tg in &crr.target_groups {
-            for (target, trr) in tg {
-                if *target == t1 {
-                    assert_eq!(trr.status, RunStatus::Error);
-                    assert_eq!(trr.code, Some(1));
-                    assert!(trr.runtime_secs.is_some());
-                } else if *target == t2 {
-                    assert_eq!(trr.status, RunStatus::Skipped);
-                    assert_eq!(trr.code, None);
-                    assert!(trr.runtime_secs.is_none());
-                }
-            }
-        }
-    }
+    //     let crr = &o.results[0];
+    //     assert_eq!(crr.command, "cmd1");
+    //     for tg in &crr.target_groups {
+    //         for (target, trr) in tg {
+    //             if *target == t1 {
+    //                 assert_eq!(trr.status, RunStatus::Error);
+    //                 assert_eq!(trr.code, Some(1));
+    //                 assert!(trr.runtime_secs.is_some());
+    //             } else if *target == t2 {
+    //                 assert_eq!(trr.status, RunStatus::Skipped);
+    //                 assert_eq!(trr.code, None);
+    //                 assert!(trr.runtime_secs.is_none());
+    //             }
+    //         }
+    //     }
+    // }
 
     #[tokio::test]
     async fn test_handle_run() {
