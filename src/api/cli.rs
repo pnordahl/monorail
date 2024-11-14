@@ -405,16 +405,7 @@ See `monorail run -h` for information on how this interacts with other arg-relat
                     .long(ARG_ALL)
                     .help("Display changes, change targets, and targets")
                     .action(ArgAction::SetTrue),
-            )
-            .arg(
-            Arg::new(ARG_TARGETS)
-                .short('t')
-                .long(ARG_TARGETS)
-                .required(false)
-                .num_args(1..)
-                .value_delimiter(' ')
-                .action(ArgAction::Append)
-                .help("Scope analysis to only the provided targets.")))
+            ))
     .subcommand(
         Command::new(CMD_OUT)
         .about("Manipulate data in the monorail output directory")
@@ -792,11 +783,6 @@ impl<'a> From<&'a clap::ArgMatches> for app::analyze::HandleAnalyzeInput<'a> {
                 end: cmd.get_one::<String>(ARG_END).map(|x: &String| x.as_str()),
                 git_path: cmd.get_one::<String>(ARG_GIT_PATH).unwrap(),
             },
-            targets: cmd
-                .get_many::<String>(ARG_TARGETS)
-                .into_iter()
-                .flatten()
-                .collect(),
             analyze_input: app::analyze::AnalyzeInput {
                 show_changes: cmd.get_flag(ARG_CHANGES),
                 show_change_targets: cmd.get_flag(ARG_CHANGE_TARGETS),

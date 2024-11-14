@@ -13,7 +13,6 @@ use crate::core::{git, tracking};
 pub(crate) struct HandleAnalyzeInput<'a> {
     pub(crate) git_opts: git::GitOptions<'a>,
     pub(crate) analyze_input: AnalyzeInput,
-    pub(crate) targets: HashSet<&'a String>,
 }
 
 #[derive(Debug)]
@@ -87,30 +86,22 @@ pub(crate) async fn handle_analyze<'a>(
     input: &HandleAnalyzeInput<'a>,
     work_path: &'a path::Path,
 ) -> Result<AnalyzeOutput, MonorailError> {
-    let (mut index, changes) = match input.targets.len() {
-        0 => {
-            let changes = match cfg.change_provider.r#use {
-                ChangeProviderKind::Git => match cfg.change_provider.r#use {
-                    ChangeProviderKind::Git => {
-                        let tracking = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
-                        let checkpoint = match tracking.open_checkpoint() {
-                            Ok(checkpoint) => Some(checkpoint),
-                            Err(MonorailError::TrackingCheckpointNotFound(_)) => None,
-                            Err(e) => {
-                                return Err(e);
-                            }
-                        };
-                        git::get_git_all_changes(&input.git_opts, &checkpoint, work_path).await?
+    let changes = match cfg.change_provider.r#use {
+        ChangeProviderKind::Git => match cfg.change_provider.r#use {
+            ChangeProviderKind::Git => {
+                let tracking = tracking::Table::new(&cfg.get_tracking_path(work_path))?;
+                let checkpoint = match tracking.open_checkpoint() {
+                    Ok(checkpoint) => Some(checkpoint),
+                    Err(MonorailError::TrackingCheckpointNotFound(_)) => None,
+                    Err(e) => {
+                        return Err(e);
                     }
-                },
-            };
-            (
-                core::Index::new(cfg, &cfg.get_target_path_set(), work_path)?,
-                changes,
-            )
-        }
-        _ => (core::Index::new(cfg, &input.targets, work_path)?, None),
+                };
+                git::get_git_all_changes(&input.git_opts, &checkpoint, work_path).await?
+            }
+        },
     };
+    let mut index = core::Index::new(cfg, &cfg.get_target_path_set(), work_path)?;
 
     analyze(&input.analyze_input, &mut index, changes)
 }
