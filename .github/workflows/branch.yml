@@ -20,8 +20,8 @@ jobs:
     steps:
       - name: prep
         run: |
-          mkdir -p $MONORAIL_TEST_DIR
           sudo chown -R $USER:$USER ${{ github.workspace }}
+          mkdir -p $MONORAIL_TEST_DIR
           git config --global user.name "FIRST_NAME LAST_NAME"
           git config --global user.email "MY_NAME@example.com"
 
