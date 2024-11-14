@@ -205,7 +205,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "not_a_target/commands",
         "cmd0.sh",
-        b"#!/bin/sh\necho 'not_a_target cmd0'",
+        b"#!/usr/bin/env bash\necho 'not_a_target cmd0'",
         true,
     )
     .await;
@@ -215,7 +215,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd0.sh",
-        b"#!/bin/sh\necho 'target1 cmd0'",
+        b"#!/usr/bin/env bash\necho 'target1 cmd0'",
         true,
     )
     .await;
@@ -223,7 +223,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd1.sh",
-        b"#!/bin/sh\nexit 1",
+        b"#!/usr/bin/env bash\nexit 1",
         true,
     )
     .await;
@@ -231,7 +231,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd2.sh",
-        b"#!/bin/sh\necho 'target1 cmd2'",
+        b"#!/usr/bin/env bash\necho 'target1 cmd2'",
         true,
     )
     .await;
@@ -239,7 +239,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd3.sh",
-        b"#!/bin/sh\necho \"target1 cmd3\"",
+        b"#!/usr/bin/env bash\necho \"target1 cmd3\"",
         true,
     )
     .await;
@@ -247,7 +247,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd4.sh",
-        b"#!/bin/sh\necho 'target1 cmd4'",
+        b"#!/usr/bin/env bash\necho 'target1 cmd4'",
         true,
     )
     .await;
@@ -257,7 +257,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target2/monorail/cmd",
         "cmd0.sh",
-        b"#!/bin/sh\necho 'target2 cmd0'",
+        b"#!/usr/bin/env bash\necho 'target2 cmd0'",
         true,
     )
     .await;
@@ -265,7 +265,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target2/monorail/cmd",
         "cmd1.sh",
-        b"#!/bin/sh\necho 'target2 cmd1'",
+        b"#!/usr/bin/env bash\necho 'target2 cmd1'",
         true,
     )
     .await;
@@ -276,7 +276,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         "target3/monorail/cmd",
         "cmd0.sh",
         r#"
-        #!/bin/sh
+        #!/usr/bin/env bash
 
 if [[ "$1" != 'base1' ]]; then
     exit 1
@@ -305,7 +305,7 @@ fi
         rp,
         "target4/monorail/cmd",
         "cmd0.sh",
-        b"#!/bin/sh\necho 'target4 cmd0'",
+        b"#!/usr/bin/env bash\necho 'target4 cmd0'",
         true,
     )
     .await;
@@ -317,7 +317,7 @@ fi
         rp,
         "target4/target5/monorail/cmd",
         "cmd0.sh",
-        b"#!/bin/sh\necho 'target4/target5 cmd0'",
+        b"#!/usr/bin/env bash\necho 'target4/target5 cmd0'",
         true,
     )
     .await;
