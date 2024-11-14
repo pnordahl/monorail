@@ -76,7 +76,10 @@ pub(crate) const TEST_CONFIG: &str = r#"
 
 pub(crate) fn new_testdir() -> Result<tempfile::TempDir, std::io::Error> {
     match std::env::var("MONORAIL_TEST_DIR") {
-        Ok(v) => tempfile::tempdir_in(v),
+        Ok(v) => {
+            std::fs::create_dir_all(&v)?;
+            tempfile::tempdir_in(v)
+        }
         Err(_) => tempfile::tempdir(),
     }
 }
