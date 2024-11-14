@@ -1141,162 +1141,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_run1() {
-        let td = new_testdir().unwrap();
-        let work_path = &td.path();
-        let c = new_test_repo(work_path).await;
-        let command = "cmd0".to_string();
-        let target = "target1".to_string();
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&target]),
-            vec![],
-            vec![],
-            vec![],
-        );
-
-        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
-        dbg!(&o);
-    }
-    #[tokio::test]
-    async fn test_handle_run2() {
-        let td = new_testdir().unwrap();
-        let work_path = &td.path();
-        let c = new_test_repo(work_path).await;
-        let command = "cmd0".to_string();
-        let target = "target2".to_string();
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&target]),
-            vec![],
-            vec![],
-            vec![],
-        );
-
-        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
-        dbg!(&o);
-    }
-    #[tokio::test]
-    async fn test_handle_run3() {
-        let td = new_testdir().unwrap();
-        let work_path = &td.path();
-        let c = new_test_repo(work_path).await;
-        let command = "cmd0".to_string();
-        let target = "target3".to_string();
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&target]),
-            vec![],
-            vec![],
-            vec![],
-        );
-
-        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
-        dbg!(&o);
-    }
-    #[tokio::test]
-    async fn test_handle_run4() {
-        let td = new_testdir().unwrap();
-        let work_path = &td.path();
-        let c = new_test_repo(work_path).await;
-        let command = "cmd0".to_string();
-        let target = "target4".to_string();
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&target]),
-            vec![],
-            vec![],
-            vec![],
-        );
-
-        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
-        dbg!(&o);
-    }
-    #[tokio::test]
-    async fn test_handle_run5() {
-        let td = new_testdir().unwrap();
-        let work_path = &td.path();
-        let c = new_test_repo(work_path).await;
-        let command = "cmd0".to_string();
-        let target = "target5".to_string();
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&target]),
-            vec![],
-            vec![],
-            vec![],
-        );
-
-        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
-        dbg!(&o);
-    }
-    #[tokio::test]
-    async fn test_handle_run6() {
-        let td = new_testdir().unwrap();
-        let work_path = &td.path();
-        let c = new_test_repo(work_path).await;
-        let command = "cmd0".to_string();
-        let target = "target6".to_string();
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&target]),
-            vec![],
-            vec![],
-            vec![],
-        );
-
-        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
-        dbg!(&o);
-    }
-
-    #[tokio::test]
     async fn test_handle_run() {
         let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let command = "cmd0".to_string();
-        let target = "target3".to_string();
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&target]),
-            vec![],
-            vec![],
-            vec![],
-        );
+        let input = setup_handle_run_input(vec![&command], HashSet::new(), vec![], vec![], vec![]);
 
         let o = handle_run(&c, &input, "x", work_path).await.unwrap();
-        dbg!(&o);
         assert!(!o.failed);
         assert_eq!(o.invocation, "x");
-        // assert_eq!(
-        //     o.out.run.targets,
-        //     HashMap::from([
-        //         (
-        //             "target6".to_string(),
-        //             "3c992f4174a270d2e9787c32535039e2e153e2649bc22d2dfef9dc36ab241d26".to_string()
-        //         ),
-        //         (
-        //             "target2".to_string(),
-        //             "241280caf7050c8d7e5ad3efb9760f91355431bb73bb260de2c225a86f634ee4".to_string()
-        //         ),
-        //         (
-        //             "target4".to_string(),
-        //             "7e3fb57bd1219911770bc429f87c2af1856c736d0bbb735bbb56736b52f0c35a".to_string()
-        //         ),
-        //         (
-        //             "target1".to_string(),
-        //             "348c5ac8a37a1212512d4366a084ba14e38aae3b78eedd4bc4b63c7b0af6c889".to_string()
-        //         ),
-        //         (
-        //             "target4/target5".to_string(),
-        //             "13ad70c6d0a981250ab7e6c54147f50f986bca583514c423fe8e610f5a63bf58".to_string()
-        //         ),
-        //         (
-        //             "target3".to_string(),
-        //             "89877681fadeeed65cc01a350cee399de305404ea931acf583c2342e9b937c3e".to_string()
-        //         )
-        //     ])
-        // );
+        assert_eq!(
+            o.out.run.targets,
+            HashMap::from([
+                (
+                    "target6".to_string(),
+                    "3c992f4174a270d2e9787c32535039e2e153e2649bc22d2dfef9dc36ab241d26".to_string()
+                ),
+                (
+                    "target2".to_string(),
+                    "241280caf7050c8d7e5ad3efb9760f91355431bb73bb260de2c225a86f634ee4".to_string()
+                ),
+                (
+                    "target4".to_string(),
+                    "7e3fb57bd1219911770bc429f87c2af1856c736d0bbb735bbb56736b52f0c35a".to_string()
+                ),
+                (
+                    "target1".to_string(),
+                    "348c5ac8a37a1212512d4366a084ba14e38aae3b78eedd4bc4b63c7b0af6c889".to_string()
+                ),
+                (
+                    "target4/target5".to_string(),
+                    "13ad70c6d0a981250ab7e6c54147f50f986bca583514c423fe8e610f5a63bf58".to_string()
+                ),
+                (
+                    "target3".to_string(),
+                    "89877681fadeeed65cc01a350cee399de305404ea931acf583c2342e9b937c3e".to_string()
+                )
+            ])
+        );
         let crr = &o.results[0];
         assert_eq!(crr.command, "cmd0");
         for tg in &crr.target_groups {

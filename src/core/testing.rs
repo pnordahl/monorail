@@ -282,8 +282,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target3/monorail/cmd",
         "cmd0.sh",
-        r#"
-        #!/usr/bin/env bash
+        r#"#!/usr/bin/env bash
 
 if [[ "$1" != 'base1' ]]; then
     exit 1
