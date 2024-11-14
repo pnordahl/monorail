@@ -24,8 +24,8 @@ pub(crate) struct HandleRunInput<'a> {
     pub(crate) sequences: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
     pub(crate) args: Vec<&'a String>,
-    pub(crate) arg_map: Vec<&'a String>,
-    pub(crate) arg_map_file: Vec<&'a String>,
+    pub(crate) argmap: Vec<&'a String>,
+    pub(crate) argmap_file: Vec<&'a String>,
     pub(crate) include_deps: bool,
     pub(crate) fail_on_undefined: bool,
     pub(crate) use_base_argmaps: bool,
@@ -184,12 +184,12 @@ impl ArgMap {
     }
     fn merge_run_input(&mut self, input: &HandleRunInput) -> Result<(), MonorailError> {
         // first process files
-        for f in &input.arg_map_file {
+        for f in &input.argmap_file {
             self.merge_file(path::Path::new(f))?;
         }
 
         // next, argmap literals
-        for s in &input.arg_map {
+        for s in &input.argmap {
             let src: HashMap<String, HashMap<String, Vec<String>>> = serde_json::from_str(s)
                 .map_err(|e| {
                     MonorailError::Generic(format!("Inline arg map contains invalid JSON; {}", e))
@@ -249,7 +249,7 @@ pub(crate) async fn handle_run<'a>(
     let mut tracking_run = get_next_tracking_run(cfg, &tracking_table)?;
     let run_path = setup_run_path(cfg, tracking_run.id, work_path)?;
     let commands = get_all_commands(cfg, &input.commands, &input.sequences)?;
-    let mut arg_map = ArgMap::new();
+    let mut argmap = ArgMap::new();
 
     let (index, target_groups) = match input.targets.len() {
         0 => {
@@ -278,7 +278,7 @@ pub(crate) async fn handle_run<'a>(
                     let base =
                         cfg.targets[*index.get_target_index(t)?].get_argmap_base_path(work_path);
                     if file::exists(&base).await {
-                        arg_map.merge_target_commands(t, &base)?;
+                        argmap.merge_target_commands(t, &base)?;
                     }
                 }
             }
@@ -294,7 +294,7 @@ pub(crate) async fn handle_run<'a>(
                         let base = cfg.targets[*index.get_target_index(t)?]
                             .get_argmap_base_path(work_path);
                         if file::exists(&base).await {
-                            arg_map.merge_target_commands(t, &base)?;
+                            argmap.merge_target_commands(t, &base)?;
                         }
                     }
                 }
@@ -310,7 +310,7 @@ pub(crate) async fn handle_run<'a>(
                         let base = cfg.targets[*index.get_target_index(t)?]
                             .get_argmap_base_path(work_path);
                         if file::exists(&base).await {
-                            arg_map.merge_target_commands(t, &base)?;
+                            argmap.merge_target_commands(t, &base)?;
                         }
                     }
                     tg.push(vec![t.to_string()]);
@@ -322,7 +322,7 @@ pub(crate) async fn handle_run<'a>(
         }
     };
 
-    arg_map.merge_run_input(input)?;
+    argmap.merge_run_input(input)?;
 
     let plan = get_plan(
         &index,
@@ -331,7 +331,7 @@ pub(crate) async fn handle_run<'a>(
         &target_groups,
         work_path,
         &run_path,
-        &arg_map,
+        &argmap,
     )?;
 
     let run_output = run_internal(
@@ -379,7 +379,7 @@ fn get_plan<'a>(
     target_groups: &[Vec<String>],
     work_path: &path::Path,
     run_path: &path::Path,
-    arg_map: &ArgMap,
+    argmap: &ArgMap,
 ) -> Result<Plan, MonorailError> {
     let mut out = Out::new(run_path);
 
@@ -428,7 +428,7 @@ fn get_plan<'a>(
                     path: target_path.to_owned(),
                     command_work_path: work_path.join(target_path),
                     command_path,
-                    command_args: arg_map.get_args(&tar.path, cmd).map(|x| x.to_vec()),
+                    command_args: argmap.get_args(&tar.path, cmd).map(|x| x.to_vec()),
                     logs,
                 });
             }
@@ -974,7 +974,7 @@ async fn process_plan(
                     );
                 }
             }
-            failed = process_task_results(
+            if process_task_results(
                 js,
                 plan_targets,
                 &token,
@@ -982,7 +982,10 @@ async fn process_plan(
                 command,
                 &mut result_target_group,
             )
-            .await?;
+            .await?
+            {
+                failed = true;
+            }
 
             crr.target_groups.push(result_target_group);
 
@@ -1069,8 +1072,8 @@ mod tests {
         commands: Vec<&'a String>,
         targets: HashSet<&'a String>,
         args: Vec<&'a String>,
-        arg_map: Vec<&'a String>,
-        arg_map_file: Vec<&'a String>,
+        argmap: Vec<&'a String>,
+        argmap_file: Vec<&'a String>,
     ) -> HandleRunInput<'a> {
         HandleRunInput {
             git_opts: git::GitOptions::default(),
@@ -1078,15 +1081,15 @@ mod tests {
             sequences: vec![],
             targets,
             args,
-            arg_map,
-            arg_map_file,
+            argmap,
+            argmap_file,
             include_deps: false,
             fail_on_undefined: false,
             use_base_argmaps: true,
         }
     }
 
-    const ARG_MAP_JSON: &str = r#"{
+    const ARGMAP_JSON: &str = r#"{
       "rust/crate1": {
         "build": [
           "--release"
@@ -1094,7 +1097,7 @@ mod tests {
       }
     }"#;
 
-    const ARG_MAP_JSON2: &str = r#"{
+    const ARGMAP_JSON2: &str = r#"{
       "rust/crate1": {
         "build": [
           "--force"
@@ -1102,15 +1105,104 @@ mod tests {
       }
     }"#;
 
+    // test_handle_run_cmd_error (failed == true)
+
+    #[tokio::test]
+    async fn test_handle_run_cmd_error() {
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let command = "cmd1".to_string();
+        let t1 = "target1".to_string();
+        let t2 = "target2".to_string();
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&t1, &t2]),
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+        assert!(o.failed);
+
+        let crr = &o.results[0];
+        assert_eq!(crr.command, "cmd1");
+        for tg in &crr.target_groups {
+            for (target, trr) in tg {
+                if *target == t1 {
+                    assert_eq!(trr.status, RunStatus::Error);
+                    assert_eq!(trr.code, Some(1));
+                    assert!(trr.runtime_secs.is_some());
+                } else if *target == t2 {
+                    assert_eq!(trr.status, RunStatus::Skipped);
+                    assert_eq!(trr.code, None);
+                    assert!(trr.runtime_secs.is_none());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_run() {
+        let td = tempdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let command = "cmd0".to_string();
+        let input = setup_handle_run_input(vec![&command], HashSet::new(), vec![], vec![], vec![]);
+
+        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+        assert!(!o.failed);
+        assert_eq!(o.invocation, "x");
+        assert_eq!(
+            o.out.run.targets,
+            HashMap::from([
+                (
+                    "target6".to_string(),
+                    "3c992f4174a270d2e9787c32535039e2e153e2649bc22d2dfef9dc36ab241d26".to_string()
+                ),
+                (
+                    "target2".to_string(),
+                    "241280caf7050c8d7e5ad3efb9760f91355431bb73bb260de2c225a86f634ee4".to_string()
+                ),
+                (
+                    "target4".to_string(),
+                    "7e3fb57bd1219911770bc429f87c2af1856c736d0bbb735bbb56736b52f0c35a".to_string()
+                ),
+                (
+                    "target1".to_string(),
+                    "348c5ac8a37a1212512d4366a084ba14e38aae3b78eedd4bc4b63c7b0af6c889".to_string()
+                ),
+                (
+                    "target4/target5".to_string(),
+                    "13ad70c6d0a981250ab7e6c54147f50f986bca583514c423fe8e610f5a63bf58".to_string()
+                ),
+                (
+                    "target3".to_string(),
+                    "89877681fadeeed65cc01a350cee399de305404ea931acf583c2342e9b937c3e".to_string()
+                )
+            ])
+        );
+        let crr = &o.results[0];
+        assert_eq!(crr.command, "cmd0");
+        for tg in &crr.target_groups {
+            for (_, trr) in tg.iter() {
+                assert_eq!(trr.status, RunStatus::Success);
+                assert_eq!(trr.code, Some(0));
+                assert!(trr.runtime_secs.is_some());
+            }
+        }
+    }
+
     #[test]
-    fn test_arg_map_single_command_target_all() {
+    fn test_argmap_single_command_target_all() {
         let td = tempdir().unwrap();
         let command = "build".to_string();
         let target = "rust/crate1".to_string();
         let arg1 = "--plorp".to_string();
-        let argmap = ARG_MAP_JSON.to_string();
+        let argmap = ARGMAP_JSON.to_string();
 
-        let path = td.path().join("test_arg_map.json");
+        let path = td.path().join("test_argmap.json");
         std::fs::write(&path, r#"{"rust/crate1":{"build":["--burp"]}}"#)
             .expect("Failed to write test file");
         let path_str = path.display().to_string();
@@ -1123,11 +1215,11 @@ mod tests {
             vec![&path_str],
         );
 
-        let mut arg_map = ArgMap::new();
-        arg_map
+        let mut argmap = ArgMap::new();
+        argmap
             .merge_run_input(&input)
             .expect("Expected argmap merge to succeed");
-        let args = arg_map
+        let args = argmap
             .get_args("rust/crate1", "build")
             .expect("Args not found");
 
@@ -1138,7 +1230,7 @@ mod tests {
     }
 
     #[test]
-    fn test_arg_map_single_command_target() {
+    fn test_argmap_single_command_target() {
         let command = "build".to_string();
         let target = "rust/crate1".to_string();
         let arg1 = "--release".to_string();
@@ -1152,11 +1244,11 @@ mod tests {
             vec![],
         );
 
-        let mut arg_map = ArgMap::new();
-        arg_map
+        let mut argmap = ArgMap::new();
+        argmap
             .merge_run_input(&input)
             .expect("Expected argmap merge to succeed");
-        let args = arg_map
+        let args = argmap
             .get_args("rust/crate1", "build")
             .expect("Args not found");
 
@@ -1164,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn test_arg_map_args_multiple_commands_error() {
+    fn test_argmap_args_multiple_commands_error() {
         let command1 = "build".to_string();
         let command2 = "test".to_string();
         let target = "rust/crate1".to_string();
@@ -1178,13 +1270,13 @@ mod tests {
             vec![],
         );
 
-        let mut arg_map = ArgMap::new();
-        let result = arg_map.merge_run_input(&input);
+        let mut argmap = ArgMap::new();
+        let result = argmap.merge_run_input(&input);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_arg_map_args_multiple_targets_error() {
+    fn test_argmap_args_multiple_targets_error() {
         let command = "build".to_string();
         let target1 = "rust/crate1".to_string();
         let target2 = "rust/crate2".to_string();
@@ -1198,23 +1290,23 @@ mod tests {
             vec![],
         );
 
-        let mut arg_map = ArgMap::new();
-        let result = arg_map.merge_run_input(&input);
+        let mut argmap = ArgMap::new();
+        let result = argmap.merge_run_input(&input);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_arg_map_valid_inline_json() {
-        let json = ARG_MAP_JSON.to_string();
-        let json2 = ARG_MAP_JSON2.to_string();
+    fn test_argmap_valid_inline_json() {
+        let json = ARGMAP_JSON.to_string();
+        let json2 = ARGMAP_JSON2.to_string();
         let input =
             setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&json, &json2], vec![]);
 
-        let mut arg_map = ArgMap::new();
-        arg_map
+        let mut argmap = ArgMap::new();
+        argmap
             .merge_run_input(&input)
             .expect("Expected argmap merge to succeed");
-        let args = arg_map
+        let args = argmap
             .get_args("rust/crate1", "build")
             .expect("Args not found");
 
@@ -1222,28 +1314,28 @@ mod tests {
     }
 
     #[test]
-    fn test_arg_map_invalid_inline_json() {
+    fn test_argmap_invalid_inline_json() {
         let invalid_json = r#"{lkjsdf"#.to_string();
         let input =
             setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&invalid_json], vec![]);
 
-        let mut arg_map = ArgMap::new();
-        let result = arg_map.merge_run_input(&input);
+        let mut argmap = ArgMap::new();
+        let result = argmap.merge_run_input(&input);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_arg_map_valid_file() {
+    fn test_argmap_valid_file() {
         let td = tempdir().unwrap();
         let command = "build".to_string();
         let target = "rust/crate1".to_string();
 
-        let path = td.path().join("test_arg_map.json");
-        std::fs::write(&path, ARG_MAP_JSON).expect("Failed to write test file");
+        let path = td.path().join("test_argmap.json");
+        std::fs::write(&path, ARGMAP_JSON).expect("Failed to write test file");
         let path_str = path.display().to_string();
 
-        let path2 = td.path().join("test_arg_map2.json");
-        std::fs::write(&path2, ARG_MAP_JSON2).expect("Failed to write test file");
+        let path2 = td.path().join("test_argmap2.json");
+        std::fs::write(&path2, ARGMAP_JSON2).expect("Failed to write test file");
         let path_str2 = path2.display().to_string();
 
         let input = setup_handle_run_input(
@@ -1253,41 +1345,41 @@ mod tests {
             vec![],
             vec![&path_str, &path_str2],
         );
-        let mut arg_map = ArgMap::new();
-        arg_map
+        let mut argmap = ArgMap::new();
+        argmap
             .merge_run_input(&input)
             .expect("Expected argmap merge to succeed");
 
-        let args = arg_map
+        let args = argmap
             .get_args("rust/crate1", "build")
             .expect("Args not found");
         assert_eq!(args, &vec!["--release".to_string(), "--force".to_string()]);
     }
 
     #[test]
-    fn test_arg_map_invalid_file() {
+    fn test_argmap_invalid_file() {
         let td = tempdir().unwrap();
-        let path = td.path().join("invalid_arg_map.json");
+        let path = td.path().join("invalid_argmap.json");
         std::fs::write(&path, r#"{lksjdfklj"#).expect("Failed to write test file");
         let path_str = path.display().to_string();
 
         let input = setup_handle_run_input(vec![], HashSet::new(), vec![], vec![], vec![&path_str]);
-        let mut arg_map = ArgMap::new();
-        let result = arg_map.merge_run_input(&input);
+        let mut argmap = ArgMap::new();
+        let result = argmap.merge_run_input(&input);
 
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_arg_map_get_args_nonexistent() {
-        let json = ARG_MAP_JSON.to_string();
+    fn test_argmap_get_args_nonexistent() {
+        let json = ARGMAP_JSON.to_string();
         let input = setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&json], vec![]);
 
-        let mut arg_map = ArgMap::new();
-        arg_map
+        let mut argmap = ArgMap::new();
+        argmap
             .merge_run_input(&input)
             .expect("Expected argmap merge to succeed");
-        let args = arg_map.get_args("nonexistent_target", "nonexistent_command");
+        let args = argmap.get_args("nonexistent_target", "nonexistent_command");
 
         assert!(args.is_none());
     }
@@ -1300,7 +1392,7 @@ mod tests {
     ) -> Plan {
         let index = core::Index::new(cfg, &cfg.get_target_path_set(), work_path).unwrap();
         let run_path = work_path.join("run_path");
-        let arg_map: ArgMap = ArgMap {
+        let argmap: ArgMap = ArgMap {
             table: HashMap::new(),
         };
 
@@ -1311,7 +1403,7 @@ mod tests {
             target_groups,
             work_path,
             &run_path,
-            &arg_map,
+            &argmap,
         )
         .unwrap()
     }
@@ -1321,7 +1413,7 @@ mod tests {
         let td = tempdir().unwrap();
         let work_path = &td.path();
         let cfg = new_test_repo(work_path).await;
-        let cmd1 = "cmd1".to_string();
+        let cmd1 = "cmd2".to_string();
         let target1 = "target1".to_string();
         let commands = vec![&cmd1];
         let target_groups = vec![vec![target1.clone()]];
@@ -1366,7 +1458,7 @@ mod tests {
         let commands = vec![&cmd1];
         let target_groups = vec![vec!["target1".to_string()]];
         let run_path = work_path.join("run_path");
-        let arg_map: ArgMap = ArgMap {
+        let argmap: ArgMap = ArgMap {
             table: HashMap::new(),
         };
 
@@ -1377,7 +1469,7 @@ mod tests {
             &target_groups,
             work_path,
             &run_path,
-            &arg_map,
+            &argmap,
         );
         assert!(result.is_ok(), "get_plan returned an error");
 

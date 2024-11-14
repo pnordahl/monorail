@@ -5,6 +5,9 @@
 ### Changed
 Removed `--target (-t)` flag from `monorail analyze`
 
+### Fixed
+Issue preventing `monorail run` from returning non-zero exit codes
+
 ## [3.5.0] - 2024-11-13
 
 ### Changed

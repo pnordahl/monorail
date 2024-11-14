@@ -224,13 +224,14 @@ Defining a command can be done automatically by accepting `monorail` defaults, o
 
 #### Automatic
 
-By default, targets store their commands in a `monorail` directory relative to the target's path. The stem of the file becomes the command name. For example:
+By default, targets store their commands in a `monorail/cmd` directory relative to the target's path. The stem of the file becomes the command name. For example:
 
 ```sh
 repo/
   one/
     monorail/
-      build.sh
+      cmd/
+        build.sh
 ```
 
 This defines the `build` command for the `one` target.
@@ -299,7 +300,7 @@ This will run `build` first for `dep1`, and then `target1` and `target2` in para
 
 #### Arguments
 
-Commands can be provided with positional arguments at runtime. There are two mechanism for doing this; the base argmap, and as flags provided to `monorail run`. In your command executables, capture these positional arguments as you would in any program in that language.
+Commands can be provided with positional arguments at runtime. There are two mechanism for doing this; the base argmap, and as flags provided to `monorail run`. In your command executables, capture these positional arguments as you would in any program in that language. As is common, index 0 of the positional arguments is always an absolute path to the executable, so any additional arguments begin at index 1.
 
 ##### Base argmap
 The base argmap is an optional file containing argument mappings, which, if provided, is automatically loaded before any other argument mappings provided to `monorail run`. This is useful for specifying static parameterization for commands, especially when a command executable is generic and reused among multiple targets. An example of this useful pattern is shown in https://github.com/pnordahl/monorail-example in the rust crate targets.

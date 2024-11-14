@@ -183,16 +183,19 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         .await
         .unwrap();
     tokio::fs::create_dir_all(rp.join("target2")).await.unwrap();
-    tokio::fs::create_dir_all(rp.join("target3/monorail"))
+    tokio::fs::create_dir_all(rp.join("target2/argmap"))
         .await
         .unwrap();
-    tokio::fs::create_dir_all(rp.join("target4/monorail"))
+    tokio::fs::create_dir_all(rp.join("target3/monorail/cmd"))
         .await
         .unwrap();
-    tokio::fs::create_dir_all(rp.join("target4/target5/monorail"))
+    tokio::fs::create_dir_all(rp.join("target4/monorail/cmd"))
         .await
         .unwrap();
-    tokio::fs::create_dir_all(rp.join("target6/monorail"))
+    tokio::fs::create_dir_all(rp.join("target4/target5/monorail/cmd"))
+        .await
+        .unwrap();
+    tokio::fs::create_dir_all(rp.join("target6/monorail/cmd"))
         .await
         .unwrap();
 
@@ -206,7 +209,8 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         true,
     )
     .await;
-    create_file(rp, "target1", "file.txt", b"1", false).await;
+
+    // target1
     create_file(
         rp,
         "target1/commands",
@@ -219,7 +223,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd1.sh",
-        b"#!/bin/bash\necho 'target1 cmd1'",
+        b"#!/bin/bash\nexit 1",
         true,
     )
     .await;
@@ -235,7 +239,7 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd3.sh",
-        b"#!/bin/bash\necho \"target1 cmd3 $1\"",
+        b"#!/bin/bash\necho \"target1 cmd3\"",
         true,
     )
     .await;
@@ -243,39 +247,82 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         rp,
         "target1/commands",
         "cmd4.sh",
-        b"#!/bin/bash\necho \"target1 cmd4 $1\"",
+        b"#!/bin/bash\necho 'target1 cmd4'",
         true,
     )
     .await;
-    create_file(rp, "target2", "file.txt", b"1", false).await;
-    create_file(rp, "target3", "file.txt", b"1", false).await;
+
+    // target2
     create_file(
         rp,
-        "target3/monorail",
+        "target2/monorail/cmd",
         "cmd0.sh",
-        b"#!/bin/bash\necho 'target3 cmd0",
+        b"#!/bin/bash\necho 'target2 cmd0'",
         true,
     )
     .await;
+    create_file(
+        rp,
+        "target2/monorail/cmd",
+        "cmd1.sh",
+        b"#!/bin/bash\necho 'target2 cmd1'",
+        true,
+    )
+    .await;
+
+    // target3
+    create_file(
+        rp,
+        "target3/monorail/cmd",
+        "cmd0.sh",
+        r#"
+        #!/bin/bash
+
+if [[ "$1" != 'base1' ]]; then
+    exit 1
+fi
+if [[ "$2" != 'base2' ]]; then
+    exit 1
+fi
+
+        "#
+        .as_bytes(),
+        true,
+    )
+    .await;
+    create_file(
+        rp,
+        "target3/monorail/argmap",
+        "base.json",
+        r#"{"cmd0":["base1", "base2"]}"#.as_bytes(),
+        false,
+    )
+    .await;
+
+    // target4
     create_file(rp, "target4", "ignore.txt", b"1", false).await;
     create_file(
         rp,
-        "target4/monorail",
+        "target4/monorail/cmd",
         "cmd0.sh",
-        b"#!/bin/bash\necho 'target4 cmd0",
+        b"#!/bin/bash\necho 'target4 cmd0'",
         true,
     )
     .await;
+
+    // target4/target5
     create_file(rp, "target4/target5", "ignore.txt", b"1", false).await;
     create_file(rp, "target4/target5", "use.txt", b"1", false).await;
     create_file(
         rp,
-        "target4/target5/monorail",
+        "target4/target5/monorail/cmd",
         "cmd0.sh",
-        b"#!/bin/bash\necho 'target4/target5 cmd0",
+        b"#!/bin/bash\necho 'target4/target5 cmd0'",
         true,
     )
     .await;
+
+    // target6
     create_file(rp, "target6", "file.txt", b"1", false).await;
 
     c
