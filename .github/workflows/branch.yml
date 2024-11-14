@@ -24,7 +24,7 @@ jobs:
           mkdir -p $MONORAIL_TEST_DIR
           ls -ld "$MONORAIL_TEST_DIR"
           chmod 755 "$MONORAIL_TEST_DIR"
-          which bash
+          touch $MONORAIL_TEST_DIR/hello
           git config --global user.name "FIRST_NAME LAST_NAME"
           git config --global user.email "MY_NAME@example.com"
 
@@ -51,6 +51,10 @@ jobs:
           toolchain: stable
           command: build
           args: --verbose --all
+
+      - name: debug
+        run: |
+          ls $MONORAIL_TEST_DIR
 
       - name: test
         uses: actions-rs/cargo@v1
