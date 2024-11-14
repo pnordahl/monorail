@@ -1141,12 +1141,121 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_run() {
+    async fn test_handle_run1() {
         let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let command = "cmd0".to_string();
         let target = "target1".to_string();
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target]),
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+        dbg!(&o);
+    }
+    #[tokio::test]
+    async fn test_handle_run1() {
+        let td = new_testdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let command = "cmd0".to_string();
+        let target = "target2".to_string();
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target]),
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+        dbg!(&o);
+    }
+    #[tokio::test]
+    async fn test_handle_run1() {
+        let td = new_testdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let command = "cmd0".to_string();
+        let target = "target3".to_string();
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target]),
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+        dbg!(&o);
+    }
+    #[tokio::test]
+    async fn test_handle_run1() {
+        let td = new_testdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let command = "cmd0".to_string();
+        let target = "target4".to_string();
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target]),
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+        dbg!(&o);
+    }
+    #[tokio::test]
+    async fn test_handle_run1() {
+        let td = new_testdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let command = "cmd0".to_string();
+        let target = "target5".to_string();
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target]),
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+        dbg!(&o);
+    }
+    #[tokio::test]
+    async fn test_handle_run1() {
+        let td = new_testdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let command = "cmd0".to_string();
+        let target = "target6".to_string();
+        let input = setup_handle_run_input(
+            vec![&command],
+            HashSet::from([&target]),
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let o = handle_run(&c, &input, "x", work_path).await.unwrap();
+        dbg!(&o);
+    }
+
+    #[tokio::test]
+    async fn test_handle_run() {
+        let td = new_testdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let command = "cmd0".to_string();
+        let target = "target3".to_string();
         let input = setup_handle_run_input(
             vec![&command],
             HashSet::from([&target]),
