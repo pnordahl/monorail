@@ -43,8 +43,8 @@ pub const ARG_STDOUT: &str = "stdout";
 pub const ARG_ID: &str = "id";
 pub const ARG_DEPS: &str = "deps";
 pub const ARG_ARG: &str = "arg";
-pub const ARG_ARG_MAP: &str = "argmap";
-pub const ARG_ARG_MAP_FILE: &str = "argmap-file";
+pub const ARG_ARGMAP: &str = "argmap";
+pub const ARG_ARGMAP_FILE: &str = "argmap-file";
 pub const ARG_FAIL_ON_UNDEFINED: &str = "fail-on-undefined";
 pub const ARG_NO_BASE_ARGMAPS: &str = "no-base-argmaps";
 
@@ -291,8 +291,8 @@ Refer to --help for more information on these options.
                 .long_help("This is a shorthand form of the more expressive '--target-argmap' and '--target-argmap-file', designed for single command + single target use. Providing this flag without specifying exactly one command and one target will result in an error.")
         )
         .arg(
-            Arg::new(ARG_ARG_MAP)
-                .long(ARG_ARG_MAP)
+            Arg::new(ARG_ARGMAP)
+                .long(ARG_ARGMAP)
                 .short('m')
                 .num_args(1..)
                 .required(false)
@@ -318,8 +318,8 @@ See `monorail run -h` for information on how this interacts with other arg-relat
 "#),
         )
         .arg(
-            Arg::new(ARG_ARG_MAP_FILE)
-                .long(ARG_ARG_MAP_FILE)
+            Arg::new(ARG_ARGMAP_FILE)
+                .long(ARG_ARGMAP_FILE)
                 .short('f')
                 .num_args(1..)
                 .required(false)
@@ -405,16 +405,7 @@ See `monorail run -h` for information on how this interacts with other arg-relat
                     .long(ARG_ALL)
                     .help("Display changes, change targets, and targets")
                     .action(ArgAction::SetTrue),
-            )
-            .arg(
-            Arg::new(ARG_TARGETS)
-                .short('t')
-                .long(ARG_TARGETS)
-                .required(false)
-                .num_args(1..)
-                .value_delimiter(' ')
-                .action(ArgAction::Append)
-                .help("Scope analysis to only the provided targets.")))
+            ))
     .subcommand(
         Command::new(CMD_OUT)
         .about("Manipulate data in the monorail output directory")
@@ -765,13 +756,13 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::run::HandleRunInput<'a> {
                 .into_iter()
                 .flatten()
                 .collect(),
-            arg_map: cmd
-                .get_many::<String>(ARG_ARG_MAP)
+            argmap: cmd
+                .get_many::<String>(ARG_ARGMAP)
                 .into_iter()
                 .flatten()
                 .collect(),
-            arg_map_file: cmd
-                .get_many::<String>(ARG_ARG_MAP_FILE)
+            argmap_file: cmd
+                .get_many::<String>(ARG_ARGMAP_FILE)
                 .into_iter()
                 .flatten()
                 .collect(),
@@ -792,11 +783,6 @@ impl<'a> From<&'a clap::ArgMatches> for app::analyze::HandleAnalyzeInput<'a> {
                 end: cmd.get_one::<String>(ARG_END).map(|x: &String| x.as_str()),
                 git_path: cmd.get_one::<String>(ARG_GIT_PATH).unwrap(),
             },
-            targets: cmd
-                .get_many::<String>(ARG_TARGETS)
-                .into_iter()
-                .flatten()
-                .collect(),
             analyze_input: app::analyze::AnalyzeInput {
                 show_changes: cmd.get_flag(ARG_CHANGES),
                 show_change_targets: cmd.get_flag(ARG_CHANGE_TARGETS),

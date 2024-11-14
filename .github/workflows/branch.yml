@@ -15,42 +15,16 @@ jobs:
   monorail:
     name: monorail
     runs-on: ubuntu-latest
+    env:
+      MONORAIL_TEST_DIR : ${{ github.workspace }}/tmp
     steps:
-      - name: prep
-        run: |
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: |
           sudo chown -R $USER:$USER ${{ github.workspace }}
+          mkdir -p "$MONORAIL_TEST_DIR"
           git config --global user.name "FIRST_NAME LAST_NAME"
           git config --global user.email "MY_NAME@example.com"
-
-      - name: deps
-        uses: actions/checkout@v2
-
-      - name: rust stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-
-      - name: clippy
-        uses: actions-rs/cargo@v1
-        with:
-          toolchain: stable
-          command: clippy
-          args: -- -D warnings
-
-      - name: build
-        uses: actions-rs/cargo@v1
-        with:
-          toolchain: stable
-          command: build
-          args: --verbose --all
-
-      - name: test
-        uses: actions-rs/cargo@v1
-        with:
-          toolchain: stable
-          command: test
-          args: -- --nocapture
-
-
+      - run: cargo clippy -- -D warnings
+      - run: cargo build --verbose --all
+      - run: cargo test -- --nocapture

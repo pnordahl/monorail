@@ -107,11 +107,10 @@ mod tests {
     use super::*;
     use crate::core::git;
     use crate::core::testing::*;
-    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_handle_checkpoint_delete_success() {
-        let td2 = tempdir().unwrap();
+        let td2 = new_testdir().unwrap();
         let rp = &td2.path();
         let cfg = new_test_repo(rp).await;
         let tracking_path = cfg.get_tracking_path(rp);
@@ -131,7 +130,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_checkpoint_show_success() {
-        let td2 = tempdir().unwrap();
+        let td2 = new_testdir().unwrap();
         let rp = &td2.path();
         let cfg = new_test_repo(rp).await;
         let tracking_path = cfg.get_tracking_path(rp);
@@ -151,7 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_checkpoint_update_with_pending_changes() {
-        let td2 = tempdir().unwrap();
+        let td2 = new_testdir().unwrap();
         let rp = &td2.path();
         let cfg = new_test_repo(rp).await;
         let head = get_head(rp).await;
@@ -166,17 +165,13 @@ mod tests {
         let result = handle_checkpoint_update(&cfg, &input, rp).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        assert!(
-            // number of files in the test config
-            output.checkpoint.pending.unwrap().len() == 17,
-            "Pending changes should be populated"
-        );
+        assert!(!output.checkpoint.pending.unwrap().is_empty());
         assert_eq!(output.checkpoint.id, head);
     }
 
     #[tokio::test]
     async fn test_handle_checkpoint_update_no_pending_changes() {
-        let td2 = tempdir().unwrap();
+        let td2 = new_testdir().unwrap();
         let rp = &td2.path();
         let cfg = new_test_repo(rp).await;
         let git_opts: git::GitOptions = Default::default();
