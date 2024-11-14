@@ -21,7 +21,7 @@ jobs:
       - name: prep
         run: |
           sudo chown -R $USER:$USER ${{ github.workspace }}
-          mkdir -p $MONORAIL_TEST_DIR
+          mkdir -p "$MONORAIL_TEST_DIR"
           ls -ld "$MONORAIL_TEST_DIR"
           chmod 755 "$MONORAIL_TEST_DIR"
           touch $MONORAIL_TEST_DIR/hello
@@ -54,7 +54,7 @@ jobs:
 
       - name: debug
         run: |
-          ls $MONORAIL_TEST_DIR
+          ls "$MONORAIL_TEST_DIR"
 
       - name: test
         uses: actions-rs/cargo@v1
