@@ -24,7 +24,7 @@ jobs:
           mkdir -p $MONORAIL_TEST_DIR
           ls -ld "$MONORAIL_TEST_DIR"
           chmod 755 "$MONORAIL_TEST_DIR"
-          stat "$MONORAIL_TEST_DIR"
+          which bash
           git config --global user.name "FIRST_NAME LAST_NAME"
           git config --global user.email "MY_NAME@example.com"
 
