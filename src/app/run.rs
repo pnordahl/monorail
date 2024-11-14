@@ -1159,7 +1159,7 @@ mod tests {
         dbg!(&o);
     }
     #[tokio::test]
-    async fn test_handle_run1() {
+    async fn test_handle_run2() {
         let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
@@ -1177,7 +1177,7 @@ mod tests {
         dbg!(&o);
     }
     #[tokio::test]
-    async fn test_handle_run1() {
+    async fn test_handle_run3() {
         let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
@@ -1195,7 +1195,7 @@ mod tests {
         dbg!(&o);
     }
     #[tokio::test]
-    async fn test_handle_run1() {
+    async fn test_handle_run4() {
         let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
@@ -1213,7 +1213,7 @@ mod tests {
         dbg!(&o);
     }
     #[tokio::test]
-    async fn test_handle_run1() {
+    async fn test_handle_run5() {
         let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
@@ -1231,7 +1231,7 @@ mod tests {
         dbg!(&o);
     }
     #[tokio::test]
-    async fn test_handle_run1() {
+    async fn test_handle_run6() {
         let td = new_testdir().unwrap();
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
