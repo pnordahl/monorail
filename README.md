@@ -204,7 +204,21 @@ repo/
 
 This configuration will produce a graph cycle error when the target graph is used.
 
+### Visualization
+
+The target graph can be visualized using common tools, such as graphviz. This visualization is generated with the `target render` API. For example:
+
+```sh
+monorail target render
+```
+
+This will generate a `target.dot` file in your current directory. You can choose the output file location by providing the `-f` flag to render.
+
 ### APIs
+
+#### `target render [--output-file, -f] [--type, -t]`
+
+Generate a visual representation of the target graph, and write it to an output file. Use `monorail target render -h` for details.
 
 #### `target show [--target-groups, -g] [--commands, -c]`
 
