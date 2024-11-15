@@ -212,7 +212,11 @@ The target graph can be visualized using common tools, such as graphviz. This vi
 monorail target render
 ```
 
-This will generate a `target.dot` file in your current directory. You can choose the output file location by providing the `-f` flag to render.
+This will generate a `target.dot` file in your current directory. You can choose the output file location by providing the `-f` flag to render. In general, when passing this file to `dot` the `sfdp` layout is likely to produce the best visual results, but you are free to use others. For example, using the output from `monorail target render`, with `dot` installed:
+
+```sh
+dot -Ksfdp -Tpng target.dot -o target.png
+```
 
 ### APIs
 

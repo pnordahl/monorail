@@ -184,7 +184,6 @@ impl Dag {
             .open(p)?;
         let mut s = String::new();
         s.push_str("digraph DAG {\n");
-        s.push_str("layout=fdp;\n");
 
         // emit nodes and labels
         s.push_str("// Target nodes\n");
