@@ -1,6 +1,7 @@
 use crate::core::error::{GraphError, MonorailError};
 use std::cmp::{Eq, PartialEq};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::Write;
 
 #[derive(Debug, Eq, PartialEq)]
 enum CycleState {
@@ -173,11 +174,52 @@ impl Dag {
         }
         self.cycle_state = CycleState::No;
     }
+
+    // Render the graph as a .dot file for use with graphviz, etc.
+    pub(crate) fn render_dotfile(&self, p: &std::path::Path) -> Result<(), MonorailError> {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(p)?;
+        let mut s = String::new();
+        s.push_str("digraph DAG {\n");
+        s.push_str("layout=fdp;\n");
+
+        // emit nodes and labels
+        s.push_str("// Target nodes\n");
+        for n in 0..self.adj_list.len() {
+            s.push_str(&format!(
+                "{} [label=\"{}\"];\n",
+                n,
+                self.node2label
+                    .get(&n)
+                    .ok_or(MonorailError::DependencyGraph(GraphError::LabelNotFound(n)))?
+            ));
+        }
+        // emit edges
+        s.push_str("// Uses edges\n");
+        for (n1, nodes) in self.adj_list.iter().enumerate() {
+            for n2 in nodes {
+                s.push_str(&format!("{} -> {};\n", n1, n2));
+            }
+        }
+
+        // style
+        s.push_str("node [shape=circle, style=filled, color=lightblue];\n");
+        s.push_str("edge [color=gray];\n");
+        s.push('}');
+
+        // write string to file
+        write!(f, "{}", s)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::testing::*;
 
     fn fill_dag(data: Vec<(&str, usize, Vec<usize>, bool)>) -> Dag {
         let mut dag = Dag::new(data.len());
@@ -187,6 +229,23 @@ mod tests {
             dag.visibility[d.1] = d.3;
         }
         dag
+    }
+
+    #[test]
+    fn test_dag_render_dotfile() {
+        let td = new_testdir().unwrap();
+        let p = td.path().join("graph.dot");
+
+        let dag = fill_dag(vec![
+            ("0", 0, vec![1, 2], true),
+            ("1", 1, vec![2], true),
+            ("2", 2, vec![], true),
+            ("3", 3, vec![1], true),
+        ]);
+
+        let res = dag.render_dotfile(&p);
+        assert!(res.is_ok());
+        assert!(std::fs::metadata(&p).is_ok())
     }
 
     #[test]

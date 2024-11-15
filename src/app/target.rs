@@ -1,10 +1,53 @@
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path;
 use std::result::Result;
-
-use serde::Serialize;
+use std::str::FromStr;
 
 use crate::core::{self, error::MonorailError, file};
+
+#[derive(Debug, Serialize)]
+pub(crate) enum TargetRenderType {
+    Dot,
+}
+impl FromStr for TargetRenderType {
+    type Err = MonorailError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "dot" => Ok(TargetRenderType::Dot),
+            x => Err(MonorailError::Generic(format!(
+                "Unrecognized render type: {}",
+                x
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TargetRenderInput {
+    pub(crate) render_type: TargetRenderType,
+    pub(crate) output_file: path::PathBuf,
+}
+#[derive(Debug, Serialize)]
+pub(crate) struct TargetRenderOutput {
+    pub(crate) output_file: path::PathBuf,
+}
+
+pub(crate) fn target_render(
+    cfg: &core::Config,
+    input: TargetRenderInput,
+    work_path: &path::Path,
+) -> Result<TargetRenderOutput, MonorailError> {
+    let ths = cfg.get_target_path_set();
+    let index = core::Index::new(cfg, &ths, work_path)?;
+    match input.render_type {
+        TargetRenderType::Dot => index.dag.render_dotfile(&input.output_file)?,
+    }
+    Ok(TargetRenderOutput {
+        output_file: input.output_file,
+    })
+}
 
 #[derive(Debug, Serialize)]
 pub(crate) struct TargetShowInput {

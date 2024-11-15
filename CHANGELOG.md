@@ -1,5 +1,10 @@
 # Change Log
 
+## [3.5.2] - 2024-11-15
+
+### Added
+`target render` API for creating a visual representation of the target graph
+
 ## [3.5.1] - 2024-11-14
 
 ### Changed
