@@ -7,6 +7,7 @@ use once_cell::sync::OnceCell;
 use serde::Serialize;
 use std::io::Write;
 use std::result::Result;
+use std::str::FromStr;
 use std::{env, path};
 use tokio::runtime::Runtime;
 
@@ -23,6 +24,7 @@ pub const CMD_RESULT: &str = "result";
 pub const CMD_LOG: &str = "log";
 pub const CMD_TAIL: &str = "tail";
 pub const CMD_OUT: &str = "out";
+pub const CMD_RENDER: &str = "render";
 
 pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_BEGIN: &str = "begin";
@@ -47,6 +49,9 @@ pub const ARG_ARGMAP: &str = "argmap";
 pub const ARG_ARGMAP_FILE: &str = "argmap-file";
 pub const ARG_FAIL_ON_UNDEFINED: &str = "fail-on-undefined";
 pub const ARG_NO_BASE_ARGMAPS: &str = "no-base-argmaps";
+pub const ARG_FORMAT: &str = "format";
+pub const ARG_TYPE: &str = "type";
+pub const ARG_OUTPUT_FILE: &str = "output-file";
 
 pub const VAL_JSON: &str = "json";
 
@@ -191,6 +196,27 @@ pub fn build() -> clap::Command {
     .subcommand(Command::new(CMD_TARGET)
         .about("Display targets and target groups")
         .arg_required_else_help(true)
+        .subcommand(
+            Command::new(CMD_RENDER)
+                .about("Output a visualization of the target graph.")
+                .after_help("This command parses the target graph and emits it in a visual format for use in other tools, such as .dot.")
+                .arg(
+                    Arg::new(ARG_TYPE)
+                        .short('t')
+                        .long(ARG_TYPE)
+                        .help("File type to render")
+                        .required(false)
+                        .num_args(1)
+                )
+                .arg(
+                    Arg::new(ARG_OUTPUT_FILE)
+                        .short('f')
+                        .long(ARG_OUTPUT_FILE)
+                        .help("Filesystem location to render to")
+                        .required(false)
+                        .num_args(1)
+                )
+        )
         .subcommand(
         Command::new(CMD_SHOW)
             .about("List targets and their properties.")
@@ -485,8 +511,16 @@ pub fn handle<'a>(
                 }
             }
             if let Some(target_matches) = matches.subcommand_matches(CMD_TARGET) {
-                if let Some(list_matches) = target_matches.subcommand_matches(CMD_SHOW) {
-                    return handle_target_list(&config, list_matches, output_options, work_path);
+                if let Some(show_matches) = target_matches.subcommand_matches(CMD_SHOW) {
+                    return handle_target_show(&config, show_matches, output_options, work_path);
+                }
+                if let Some(render_matches) = target_matches.subcommand_matches(CMD_RENDER) {
+                    return handle_target_render(
+                        &config,
+                        render_matches,
+                        output_options,
+                        work_path,
+                    );
                 }
             }
             if let Some(analyze_matches) = matches.subcommand_matches(CMD_ANALYZE) {
@@ -624,8 +658,39 @@ fn handle_log_show<'a>(
         }
     }
 }
-
-fn handle_target_list<'a>(
+fn handle_target_render<'a>(
+    config: &'a core::Config,
+    matches: &'a ArgMatches,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let output_file = match matches.get_one::<String>(ARG_OUTPUT_FILE) {
+        Some(v) => {
+            let vp = path::Path::new(v);
+            if vp.is_absolute() {
+                vp.to_path_buf()
+            } else {
+                work_path.join(vp)
+            }
+        }
+        None => work_path.join("target.dot"),
+    };
+    let render_type = match matches.get_one::<String>(ARG_TYPE) {
+        Some(v) => app::target::TargetRenderType::from_str(v)?,
+        None => app::target::TargetRenderType::Dot,
+    };
+    let res = app::target::target_render(
+        config,
+        app::target::TargetRenderInput {
+            render_type,
+            output_file,
+        },
+        work_path,
+    );
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
+}
+fn handle_target_show<'a>(
     config: &'a core::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
