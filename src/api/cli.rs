@@ -25,6 +25,7 @@ pub const CMD_LOG: &str = "log";
 pub const CMD_TAIL: &str = "tail";
 pub const CMD_OUT: &str = "out";
 pub const CMD_RENDER: &str = "render";
+pub const CMD_GENERATE: &str = "generate";
 
 pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_BEGIN: &str = "begin";
@@ -153,11 +154,15 @@ pub fn build() -> clap::Command {
     )
     .subcommand(
         Command::new(CMD_CONFIG)
-        .arg_required_else_help(true)
-        .about("Parse and display configuration")
-        .subcommand(
-            Command::new(CMD_SHOW)
-            .about("Show configuration, including runtime default values")))
+            .arg_required_else_help(true)
+            .about("Parse and display configuration")
+            .subcommand(
+                Command::new(CMD_SHOW)
+                    .about("Show configuration, including runtime default values"))
+            .subcommand(
+                Command::new(CMD_GENERATE)
+                    .about("Generate a configuration file from, and linked to, a source file")
+                    .after_help("This command accepts a valid JSON configuration file over stdin that includes a top-level 'source' object, validating and synchronizing the source file and generated files.")))
     .subcommand(Command::new(CMD_CHECKPOINT)
         .about("Show, update, or delete the tracking checkpoint")
         .subcommand(
@@ -475,6 +480,16 @@ pub fn handle<'a>(
 
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
         Some(config_file) => {
+            // Config generation does not use or require an existing config file, but will use the path from `-f`
+            if let Some(config_matches) = matches.subcommand_matches(CMD_CONFIG) {
+                if config_matches.subcommand_matches(CMD_GENERATE).is_some() {
+                    return handle_config_generate(
+                        config_file,
+                        output_options,
+                        &env::current_dir()?,
+                    );
+                }
+            }
             let config_path = path::Path::new(config_file);
             let work_path = path::Path::new(config_path)
                 .parent()
@@ -483,6 +498,7 @@ pub fn handle<'a>(
                     config_path.display()
                 )))?;
             let config = core::Config::new(config_path)?;
+            config.check(work_path)?;
             if let Some(config_matches) = matches.subcommand_matches(CMD_CONFIG) {
                 if config_matches.subcommand_matches(CMD_SHOW).is_some() {
                     write_result(&Ok(config), output_options)?;
@@ -588,6 +604,17 @@ fn handle_run<'a>(
     }
     write_result(&Ok(o), output_options)?;
     Ok(code)
+}
+
+fn handle_config_generate<'a>(
+    output_file: &str,
+    output_options: &OutputOptions<'a>,
+    work_path: &'a path::Path,
+) -> Result<i32, MonorailError> {
+    let res =
+        app::config::config_generate(app::config::ConfigGenerateInput { output_file }, work_path);
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
 }
 
 fn handle_checkpoint_update<'a>(

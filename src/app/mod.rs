@@ -1,5 +1,6 @@
 pub(crate) mod analyze;
 pub(crate) mod checkpoint;
+pub(crate) mod config;
 pub(crate) mod log;
 pub(crate) mod out;
 pub(crate) mod result;

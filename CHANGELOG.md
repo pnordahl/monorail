@@ -1,17 +1,22 @@
 # Change Log
 
+## [3.5.3] - 2024-11-17
+
+### Added
+- `config generate` API for generating a configuration file that is synchronized with its source file.
+
 ## [3.5.2] - 2024-11-15
 
 ### Added
-`target render` API for creating a visual representation of the target graph
+- `target render` API for creating a visual representation of the target graph
 
 ## [3.5.1] - 2024-11-14
 
 ### Changed
-Removed `--target (-t)` flag from `monorail analyze`
+- Removed `--target (-t)` flag from `monorail analyze`
 
 ### Fixed
-Issue preventing `monorail run` from returning non-zero exit codes
+-Issue preventing `monorail run` from returning non-zero exit codes
 
 ## [3.5.0] - 2024-11-13
 
