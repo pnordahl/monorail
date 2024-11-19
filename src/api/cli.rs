@@ -25,6 +25,7 @@ pub const CMD_LOG: &str = "log";
 pub const CMD_TAIL: &str = "tail";
 pub const CMD_OUT: &str = "out";
 pub const CMD_RENDER: &str = "render";
+pub const CMD_GENERATE: &str = "generate";
 
 pub const ARG_GIT_PATH: &str = "git-path";
 pub const ARG_BEGIN: &str = "begin";
@@ -153,11 +154,15 @@ pub fn build() -> clap::Command {
     )
     .subcommand(
         Command::new(CMD_CONFIG)
-        .arg_required_else_help(true)
-        .about("Parse and display configuration")
-        .subcommand(
-            Command::new(CMD_SHOW)
-            .about("Show configuration, including runtime default values")))
+            .arg_required_else_help(true)
+            .about("Parse and display configuration")
+            .subcommand(
+                Command::new(CMD_SHOW)
+                    .about("Show configuration, including runtime default values"))
+            .subcommand(
+                Command::new(CMD_GENERATE)
+                    .about("Generate a configuration file from, and linked to, a source file")
+                    .after_help("This command accepts a valid JSON configuration file over stdin that includes a top-level 'source' object, validating and synchronizing the source file and generated files.")))
     .subcommand(Command::new(CMD_CHECKPOINT)
         .about("Show, update, or delete the tracking checkpoint")
         .subcommand(
@@ -475,14 +480,28 @@ pub fn handle<'a>(
 
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
         Some(config_file) => {
-            let config_path = path::Path::new(config_file);
-            let work_path = path::Path::new(config_path)
-                .parent()
-                .ok_or(MonorailError::Generic(format!(
-                    "Config file {} has no parent directory",
-                    config_path.display()
-                )))?;
-            let config = core::Config::new(config_path)?;
+            let config_file_path = path::Path::new(&config_file);
+            if !config_file_path.is_absolute() {
+                return Err(MonorailError::Generic(format!(
+                    "Configuration file path '{}' is not absolute",
+                    &config_file
+                )));
+            }
+            // Config generation does not use or require an existing config file, but will use the path from `-f`
+            if let Some(config_matches) = matches.subcommand_matches(CMD_CONFIG) {
+                if config_matches.subcommand_matches(CMD_GENERATE).is_some() {
+                    return handle_config_generate(config_file_path, output_options);
+                }
+            }
+            let work_path =
+                path::Path::new(config_file_path)
+                    .parent()
+                    .ok_or(MonorailError::Generic(format!(
+                        "Config file {} has no parent directory",
+                        config_file_path.display()
+                    )))?;
+            let config = core::Config::new(config_file_path)?;
+            config.check(config_file_path, work_path)?;
             if let Some(config_matches) = matches.subcommand_matches(CMD_CONFIG) {
                 if config_matches.subcommand_matches(CMD_SHOW).is_some() {
                     write_result(&Ok(config), output_options)?;
@@ -553,6 +572,9 @@ fn handle_out_delete<'a>(
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
+    let rt = Runtime::new()?;
+    let _guard =
+        rt.block_on(core::server::LockServer::new(config.server.lock.clone()).acquire())?;
     let i = app::out::OutDeleteInput::try_from(matches)?;
     let res = app::out::out_delete(&config.out_dir, &i);
     write_result(&res, output_options)?;
@@ -579,6 +601,8 @@ fn handle_run<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
+    let _guard =
+        rt.block_on(core::server::LockServer::new(config.server.lock.clone()).acquire())?;
     let i = app::run::HandleRunInput::try_from(matches).unwrap();
     let invocation = env::args().skip(1).collect::<Vec<_>>().join(" ");
     let o = rt.block_on(app::run::handle_run(config, &i, &invocation, work_path))?;
@@ -590,6 +614,15 @@ fn handle_run<'a>(
     Ok(code)
 }
 
+fn handle_config_generate(
+    output_file_path: &path::Path,
+    output_options: &OutputOptions<'_>,
+) -> Result<i32, MonorailError> {
+    let res = app::config::config_generate(app::config::ConfigGenerateInput { output_file_path });
+    write_result(&res, output_options)?;
+    Ok(get_code(res.is_err()))
+}
+
 fn handle_checkpoint_update<'a>(
     config: &'a core::Config,
     matches: &'a ArgMatches,
@@ -597,6 +630,8 @@ fn handle_checkpoint_update<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
+    let _guard =
+        rt.block_on(core::server::LockServer::new(config.server.lock.clone()).acquire())?;
     let i = app::checkpoint::CheckpointUpdateInput::try_from(matches)?;
     let res = rt.block_on(app::checkpoint::handle_checkpoint_update(
         config, &i, work_path,
@@ -622,6 +657,8 @@ fn handle_checkpoint_delete<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
+    let _guard =
+        rt.block_on(core::server::LockServer::new(config.server.lock.clone()).acquire())?;
     let res = rt.block_on(app::checkpoint::handle_checkpoint_delete(config, work_path));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))

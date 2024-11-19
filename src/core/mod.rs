@@ -2,6 +2,7 @@ pub(crate) mod error;
 pub(crate) mod file;
 pub(crate) mod git;
 pub(crate) mod graph;
+pub(crate) mod server;
 pub(crate) mod tracking;
 
 #[cfg(test)]
@@ -15,9 +16,11 @@ use std::result::Result;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use trie_rs::{Trie, TrieBuilder};
 
 use crate::core::error::{GraphError, MonorailError};
+use tracing::error;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Change {
@@ -65,9 +68,28 @@ impl Default for LogConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) enum AlgorithmKind {
+    #[serde(rename = "sha256")]
+    Sha256,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfigSource {
+    // Relative path the source file
+    pub(crate) path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) algorithm: Option<AlgorithmKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) checksum: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<ConfigSource>,
     #[serde(default = "Config::default_output_path")]
     pub(crate) out_dir: String,
     #[serde(default = "Config::default_max_retained_runs")]
@@ -80,6 +102,12 @@ pub(crate) struct Config {
     pub(crate) sequences: Option<HashMap<String, Vec<String>>>,
     #[serde(default)]
     pub(crate) log: LogConfig,
+    #[serde(default)]
+    pub(crate) server: server::ServerConfig,
+
+    // sha256 of the file used to deserialize
+    #[serde(skip)]
+    pub(crate) checksum: String,
 }
 impl Config {
     pub(crate) fn new(file_path: &path::Path) -> Result<Config, MonorailError> {
@@ -98,7 +126,10 @@ impl Config {
                 e
             ))
         })?;
-        serde_json::from_str(std::str::from_utf8(buf).map_err(|e| {
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(buf);
+
+        let mut config: Config = serde_json::from_str(std::str::from_utf8(buf).map_err(|e| {
             MonorailError::Generic(format!(
                 "Configuration file at {} contains invalid UTF-8; {}",
                 file_path.display(),
@@ -111,7 +142,72 @@ impl Config {
                 file_path.display(),
                 e
             ))
-        })
+        })?;
+        config.checksum = format!("{:x}", hasher.finalize());
+        Ok(config)
+    }
+    // Perform various integrity checks as appropriate. For example, if this config
+    // was generated, ensure that the source file and the file deserialized to make
+    // this object have not become desynced.
+    pub(crate) fn check(
+        &self,
+        config_path: &path::Path,
+        work_path: &path::Path,
+    ) -> Result<(), MonorailError> {
+        // if the config specifies a source, validate source and output files
+        match &self.source {
+            Some(source) => {
+                let mut hasher = sha2::Sha256::new();
+                let source_path = path::Path::new(&source.path);
+                if !source_path.exists() {
+                    return Err(MonorailError::Generic(format!(
+                        "Configuration specifies 'source' object, but 'source.path': '{}' does not exist",
+                        &source_path.display()
+                    )));
+                }
+                // load the lockfile for checksum comparison
+                let lockfile_path = path::Path::new(work_path)
+                    .join(format!("{}.lock", file::get_stem(config_path)?));
+                let lockfile = ConfigLockfile::load(&lockfile_path)?;
+
+                // first, check if the source has changed
+                hasher.update(std::fs::read(source_path)?);
+                let checksum = format!("{:x}", hasher.finalize_reset());
+                match &source.checksum {
+                    Some(source_checksum) => {
+                        if checksum != *source_checksum {
+                            error!(
+                                expected = source_checksum,
+                                found = checksum,
+                                "Source configuration checksum mismatch"
+                            );
+                            return Err(MonorailError::from(
+                                "Source configuration has been modified since the last `config generate`",
+                            ));
+                        }
+                    }
+                    None => {
+                        return Err(MonorailError::from(
+                            "Configuration with 'source' has no checksum to compare with",
+                        ))
+                    }
+                }
+
+                // second, check if the output has changed
+                if self.checksum != lockfile.checksum {
+                    error!(
+                        expected = &self.checksum,
+                        found = lockfile.checksum,
+                        "Generated configuration checksum mismatch"
+                    );
+                    return Err(MonorailError::from(
+                        "Generated configuration has been modified since the last `config generate`, or the lockfile checksum has been edited"
+                    ));
+                }
+                Ok(())
+            }
+            None => Ok(()),
+        }
     }
     pub(crate) fn get_target_path_set(&self) -> HashSet<&String> {
         let mut o = HashSet::new();
@@ -199,8 +295,6 @@ impl TargetArgMaps {
     fn default_path() -> String {
         "monorail/argmap".into()
     }
-}
-impl TargetArgMaps {
     fn default_base() -> String {
         "base.json".into()
     }
@@ -231,6 +325,33 @@ impl Default for TargetCommands {
 impl TargetCommands {
     fn default_path() -> String {
         "monorail/cmd".into()
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub(crate) struct ConfigLockfile {
+    pub(crate) checksum: String,
+}
+impl ConfigLockfile {
+    pub(crate) fn new(checksum: String) -> Self {
+        Self { checksum }
+    }
+    pub(crate) fn load(fp: &path::Path) -> Result<Self, MonorailError> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(fp)
+            .map_err(|e| MonorailError::Generic(format!("Lockfile open: {}", e)))?;
+        let v: Self = serde_json::from_reader(file)?;
+        Ok(v)
+    }
+    pub(crate) fn save(&self, fp: &path::Path) -> Result<(), MonorailError> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(fp)?;
+        serde_json::to_writer(file, self)?;
+        Ok(())
     }
 }
 

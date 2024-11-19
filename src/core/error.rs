@@ -2,6 +2,8 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
 use std::{fmt, io, num, str};
 
+use crate::core::server;
+
 #[derive(Debug, Serialize)]
 pub enum GraphError {
     LabelNotFound(usize),
@@ -49,8 +51,13 @@ pub enum MonorailError {
     TaskCancelled,
     ChannelSend(String),
     ChannelRecv(flume::RecvError),
+    Server(server::ServerError),
 }
-
+impl From<server::ServerError> for MonorailError {
+    fn from(error: server::ServerError) -> Self {
+        MonorailError::Server(error)
+    }
+}
 impl From<flume::RecvError> for MonorailError {
     fn from(error: flume::RecvError) -> Self {
         MonorailError::ChannelRecv(error)
@@ -101,14 +108,14 @@ impl fmt::Display for MonorailError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MonorailError::Generic(error) => write!(f, "{}", error),
-            MonorailError::Git(error) => write!(f, "Git error; {}", error),
-            MonorailError::Io(error) => write!(f, "IO error; {}", error),
+            MonorailError::Git(error) => write!(f, "{}", error),
+            MonorailError::Io(error) => write!(f, "{}", error),
             MonorailError::PathDNE(error) => write!(f, "Path does not exist: {}", error),
-            MonorailError::SerdeJSON(error) => write!(f, "JSON error; {}", error),
-            MonorailError::Utf8(error) => write!(f, "UTF8 error; {}", error),
-            MonorailError::ParseInt(error) => write!(f, "Integer parsing error; {}", error),
+            MonorailError::SerdeJSON(error) => write!(f, "{}", error),
+            MonorailError::Utf8(error) => write!(f, "{}", error),
+            MonorailError::ParseInt(error) => write!(f, "{}", error),
             MonorailError::DependencyGraph(error) => {
-                write!(f, "Dependency graph error; {}", error)
+                write!(f, "{}", error)
             }
             MonorailError::Join(error) => write!(f, "Task join error; {}", error),
             MonorailError::MissingArg(s) => write!(f, "Missing argument error; {}", s),
@@ -122,10 +129,13 @@ impl fmt::Display for MonorailError {
                 write!(f, "Task cancelled")
             }
             MonorailError::ChannelSend(error) => {
-                write!(f, "Channel send error; {}", error)
+                write!(f, "{}", error)
             }
             MonorailError::ChannelRecv(error) => {
-                write!(f, "Channel recv error; {}", error)
+                write!(f, "{}", error)
+            }
+            MonorailError::Server(error) => {
+                write!(f, "{}", error)
             }
         }
     }
@@ -199,6 +209,10 @@ impl Serialize for MonorailError {
             }
             MonorailError::ChannelRecv(_) => {
                 state.serialize_field("type", "channel_recv")?;
+                state.serialize_field("message", &self.to_string())?;
+            }
+            MonorailError::Server(_) => {
+                state.serialize_field("type", "server")?;
                 state.serialize_field("message", &self.to_string())?;
             }
         }

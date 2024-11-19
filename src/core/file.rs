@@ -9,6 +9,19 @@ use tracing::debug;
 
 use crate::core::error::MonorailError;
 
+pub(crate) fn get_stem(p: &path::Path) -> Result<&str, MonorailError> {
+    p.file_stem()
+        .ok_or(MonorailError::Generic(format!(
+            "Path {} has no stem",
+            p.display()
+        )))?
+        .to_str()
+        .ok_or(MonorailError::Generic(format!(
+            "Path {} stem is empty",
+            p.display()
+        )))
+}
+
 pub(crate) async fn exists(path: &path::Path) -> bool {
     tokio::fs::metadata(path).await.is_ok()
 }

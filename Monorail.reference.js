@@ -17,6 +17,29 @@ const reference = {
 		// Optional, default: "git"
 		"use": "git",
 	},
+	// Source information, for use with `config generate`.
+	"source": {
+		/*
+		Path to the source file that was used to generate this file.
+		If provided, this configuration will be validated against the
+		source for integrity.
+
+		Required, if this configuration was generated. default: ""
+		*/
+		"path": "path/within/repository",
+		/*
+		The algorithm used to checksum the source and generated files.
+
+		Default: null; restricted for internal use only
+		*/
+		"algorithm": null,
+		/*
+		The checksum of the source file, used for integrity checks.
+
+		Default: null; restricted for internal use only
+		*/
+		"checksum": null
+	},
 	// An array of targets to configure.
 	"targets": [
 		{
@@ -122,5 +145,28 @@ const reference = {
 			"<command name 2>",
 			"<command name 3>"
 		]
+	},
+	"server": {
+		// Lock server used for concurrency control of a subset of monorail APIs.
+		"lock": {
+			/*
+			Host to bind.
+
+			Optional: default: "127.0.0.1"
+			*/
+			"host": "127.0.0.1",
+			/*
+			Port to bind.
+
+			Optional: default: 5917
+			*/
+			"port": 5917,
+			/*
+			Milliseconds to wait for a successful bind of the host:port.
+
+			Optional: default: 1000
+			*/
+			"bind_timeout_ms": 1000,
+		}
 	}
 }
