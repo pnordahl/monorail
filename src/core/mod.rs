@@ -2,7 +2,7 @@ pub(crate) mod error;
 pub(crate) mod file;
 pub(crate) mod git;
 pub(crate) mod graph;
-pub(crate) mod remote;
+pub(crate) mod server;
 pub(crate) mod tracking;
 
 #[cfg(test)]
@@ -20,6 +20,7 @@ use sha2::Digest;
 use trie_rs::{Trie, TrieBuilder};
 
 use crate::core::error::{GraphError, MonorailError};
+use tracing::error;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Change {
@@ -102,7 +103,7 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) log: LogConfig,
     #[serde(default)]
-    pub(crate) remote: remote::RemoteConfig,
+    pub(crate) server: server::ServerConfig,
 
     // sha256 of the file used to deserialize
     #[serde(skip)]
@@ -175,10 +176,14 @@ impl Config {
                 match &source.checksum {
                     Some(source_checksum) => {
                         if checksum != *source_checksum {
-                            return Err(MonorailError::Generic(format!(
-                                "Configuration is desynced with source; expected {}, found {}; run `monorail config generate`",
-                                source_checksum, checksum
-                            )));
+                            error!(
+                                expected = source_checksum,
+                                found = checksum,
+                                "Source configuration checksum mismatch"
+                            );
+                            return Err(MonorailError::from(
+                                "Source configuration has been modified since the last `config generate`",
+                            ));
                         }
                     }
                     None => {
@@ -190,10 +195,14 @@ impl Config {
 
                 // second, check if the output has changed
                 if self.checksum != lockfile.checksum {
-                    return Err(MonorailError::Generic(format!(
-                        "Generated configuration or lockfile was edited and is desynced from source; expected {}, found {}",
-                        self.checksum, lockfile.checksum
-                    )));
+                    error!(
+                        expected = &self.checksum,
+                        found = lockfile.checksum,
+                        "Generated configuration checksum mismatch"
+                    );
+                    return Err(MonorailError::from(
+                        "Generated configuration has been modified since the last `config generate`, or the lockfile checksum has been edited"
+                    ));
                 }
                 Ok(())
             }

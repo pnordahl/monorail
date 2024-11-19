@@ -81,9 +81,72 @@ Some APIs require a [configuration file](#config). Manually specifying the file 
 
 ## Config
 
-`monorail` uses a JSON configuration file that describes the repository target mapping, target dependencies, and various other options. This file is fully documented in the `Monorail.reference.js` file at the root of this repository. This file is by default `Monorail.json` in the root of your repository, and while this location and name can be customized, all subsequent documentation will refer to it by this name.
+`monorail` uses a JSON configuration file that describes the repository target mapping, target dependencies, and various other options. This file is fully documented in the `Monorail.reference.js` file at the root of this repository. Its default name is `Monorail.json`, located in the root of your repository. While this location and name can be customized, all subsequent documentation will refer to it by this name.
+
+Note: while writing JSON configuration manually is supported, it's highly recommended to use the `config generate` API to write your configuration files in more expressive languages and allow `monorail` to synchronize the output with your source file.
 
 ### APIs
+
+#### `config generate`
+
+Assigns a source file and its output as the source of truth for configuration. This enables configuration to be written in any language and synchronized automatically by `monorail`. For example, here is a simple source file written in `jsonnet` (but, you could write the same in Python or any other language):
+
+`Monorail.jsonnet`
+```
+local paths = {
+  rust: "rust"
+};
+{
+  source: {
+    path: std.thisFile
+  },
+  targets: [
+    {
+      path: paths.rust
+    }
+  ]
+}
+```
+
+This `jsonnet` code emits a JSON object that conforms to the `Monorail.json` format (documented in `Monorail.reference.js`), and includes one mandatory field when using this API: `source.path`.
+
+Run this script to generate the JSON, and pipe it to this API:
+
+```sh
+jsonnet Monorail.jsonnet | monorail config generate
+```
+
+This creates two new files: a valid `Monorail.json` and `Monorail.lock`. The former is what was provided as output from the piped command, plus additional data used for integrity checks along with the latter. The generated lockfile must be checked into version control, or integrity checks in other clones of the repo will fail.
+
+Now, when an API that uses the config file is used, an integrity check verifies that the source and output files are synchronized. For example, manually adding a target to this generated `Monorail.json` (or modifying the checksum in `Monorail.lock`) will cause the following error from any API that uses the config:
+
+```sh
+monorail target show
+```
+```json
+{
+  "timestamp": "2024-11-19T15:30:49.294100+00:00",
+  "kind": "error",
+  "type": "generic",
+  "message": "Generated configuration has been modified since the last `config generate`, or the lockfile checksum has been edited"
+}
+```
+
+Similarly, adding a target to the source file without running `monorail config generate` results in the following:
+
+```sh
+monorail target show
+```
+```json
+{
+  "timestamp": "2024-11-19T15:32:55.408455+00:00",
+  "kind": "error",
+  "type": "generic",
+  "message": "Source configuration has been modified since the last `config generate`"
+}
+```
+
+See `monorail config generate -h` for more information.
 
 #### `config show`
 

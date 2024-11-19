@@ -573,9 +573,8 @@ fn handle_out_delete<'a>(
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let _guard = rt.block_on(core::remote::RemoteServer::new_lock(
-        config.remote.server.clone(),
-    ))?;
+    let _guard =
+        rt.block_on(core::server::LockServer::new(config.server.lock.clone()).acquire())?;
     let i = app::out::OutDeleteInput::try_from(matches)?;
     let res = app::out::out_delete(&config.out_dir, &i);
     write_result(&res, output_options)?;
@@ -602,9 +601,8 @@ fn handle_run<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let _guard = rt.block_on(core::remote::RemoteServer::new_lock(
-        config.remote.server.clone(),
-    ))?;
+    let _guard =
+        rt.block_on(core::server::LockServer::new(config.server.lock.clone()).acquire())?;
     let i = app::run::HandleRunInput::try_from(matches).unwrap();
     let invocation = env::args().skip(1).collect::<Vec<_>>().join(" ");
     let o = rt.block_on(app::run::handle_run(config, &i, &invocation, work_path))?;
@@ -632,9 +630,8 @@ fn handle_checkpoint_update<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let _guard = rt.block_on(core::remote::RemoteServer::new_lock(
-        config.remote.server.clone(),
-    ))?;
+    let _guard =
+        rt.block_on(core::server::LockServer::new(config.server.lock.clone()).acquire())?;
     let i = app::checkpoint::CheckpointUpdateInput::try_from(matches)?;
     let res = rt.block_on(app::checkpoint::handle_checkpoint_update(
         config, &i, work_path,
@@ -660,9 +657,8 @@ fn handle_checkpoint_delete<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
-    let _guard = rt.block_on(core::remote::RemoteServer::new_lock(
-        config.remote.server.clone(),
-    ))?;
+    let _guard =
+        rt.block_on(core::server::LockServer::new(config.server.lock.clone()).acquire())?;
     let res = rt.block_on(app::checkpoint::handle_checkpoint_delete(config, work_path));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))

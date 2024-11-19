@@ -2,7 +2,7 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
 use std::{fmt, io, num, str};
 
-use crate::core::remote;
+use crate::core::server;
 
 #[derive(Debug, Serialize)]
 pub enum GraphError {
@@ -51,11 +51,11 @@ pub enum MonorailError {
     TaskCancelled,
     ChannelSend(String),
     ChannelRecv(flume::RecvError),
-    Remote(remote::RemoteError),
+    Server(server::ServerError),
 }
-impl From<remote::RemoteError> for MonorailError {
-    fn from(error: remote::RemoteError) -> Self {
-        MonorailError::Remote(error)
+impl From<server::ServerError> for MonorailError {
+    fn from(error: server::ServerError) -> Self {
+        MonorailError::Server(error)
     }
 }
 impl From<flume::RecvError> for MonorailError {
@@ -134,7 +134,7 @@ impl fmt::Display for MonorailError {
             MonorailError::ChannelRecv(error) => {
                 write!(f, "{}", error)
             }
-            MonorailError::Remote(error) => {
+            MonorailError::Server(error) => {
                 write!(f, "{}", error)
             }
         }
@@ -211,8 +211,8 @@ impl Serialize for MonorailError {
                 state.serialize_field("type", "channel_recv")?;
                 state.serialize_field("message", &self.to_string())?;
             }
-            MonorailError::Remote(_) => {
-                state.serialize_field("type", "remote")?;
+            MonorailError::Server(_) => {
+                state.serialize_field("type", "server")?;
                 state.serialize_field("message", &self.to_string())?;
             }
         }
