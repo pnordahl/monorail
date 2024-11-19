@@ -93,7 +93,6 @@ impl Checkpoint {
 pub(crate) struct Table {
     run_path: path::PathBuf,
     checkpoint_path: path::PathBuf,
-    generated_config_checksum_path: path::PathBuf,
 }
 impl<'a> Table {
     // Prepare the tracking directory and return the table ready for use.
@@ -102,7 +101,6 @@ impl<'a> Table {
         Ok(Self {
             run_path: dir_path.join("run.json"),
             checkpoint_path: dir_path.join("checkpoint.json.zst"),
-            generated_config_checksum_path: dir_path.join("generated_config_checksum"),
         })
     }
     pub(crate) fn new_checkpoint(&'a self) -> Checkpoint {
@@ -116,20 +114,5 @@ impl<'a> Table {
     }
     pub(crate) fn open_run(&'a self) -> Result<Run, MonorailError> {
         Run::open(&self.run_path)
-    }
-    pub(crate) fn get_generated_config_checksum(&'a self) -> Result<String, MonorailError> {
-        fs::read_to_string(&self.generated_config_checksum_path).map_err(|e| {
-            MonorailError::Generic(format!(
-                "Failed to read generated checksum at path {}, error: {}",
-                &self.generated_config_checksum_path.display(),
-                e
-            ))
-        })
-    }
-    pub(crate) fn save_generated_config_checksum(
-        &'a self,
-        checksum: String,
-    ) -> Result<(), MonorailError> {
-        fs::write(&self.generated_config_checksum_path, checksum).map_err(MonorailError::from)
     }
 }

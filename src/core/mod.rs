@@ -2,6 +2,7 @@ pub(crate) mod error;
 pub(crate) mod file;
 pub(crate) mod git;
 pub(crate) mod graph;
+pub(crate) mod remote;
 pub(crate) mod tracking;
 
 #[cfg(test)]
@@ -100,6 +101,8 @@ pub(crate) struct Config {
     pub(crate) sequences: Option<HashMap<String, Vec<String>>>,
     #[serde(default)]
     pub(crate) log: LogConfig,
+    #[serde(default)]
+    pub(crate) remote: remote::RemoteConfig,
 
     // sha256 of the file used to deserialize
     #[serde(skip)]
@@ -145,7 +148,11 @@ impl Config {
     // Perform various integrity checks as appropriate. For example, if this config
     // was generated, ensure that the source file and the file deserialized to make
     // this object have not become desynced.
-    pub(crate) fn check(&self, work_path: &path::Path) -> Result<(), MonorailError> {
+    pub(crate) fn check(
+        &self,
+        config_path: &path::Path,
+        work_path: &path::Path,
+    ) -> Result<(), MonorailError> {
         // if the config specifies a source, validate source and output files
         match &self.source {
             Some(source) => {
@@ -157,9 +164,10 @@ impl Config {
                         &source_path.display()
                     )));
                 }
-                // load the tracking table and ensure the generated checksum exists
-                let tt = tracking::Table::new(&self.get_tracking_path(work_path))?;
-                let generated_config_checksum = tt.get_generated_config_checksum()?;
+                // load the lockfile for checksum comparison
+                let lockfile_path = path::Path::new(work_path)
+                    .join(format!("{}.lock", file::get_stem(config_path)?));
+                let lockfile = ConfigLockfile::load(&lockfile_path)?;
 
                 // first, check if the source has changed
                 hasher.update(std::fs::read(source_path)?);
@@ -168,7 +176,7 @@ impl Config {
                     Some(source_checksum) => {
                         if checksum != *source_checksum {
                             return Err(MonorailError::Generic(format!(
-                                "Configuration is desynced with source; expected {}, found {}",
+                                "Configuration is desynced with source; expected {}, found {}; run `monorail config generate`",
                                 source_checksum, checksum
                             )));
                         }
@@ -181,10 +189,10 @@ impl Config {
                 }
 
                 // second, check if the output has changed
-                if self.checksum != generated_config_checksum {
+                if self.checksum != lockfile.checksum {
                     return Err(MonorailError::Generic(format!(
-                        "Generated configuration is desynced with source; expected {}, found {}",
-                        self.checksum, generated_config_checksum
+                        "Generated configuration or lockfile was edited and is desynced from source; expected {}, found {}",
+                        self.checksum, lockfile.checksum
                     )));
                 }
                 Ok(())
@@ -278,8 +286,6 @@ impl TargetArgMaps {
     fn default_path() -> String {
         "monorail/argmap".into()
     }
-}
-impl TargetArgMaps {
     fn default_base() -> String {
         "base.json".into()
     }
@@ -310,6 +316,33 @@ impl Default for TargetCommands {
 impl TargetCommands {
     fn default_path() -> String {
         "monorail/cmd".into()
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub(crate) struct ConfigLockfile {
+    pub(crate) checksum: String,
+}
+impl ConfigLockfile {
+    pub(crate) fn new(checksum: String) -> Self {
+        Self { checksum }
+    }
+    pub(crate) fn load(fp: &path::Path) -> Result<Self, MonorailError> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(fp)
+            .map_err(|e| MonorailError::Generic(format!("Lockfile open: {}", e)))?;
+        let v: Self = serde_json::from_reader(file)?;
+        Ok(v)
+    }
+    pub(crate) fn save(&self, fp: &path::Path) -> Result<(), MonorailError> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(fp)?;
+        serde_json::to_writer(file, self)?;
+        Ok(())
     }
 }
 

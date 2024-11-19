@@ -1,7 +1,7 @@
 use crate::core::{self, error::MonorailError};
 
 use std::io::{self};
-use std::{fs, path};
+use std::{env, fs, path};
 
 use serde::Serialize;
 use sha2::Digest;
@@ -9,73 +9,86 @@ use tracing::info;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ConfigGenerateInput<'a> {
-    pub(crate) output_file: &'a str,
+    pub(crate) output_file_path: &'a path::Path,
 }
 #[derive(Debug, Serialize)]
 pub(crate) struct ConfigGenerateOutput {
-    pub(crate) config: core::Config,
+    pub(crate) config: serde_json::Value,
 }
 
 pub(crate) fn config_generate(
     input: ConfigGenerateInput,
-    work_path: &path::Path,
 ) -> Result<ConfigGenerateOutput, MonorailError> {
-    info!(output_file = &input.output_file, "Generated path");
-    // use the target output file's parent to derive the monorail-out
-    // tracking dir that we should write the output file checksum to
-    let output_file_parent =
-        path::Path::new(input.output_file)
-            .parent()
-            .ok_or(MonorailError::Generic(format!(
-                "Generated config file {} has no parent directory",
-                input.output_file
-            )))?;
+    info!(
+        output_file = &input.output_file_path.display().to_string(),
+        "Output path"
+    );
+    // use the target output file's parent to derive the directory
+    // that we should write the output file and lockfile to
+    let output_file_parent = input
+        .output_file_path
+        .parent()
+        .ok_or(MonorailError::Generic(format!(
+            "Output config file {} has no parent directory",
+            input.output_file_path.display()
+        )))?;
+    fs::create_dir_all(output_file_parent)?;
+    let lockfile_path = output_file_parent.join(format!(
+        "{}.lock",
+        core::file::get_stem(input.output_file_path)?
+    ));
+    info!(
+        path = &lockfile_path.display().to_string(),
+        "Output lockfile path"
+    );
 
+    // read the source into a value we can manipulate; we can't use Config
+    // because it has defaults that, when serialized, will make viewing the
+    // generated config for accuracy harder for the user (since it will
+    // contain many fields they did not specify)
     let stdin = io::stdin();
     let handle = stdin.lock();
     let mut hasher = sha2::Sha256::new();
+    let mut val: serde_json::Value = serde_json::from_reader(handle)?;
+    let source_val = val.get_mut("source").ok_or(MonorailError::from(
+        "Input data must populate 'source.path' with a relative path to the input file",
+    ))?;
+    let source = source_val
+        .as_object_mut()
+        .ok_or(MonorailError::from("Input data 'source' is not an object"))?;
+    let source_path = source
+        .get("path")
+        .ok_or(MonorailError::from("Input data must provide 'source.path'"))?
+        .as_str()
+        .ok_or(MonorailError::from("Source path must be a string"))?;
+    // source path is interpreted relative to the current directory
+    hasher.update(fs::read(env::current_dir()?.join(source_path))?);
+    source.insert(
+        "algorithm".to_string(),
+        serde_json::to_value(Some(core::AlgorithmKind::Sha256))?,
+    );
+    source.insert(
+        "checksum".to_string(),
+        serde_json::to_value(Some(format!("{:x}", hasher.finalize_reset())))?,
+    );
 
-    // read the source data and update it with the source file's checksum
-    let mut config: core::Config = serde_json::from_reader(handle)?;
-    match config.source {
-        Some(ref mut source) => {
-            hasher.update(fs::read(work_path.join(&source.path))?);
-            source.algorithm = Some(core::AlgorithmKind::Sha256);
-            source.checksum = Some(format!("{:x}", hasher.finalize_reset()));
-            info!(checksum = &source.checksum, "Source checksum");
-        }
-        None => {
-            return Err(MonorailError::from(
-                "Source data must populate 'source.path' with a relative path to the input file",
-            ));
-        }
-    }
-
-    // serialize the modified config and checksum it
-    let config_data = serde_json::to_vec_pretty(&config)?;
+    // serialize the modified input and checksum it
+    let config_data = serde_json::to_vec_pretty(&val)?;
     hasher.update(&config_data);
     let checksum = format!("{:x}", hasher.finalize());
-    info!(checksum = &checksum, "Generated checksum");
+    info!(checksum = &checksum, "Output checksum");
 
-    // write the checksum of the final config to the tracking table
+    // validate that the input json would also deserialize to a Config
+    _ = serde_json::from_value::<core::Config>(val.clone())?;
+    info!("Configuration is valid");
+
+    // write the checksum of the final config to the lockfile
     // for that config, ensuring that it can be used for comparison
     // when this new config is used in other commands
-    let config_tracking_path = config.get_tracking_path(output_file_parent);
-    let tt = core::tracking::Table::new(&config_tracking_path)?;
-    info!(
-        tracking_path = &config_tracking_path.display().to_string(),
-        "Generated tracking path"
-    );
-    // fs::create_dir_all(&config_tracking_path)?;
-    let checksum_tracking_path = config_tracking_path.join("generated_config_checksum");
-    info!(
-        path = &checksum_tracking_path.display().to_string(),
-        "Generated checksum tracking path"
-    );
-    // fs::write(tt.get_generated_checksum_path(), checksum)?;
-    tt.save_generated_config_checksum(checksum)?;
-    fs::write(input.output_file, config_data)?;
-    info!("Generated config and checksum written");
+    let lockfile = core::ConfigLockfile::new(checksum);
+    lockfile.save(&lockfile_path)?;
+    fs::write(input.output_file_path, config_data)?;
+    info!("Generated config and lockfile written");
 
-    Ok(ConfigGenerateOutput { config })
+    Ok(ConfigGenerateOutput { config: val })
 }

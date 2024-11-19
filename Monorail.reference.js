@@ -122,5 +122,27 @@ const reference = {
 			"<command name 2>",
 			"<command name 3>"
 		]
+	},
+	"remote": {
+		"server": {
+			/*
+			Host to bind.
+
+			Optional: default: "127.0.0.1"
+			*/
+			"host": "127.0.0.1",
+			/*
+			Port to bind.
+
+			Optional: default: 5917
+			*/
+			"port": 5917,
+			/*
+			Milliseconds to wait for a successful bind of the host:port.
+
+			Optional: default: 1000
+			*/
+			"bind_timeout_ms": 1000,
+		}
 	}
 }

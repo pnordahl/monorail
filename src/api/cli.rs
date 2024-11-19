@@ -480,25 +480,28 @@ pub fn handle<'a>(
 
     match matches.get_one::<String>(ARG_CONFIG_FILE) {
         Some(config_file) => {
+            let config_file_path = path::Path::new(&config_file);
+            if !config_file_path.is_absolute() {
+                return Err(MonorailError::Generic(format!(
+                    "Configuration file path '{}' is not absolute",
+                    &config_file
+                )));
+            }
             // Config generation does not use or require an existing config file, but will use the path from `-f`
             if let Some(config_matches) = matches.subcommand_matches(CMD_CONFIG) {
                 if config_matches.subcommand_matches(CMD_GENERATE).is_some() {
-                    return handle_config_generate(
-                        config_file,
-                        output_options,
-                        &env::current_dir()?,
-                    );
+                    return handle_config_generate(config_file_path, output_options);
                 }
             }
-            let config_path = path::Path::new(config_file);
-            let work_path = path::Path::new(config_path)
-                .parent()
-                .ok_or(MonorailError::Generic(format!(
-                    "Config file {} has no parent directory",
-                    config_path.display()
-                )))?;
-            let config = core::Config::new(config_path)?;
-            config.check(work_path)?;
+            let work_path =
+                path::Path::new(config_file_path)
+                    .parent()
+                    .ok_or(MonorailError::Generic(format!(
+                        "Config file {} has no parent directory",
+                        config_file_path.display()
+                    )))?;
+            let config = core::Config::new(config_file_path)?;
+            config.check(config_file_path, work_path)?;
             if let Some(config_matches) = matches.subcommand_matches(CMD_CONFIG) {
                 if config_matches.subcommand_matches(CMD_SHOW).is_some() {
                     write_result(&Ok(config), output_options)?;
@@ -569,6 +572,10 @@ fn handle_out_delete<'a>(
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
 ) -> Result<i32, MonorailError> {
+    let rt = Runtime::new()?;
+    let _guard = rt.block_on(core::remote::RemoteServer::new_lock(
+        config.remote.server.clone(),
+    ))?;
     let i = app::out::OutDeleteInput::try_from(matches)?;
     let res = app::out::out_delete(&config.out_dir, &i);
     write_result(&res, output_options)?;
@@ -595,6 +602,9 @@ fn handle_run<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
+    let _guard = rt.block_on(core::remote::RemoteServer::new_lock(
+        config.remote.server.clone(),
+    ))?;
     let i = app::run::HandleRunInput::try_from(matches).unwrap();
     let invocation = env::args().skip(1).collect::<Vec<_>>().join(" ");
     let o = rt.block_on(app::run::handle_run(config, &i, &invocation, work_path))?;
@@ -606,13 +616,11 @@ fn handle_run<'a>(
     Ok(code)
 }
 
-fn handle_config_generate<'a>(
-    output_file: &str,
-    output_options: &OutputOptions<'a>,
-    work_path: &'a path::Path,
+fn handle_config_generate(
+    output_file_path: &path::Path,
+    output_options: &OutputOptions<'_>,
 ) -> Result<i32, MonorailError> {
-    let res =
-        app::config::config_generate(app::config::ConfigGenerateInput { output_file }, work_path);
+    let res = app::config::config_generate(app::config::ConfigGenerateInput { output_file_path });
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))
 }
@@ -624,6 +632,9 @@ fn handle_checkpoint_update<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
+    let _guard = rt.block_on(core::remote::RemoteServer::new_lock(
+        config.remote.server.clone(),
+    ))?;
     let i = app::checkpoint::CheckpointUpdateInput::try_from(matches)?;
     let res = rt.block_on(app::checkpoint::handle_checkpoint_update(
         config, &i, work_path,
@@ -649,6 +660,9 @@ fn handle_checkpoint_delete<'a>(
     work_path: &'a path::Path,
 ) -> Result<i32, MonorailError> {
     let rt = Runtime::new()?;
+    let _guard = rt.block_on(core::remote::RemoteServer::new_lock(
+        config.remote.server.clone(),
+    ))?;
     let res = rt.block_on(app::checkpoint::handle_checkpoint_delete(config, work_path));
     write_result(&res, output_options)?;
     Ok(get_code(res.is_err()))

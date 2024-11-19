@@ -4,6 +4,7 @@
 
 ### Added
 - `config generate` API for generating a configuration file that is synchronized with its source file.
+- Initial implementation of remote execution server in lock mode, preventing parallel monorail use for a subset of APIs
 
 ## [3.5.2] - 2024-11-15
 

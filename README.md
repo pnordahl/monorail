@@ -230,9 +230,9 @@ Display configured targets, target groupings, and target commands. Use `monorail
 
 ## Commands
 
-A command is an executable program called in the `run` API. Commands can be written in any language, and need only exist within the repository and have executable permissions. Common commands are those that install toolchains, lint and compile code, execute test binaries, build containers, deploy to servers, and so forth.
+A command is an executable program called in the `run` API. Commands can be written in any language, and need only exist within the repository and have executable permissions. Common commands are those that install toolchains, lint and compile code, execute test binaries, build containers, deploy to servers, and so forth. Commands must perform a task, then exit with either a zero exit code to indicate success, or non-zero exit code to indicate an error. Persistent processes that do not naturally exit, such as servers, should be backgrounded in a Command using tools like `foreman`, `docker-compose`, etc. as appropriate.
 
-Commands are invoked by one or more targets, and each command may optionally be parameterized with runtime arguments on a per-target basis using [Args](#args).
+Commands are invoked for one or more targets, and each command may optionally be parameterized with runtime arguments on a per-target basis using [Args](#args).
 
 Command output to stderr and stdout is captured and streamed to a [log tailing socket](#tailing-logs) (if active), and streamed to [compressed zstd archives](#showing-logs).
 
@@ -387,7 +387,7 @@ A sequence is an array of commands, and is specified in `Monorail.json`. It's us
 monorail run -s validate
 ```
 
-This is analagous to `monorail run -c check build unit-test integration-test`.
+This is equivalent to `monorail run -c check build unit-test integration-test`.
 
 ### APIs
 
