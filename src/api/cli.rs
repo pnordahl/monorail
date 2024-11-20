@@ -411,7 +411,7 @@ See `monorail run -h` for information on how this interacts with other arg-relat
             .arg(
                 Arg::new(ARG_CHANGES)
                     .long(ARG_CHANGES)
-                    .help("Display changes")
+                    .help("Displays detailed information about changes. If no checkpoint is available to guide change detection, this flag is ignored.")
                     .action(ArgAction::SetTrue)
                     .default_value_if(ARG_CHANGE_TARGETS, ArgPredicate::IsPresent, Some("true"))
                     .default_value_if(ARG_ALL, ArgPredicate::IsPresent, Some("true")),
@@ -419,14 +419,14 @@ See `monorail run -h` for information on how this interacts with other arg-relat
             .arg(
                 Arg::new(ARG_CHANGE_TARGETS)
                     .long(ARG_CHANGE_TARGETS)
-                    .help("Display targets for each change")
+                    .help("For each change, display the targets affected. If no checkpoint is available to guide change detection, this flag is ignored.")
                     .action(ArgAction::SetTrue)
                     .default_value_if(ARG_ALL, ArgPredicate::IsPresent, Some("true")),
             )
             .arg(
                 Arg::new(ARG_TARGET_GROUPS)
                     .long(ARG_TARGET_GROUPS)
-                    .help("Display targets grouped according to the dependency graph.")
+                    .help("Display targets grouped according to the dependency graph. If no checkpoint is available to guide change detection, all targets are returned.")
                     .action(ArgAction::SetTrue)
                     .default_value_if(ARG_ALL, ArgPredicate::IsPresent, Some("true")),
             )

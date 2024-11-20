@@ -45,20 +45,15 @@ pub(crate) async fn get_filtered_changes(
 // Fetch diff changes, using the tracking checkpoint commit if present.
 pub(crate) async fn get_git_diff_changes<'a>(
     git_opts: &'a GitOptions<'a>,
-    checkpoint: &'a Option<tracking::Checkpoint>,
+    checkpoint: &'a tracking::Checkpoint,
     work_path: &path::Path,
 ) -> Result<Vec<Change>, MonorailError> {
     let begin = git_opts.begin.or_else(|| {
         // otherwise, check checkpoint.id; if provided, use that
-        if let Some(checkpoint) = checkpoint {
-            if checkpoint.id.is_empty() {
-                None
-            } else {
-                Some(&checkpoint.id)
-            }
-        } else {
-            // if not then there's nowhere to begin from, and we're done
+        if checkpoint.id.is_empty() {
             None
+        } else {
+            Some(&checkpoint.id)
         }
     });
 
@@ -73,37 +68,29 @@ pub(crate) async fn get_git_diff_changes<'a>(
 
 pub(crate) async fn get_git_all_changes<'a>(
     git_opts: &'a GitOptions<'a>,
-    checkpoint: &'a Option<tracking::Checkpoint>,
+    checkpoint: &'a tracking::Checkpoint,
     work_path: &path::Path,
-) -> Result<Option<Vec<Change>>, MonorailError> {
+) -> Result<Vec<Change>, MonorailError> {
     let (diff_changes, mut other_changes) = tokio::try_join!(
         get_git_diff_changes(git_opts, checkpoint, work_path),
         git_cmd_other_changes(git_opts.git_path, work_path)
     )?;
     other_changes.extend(diff_changes);
-    let mut filtered_changes = match checkpoint {
-        Some(checkpoint) => {
-            if let Some(pending) = &checkpoint.pending {
+    let mut filtered_changes = {
+        match &checkpoint.pending {
+            Some(pending) => {
                 if !pending.is_empty() {
                     get_filtered_changes(other_changes, pending, work_path).await
                 } else {
                     other_changes
                 }
-            } else {
-                other_changes
             }
-        }
-        None => {
-            // no changes and no checkpoint means change detection is not possible
-            if other_changes.is_empty() {
-                return Ok(None);
-            }
-            other_changes
+            None => other_changes,
         }
     };
 
     filtered_changes.sort();
-    Ok(Some(filtered_changes))
+    Ok(filtered_changes)
 }
 
 pub(crate) async fn get_git_cmd_child(
@@ -251,7 +238,7 @@ mod tests {
 
         // no begin/end without a checkpoint or pending changes is ok(none)
         assert_eq!(
-            get_git_diff_changes(&git_opts, &None, repo_path)
+            get_git_diff_changes(&git_opts, &Default::default(), repo_path)
                 .await
                 .unwrap(),
             vec![]
@@ -261,7 +248,7 @@ mod tests {
         git_opts.begin = Some(&begin);
         git_opts.end = Some(&begin);
         assert_eq!(
-            get_git_diff_changes(&git_opts, &None, repo_path)
+            get_git_diff_changes(&git_opts, &Default::default(), repo_path)
                 .await
                 .unwrap(),
             vec![]
@@ -276,7 +263,7 @@ mod tests {
         git_opts.begin = Some(&begin);
         git_opts.end = Some(&end);
         assert_eq!(
-            get_git_diff_changes(&git_opts, &None, repo_path)
+            get_git_diff_changes(&git_opts, &Default::default(), repo_path)
                 .await
                 .unwrap(),
             vec![Change {
@@ -288,7 +275,7 @@ mod tests {
         git_opts.begin = Some(&end);
         git_opts.end = Some(&begin);
         assert_eq!(
-            get_git_diff_changes(&git_opts, &None, repo_path)
+            get_git_diff_changes(&git_opts, &Default::default(), repo_path)
                 .await
                 .unwrap(),
             vec![Change {
@@ -317,11 +304,11 @@ mod tests {
         assert_eq!(
             get_git_diff_changes(
                 &git_opts,
-                &Some(tracking::Checkpoint {
+                &tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
                     id: "".to_string(),
                     pending: None,
-                }),
+                },
                 repo_path
             )
             .await
@@ -337,11 +324,11 @@ mod tests {
         assert_eq!(
             get_git_diff_changes(
                 &git_opts,
-                &Some(tracking::Checkpoint {
+                &tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
                     id: first_head.clone(),
                     pending: None,
-                }),
+                },
                 repo_path
             )
             .await
@@ -360,11 +347,11 @@ mod tests {
         assert_eq!(
             get_git_diff_changes(
                 &git_opts,
-                &Some(tracking::Checkpoint {
+                &tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
                     id: first_head.clone(),
                     pending: None,
-                }),
+                },
                 repo_path
             )
             .await
@@ -377,11 +364,11 @@ mod tests {
         assert_eq!(
             get_git_diff_changes(
                 &git_opts,
-                &Some(tracking::Checkpoint {
+                &tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
                     id: second_head.clone(),
                     pending: None,
-                }),
+                },
                 repo_path
             )
             .await
@@ -396,11 +383,11 @@ mod tests {
                     end: None,
                     git_path: "git",
                 },
-                &Some(tracking::Checkpoint {
+                &tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
                     id: second_head.clone(),
                     pending: None,
-                }),
+                },
                 repo_path
             )
             .await
@@ -430,14 +417,14 @@ mod tests {
         // no begin/end, with invalid checkpoint commit is err
         assert!(get_git_diff_changes(
             &git_opts,
-            &Some(tracking::Checkpoint {
+            &tracking::Checkpoint {
                 path: path::Path::new("x").to_path_buf(),
                 id: "test".to_string(),
                 pending: Some(HashMap::from([(
                     "foo.txt".to_string(),
                     "blarp".to_string()
                 )])),
-            }),
+            },
             repo_path
         )
         .await
@@ -445,16 +432,20 @@ mod tests {
 
         // bad begin is err
         git_opts.begin = Some("foo");
-        assert!(get_git_diff_changes(&git_opts, &None, repo_path)
-            .await
-            .is_err());
+        assert!(
+            get_git_diff_changes(&git_opts, &Default::default(), repo_path)
+                .await
+                .is_err()
+        );
 
         // bad end is err
         git_opts.begin = Some(&begin);
         git_opts.end = Some("foo");
-        assert!(get_git_diff_changes(&git_opts, &None, repo_path)
-            .await
-            .is_err());
+        assert!(
+            get_git_diff_changes(&git_opts, &Default::default(), repo_path)
+                .await
+                .is_err()
+        );
         git_opts.begin = None;
         git_opts.end = None;
 
@@ -470,18 +461,20 @@ mod tests {
         commit(repo_path).await;
 
         // no changes, no checkpoint is ok
-        assert!(get_git_all_changes(
-            &GitOptions {
-                begin: None,
-                end: None,
-                git_path: "git",
-            },
-            &None,
-            repo_path
-        )
-        .await
-        .unwrap()
-        .is_none());
+        assert_eq!(
+            get_git_all_changes(
+                &GitOptions {
+                    begin: None,
+                    end: None,
+                    git_path: "git",
+                },
+                &Default::default(),
+                repo_path
+            )
+            .await
+            .unwrap(),
+            vec![]
+        );
     }
 
     #[tokio::test]
@@ -503,18 +496,17 @@ mod tests {
         assert_eq!(
             get_git_all_changes(
                 &git_opts,
-                &Some(tracking::Checkpoint {
+                &tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
                     id: begin.clone(),
                     pending: Some(HashMap::from([(
                         "foo.txt".to_string(),
                         "dsfksl".to_string()
                     )])),
-                }),
+                },
                 repo_path
             )
             .await
-            .unwrap()
             .unwrap()
             .len(),
             0
@@ -543,9 +535,8 @@ mod tests {
         commit(repo_path).await;
 
         assert_eq!(
-            get_git_all_changes(&git_opts, &None, repo_path)
+            get_git_all_changes(&git_opts, &Default::default(), repo_path)
                 .await
-                .unwrap()
                 .unwrap()
                 .len(),
             1
@@ -556,18 +547,17 @@ mod tests {
         assert_eq!(
             get_git_all_changes(
                 &git_opts,
-                &Some(tracking::Checkpoint {
+                &tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
                     id: begin.clone(),
                     pending: Some(HashMap::from([(
                         "foo.txt".to_string(),
                         foo_checksum.clone()
                     )])),
-                }),
+                },
                 repo_path
             )
             .await
-            .unwrap()
             .unwrap()
             .len(),
             0
@@ -583,18 +573,17 @@ mod tests {
         assert_eq!(
             get_git_all_changes(
                 &git_opts,
-                &Some(tracking::Checkpoint {
+                &tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
                     id: end.clone(),
                     pending: Some(HashMap::from([(
                         "foo.txt".to_string(),
                         foo_checksum.clone()
                     )])),
-                }),
+                },
                 repo_path
             )
             .await
-            .unwrap()
             .unwrap()
             .len(),
             1
@@ -604,18 +593,17 @@ mod tests {
         assert_eq!(
             get_git_all_changes(
                 &git_opts,
-                &Some(tracking::Checkpoint {
+                &tracking::Checkpoint {
                     path: path::Path::new("x").to_path_buf(),
                     id: end.clone(),
                     pending: Some(HashMap::from([
                         ("foo.txt".to_string(), foo_checksum),
                         ("bar.txt".to_string(), bar_checksum)
                     ])),
-                }),
+                },
                 repo_path
             )
             .await
-            .unwrap()
             .unwrap()
             .len(),
             0

@@ -74,8 +74,7 @@ pub(crate) async fn get_file_checksum(p: &path::Path) -> Result<String, Monorail
 
         hasher.update(&buffer[..num]);
     }
-
-    Ok(hex::encode(hasher.finalize()).to_string())
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 pub(crate) async fn checksum_is_equal(

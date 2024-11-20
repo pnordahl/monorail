@@ -165,7 +165,7 @@ pub(crate) async fn write_with_checksum(
     let mut hasher = sha2::Sha256::new();
     hasher.update(data);
     tokio::fs::write(path, &data).await?;
-    Ok(hex::encode(hasher.finalize()).to_string())
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 pub(crate) fn get_pair_map(pairs: &[(&str, String)]) -> HashMap<String, String> {

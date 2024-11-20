@@ -24,7 +24,7 @@ At this time, Windows is unsupported. However, there are no technical limitation
 
 ## Overview
 
-`monorail` blends features of build systems like `bazel` and `buck` with the simplicity and flexibility of command runners like `make` and `just`. It manages dependencies and target mapping with `bazel`-like change tracking, enabling selective rebuilds and efficient parallel execution. Additionally, `monorail` provides a CLI-driven workflow for running custom code in any language across any subset of your monorepo.
+`monorail` blends features of build systems like `bazel` and `buck` with the simplicity and flexibility of command runners like `make` and `just` to create a lightweight monorepo development system. It combines a graph representation of your repository with incremental change tracking, enabling guided and efficient parallel execution across any subset of your monorepo.
 
 `monorail` is internally driven by two things:
 

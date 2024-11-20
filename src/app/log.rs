@@ -8,6 +8,7 @@ use sha2::Digest;
 use std::io::BufRead;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 use tracing::{debug, info, instrument, trace};
 
 use crate::core::{self, error::MonorailError, tracking};
@@ -354,8 +355,8 @@ pub(crate) struct Compressor {
     index: usize,
     num_threads: usize,
     req_channels: Vec<(
-        flume::Sender<CompressRequest>,
-        Option<flume::Receiver<CompressRequest>>,
+        mpsc::Sender<CompressRequest>,
+        Option<mpsc::Receiver<CompressRequest>>,
     )>,
     registrations: Vec<Vec<path::PathBuf>>,
     shutdown: sync::Arc<sync::atomic::AtomicBool>,
@@ -364,24 +365,25 @@ pub(crate) struct Compressor {
 pub(crate) struct CompressorClient {
     pub(crate) file_name: String,
     pub(crate) encoder_index: usize,
-    pub(crate) req_tx: flume::Sender<CompressRequest>,
+    pub(crate) req_tx: mpsc::Sender<CompressRequest>,
 }
 impl CompressorClient {
     pub(crate) async fn data(&self, data: sync::Arc<Vec<Vec<u8>>>) -> Result<(), MonorailError> {
         self.req_tx
-            .send_async(CompressRequest::Data(self.encoder_index, data))
+            .send(CompressRequest::Data(self.encoder_index, data))
             .await
             .map_err(MonorailError::from)
     }
     pub(crate) async fn end(&self) -> Result<(), MonorailError> {
         self.req_tx
-            .send_async(CompressRequest::End(self.encoder_index))
+            .send(CompressRequest::End(self.encoder_index))
             .await
             .map_err(MonorailError::from)
     }
-    pub(crate) fn shutdown(&self) -> Result<(), MonorailError> {
+    pub(crate) async fn shutdown(&self) -> Result<(), MonorailError> {
         self.req_tx
             .send(CompressRequest::Shutdown)
+            .await
             .map_err(MonorailError::from)
     }
 }
@@ -391,7 +393,7 @@ impl Compressor {
         let mut req_channels = vec![];
         let mut registrations = vec![];
         for _ in 0..num_threads {
-            let (req_tx, req_rx) = flume::bounded(1000);
+            let (req_tx, req_rx) = mpsc::channel(1000);
             req_channels.push((req_tx, Some(req_rx)));
             registrations.push(vec![]);
         }
@@ -425,7 +427,7 @@ impl Compressor {
         std::thread::scope(|s| {
             for x in 0..self.num_threads {
                 let regs = &self.registrations[x];
-                let req_rx =
+                let mut req_rx =
                     self.req_channels[x]
                         .1
                         .take()
@@ -450,7 +452,7 @@ impl Compressor {
                         if shutdown.load(sync::atomic::Ordering::Relaxed) {
                             break;
                         };
-                        match req_rx.recv()? {
+                        match req_rx.blocking_recv().ok_or(MonorailError::ChannelRecv("CompressorClient unexpectedly closed its channel before sending shutdown".to_string()))? {
                             CompressRequest::End(encoder_index) => {
                                 trace!(
                                     encoder_index = encoder_index,
@@ -545,8 +547,8 @@ mod tests {
         assert_eq!(client_2.encoder_index, 0);
     }
 
-    #[test]
-    fn test_run_compressor_with_data_requests() {
+    #[tokio::test]
+    async fn test_run_compressor_with_data_requests() {
         let shutdown = Arc::new(AtomicBool::new(false));
         let mut compressor = Compressor::new(1, shutdown.clone());
         let temp_dir = new_testdir().unwrap();
@@ -564,10 +566,11 @@ mod tests {
         client
             .req_tx
             .send(CompressRequest::Data(client.encoder_index, data.clone()))
+            .await
             .expect("Failed to send data");
 
         // Finalize the encoder and shut down the thread
-        client.shutdown().unwrap();
+        client.shutdown().await.unwrap();
 
         // Wait for the compressor thread to end
         compressor_handle.join().unwrap().unwrap();
@@ -580,8 +583,8 @@ mod tests {
         assert!(metadata.len() > 0, "Compressed file should not be empty");
     }
 
-    #[test]
-    fn test_shutdown_compressor() {
+    #[tokio::test]
+    async fn test_shutdown_compressor() {
         let shutdown = Arc::new(AtomicBool::new(false));
         let mut compressor = Compressor::new(2, shutdown.clone());
         let temp_dir = new_testdir().unwrap();
@@ -603,10 +606,12 @@ mod tests {
         client_1
             .req_tx
             .send(CompressRequest::Shutdown)
+            .await
             .expect("Failed to send shutdown request");
         client_2
             .req_tx
             .send(CompressRequest::Shutdown)
+            .await
             .expect("Failed to send shutdown request");
 
         // Wait for the compressor threads to end

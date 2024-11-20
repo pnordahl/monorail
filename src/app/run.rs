@@ -131,6 +131,7 @@ pub(crate) struct RunOutput {
     invocation: String,
     out: Out,
     results: Vec<CommandRunResult>,
+    checkpointed: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -250,6 +251,7 @@ pub(crate) async fn handle_run<'a>(
     let run_path = setup_run_path(cfg, tracking_run.id, work_path)?;
     let commands = get_all_commands(cfg, &input.commands, &input.sequences)?;
     let mut argmap = ArgMap::new();
+    let mut checkpointed = false;
 
     let (index, target_groups) = match input.targets.len() {
         0 => {
@@ -263,11 +265,18 @@ pub(crate) async fn handle_run<'a>(
                 }
             };
 
-            let changes = match cfg.change_provider.r#use {
-                ChangeProviderKind::Git => {
-                    git::get_git_all_changes(&input.git_opts, &checkpoint, work_path).await?
-                }
+            // Fetch changes from the change provider if a checkpoint exists
+            let changes = match checkpoint {
+                Some(checkpoint) => match cfg.change_provider.r#use {
+                    ChangeProviderKind::Git => Some(
+                        git::get_git_all_changes(&input.git_opts, &checkpoint, work_path).await?,
+                    ),
+                },
+                None => None,
             };
+
+            checkpointed = changes.is_some();
+
             let ai = analyze::AnalyzeInput::new(false, false, true);
             let ao = analyze::analyze(&ai, &mut index, changes)?;
             let target_groups = ao
@@ -338,11 +347,14 @@ pub(crate) async fn handle_run<'a>(
         cfg,
         plan,
         &commands,
-        &run_path,
         input.fail_on_undefined,
         invocation,
+        checkpointed,
     )
     .await?;
+
+    // Store the run output record
+    store_run_output(&run_output, &run_path)?;
 
     // Update the run counter
     tracking_run.save()?;
@@ -990,8 +1002,8 @@ async fn process_plan(
             crr.target_groups.push(result_target_group);
 
             for client in compressor_clients {
-                client.0.shutdown()?;
-                client.1.shutdown()?;
+                client.0.shutdown().await?;
+                client.1.shutdown().await?;
             }
             // Unwrap for thread dyn Any panic contents, which isn't easily mapped to a MonorailError
             // because it doesn't impl Error; however, the internals of this handle do, so they
@@ -1010,9 +1022,9 @@ async fn run_internal<'a>(
     cfg: &'a core::Config,
     plan: Plan,
     commands: &'a [&'a String],
-    run_path: &path::Path,
     fail_on_undefined: bool,
     invocation: &'a str,
+    checkpointed: bool,
 ) -> Result<RunOutput, MonorailError> {
     info!("Processing plan");
     let (results, failed) = process_plan(cfg, &plan, commands, fail_on_undefined).await?;
@@ -1021,9 +1033,8 @@ async fn run_internal<'a>(
         invocation: invocation.to_owned(),
         out: plan.out,
         results,
+        checkpointed,
     };
-
-    store_run_output(&o, run_path)?;
 
     Ok(o)
 }
@@ -1513,6 +1524,7 @@ mod tests {
                     )])],
                 },
             ],
+            checkpointed: true,
         };
 
         let result = store_run_output(&run_output, run_path);
