@@ -20,12 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
       - run: |
           sudo chown -R $USER:$USER ${{ github.workspace }}
           mkdir -p "$MONORAIL_TEST_DIR"
           git config --global user.name "FIRST_NAME LAST_NAME"
           git config --global user.email "MY_NAME@example.com"
-      # clippy does not respect .cargo/config.toml, so we specify RUSTFLAGS manually
-      - run: RUSTFLAGS="--cfg tokio_unstable" cargo clippy --locked -- -D warnings
+      - run: cargo clippy --locked -- -D warnings
       - run: cargo build --locked --verbose --all
       - run: cargo test --locked -- --nocapture
