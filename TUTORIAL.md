@@ -209,7 +209,8 @@ monorail run -c hello -t rust | jq
         }
       ]
     }
-  ]
+  ],
+  "checkpointed": true
 }
 ```
 
@@ -243,11 +244,12 @@ monorail analyze | jq
     "proto",
     "python/app3",
     "rust"
-  ]
+  ],
+  "checkpointed": true
 }
 ```
 
-This indicates that based on our current changeset and graph, all three targets have changed. Display more information about the specific changes causing these targets to appear by adding `--change-targets`:
+This indicates that based on our current changeset and graph, all three targets have changed. The `checkpointed` field indicates if a checkpoint (explained in a later section) was used to obtain changes from the change provider. If the checkpoint is not present, this will be `false`. Display more information about the specific changes causing these targets to appear by adding `--change-targets`:
 ```sh
 monorail analyze --changes | jq
 ```
@@ -259,7 +261,8 @@ monorail analyze --changes | jq
     "proto",
     "python/app3",
     "rust"
-  ]
+  ],
+  "checkpointed": true
 }
 ```
 
@@ -319,7 +322,9 @@ monorail analyze --changes | jq
     "proto",
     "python/app3",
     "rust"
-
+  ],
+  "checkpointed": true
+}
 ```
 
 ### Ignoring with 'ignores'
@@ -356,7 +361,8 @@ monorail analyze --target-groups | jq
       "rust",
       "python/app3"
     ]
-  ]
+  ],
+  "checkpointed": true
 }
 ```
 
@@ -400,7 +406,8 @@ monorail analyze --target-groups | jq
       "rust",
       "python/app3"
     ]
-  ]
+  ],
+  "checkpointed": true
 }
 ```
 
@@ -450,7 +457,8 @@ monorail result show | jq
         }
       ]
     }
-  ]
+  ],
+  "checkpointed": true
 }
 ```
 
@@ -536,7 +544,7 @@ As this command executes, you'll see internal progress due to the inclusion of t
 {"timestamp":"2024-11-10T11:16:48.802646+00:00","level":"INFO","message":"processing targets","num":1,"command":"hello"}
 {"timestamp":"2024-11-10T11:16:48.802652+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"rust"}
 {"timestamp":"2024-11-10T11:16:49.372712+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
-{"timestamp":"2024-11-10T11:16:49.373482+00:00","failed":false,"invocation":"-v run -c hello -t rust","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/3","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3"}}},"results":[{"command":"hello","target_groups":[{"rust":{"status":"success","code":0,"runtime_secs":0.57000625}}]}]
+{"timestamp":"2024-11-10T11:16:49.373482+00:00","checkpointed":false,"failed":false,"invocation":"-v run -c hello -t rust","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/3","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3"}}},"results":[{"command":"hello","target_groups":[{"rust":{"status":"success","code":0,"runtime_secs":0.57000625}}]}]
 ```
 
 ... as well as log statements from the command itself in your log tailing window:
@@ -651,7 +659,8 @@ monorail analyze --target-groups | jq
       "rust",
       "python/app3"
     ]
-  ]
+  ],
+  "checkpointed": true
 }
 ```
 
@@ -677,7 +686,7 @@ monorail -v run -c hello
 {"timestamp":"2024-11-10T11:21:10.121846+00:00","level":"INFO","message":"task","status":"scheduled","command":"hello","target":"python/app3"}
 {"timestamp":"2024-11-10T11:21:10.144093+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"python/app3"}
 {"timestamp":"2024-11-10T11:21:10.685876+00:00","level":"INFO","message":"task","status":"success","command":"hello","target":"rust"}
-{"timestamp":"2024-11-10T11:21:10.687816+00:00","failed":false,"invocation":"-v run -c hello","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/6","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"python/app3":"585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7","proto":"1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6","rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3"}}},"results":[{"command":"hello","target_groups":[{"proto":{"status":"success","code":0,"runtime_secs":0.001930458}},{"python/app3":{"status":"success","code":0,"runtime_secs":0.02222046},"rust":{"status":"success","code":0,"runtime_secs":0.56421417}}]}]}
+{"timestamp":"2024-11-10T11:21:10.687816+00:00","checkpointed":true,"failed":false,"invocation":"-v run -c hello","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/6","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"python/app3":"585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7","proto":"1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6","rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3"}}},"results":[{"command":"hello","target_groups":[{"proto":{"status":"success","code":0,"runtime_secs":0.001930458}},{"python/app3":{"status":"success","code":0,"runtime_secs":0.02222046},"rust":{"status":"success","code":0,"runtime_secs":0.56421417}}]}]}
 ```
 
 In this sequence of events: the `hello` command is scheduled and executed to completion for `proto` prior to the same for `python/app3` and `rust`. This is because both of the latter depend on `proto`. A practical scenario where this is relevant is building protobuf files for use by both `python/app3` and `rust`. By encoding this dependency in `Monorail.json`, we have ensured that when protobuf files in `proto` change, we have definitely compiled them by the time we execute commands for `python/app3` and `rust`.
@@ -706,7 +715,7 @@ monorail -v run -c hello build
 {"timestamp":"2024-11-10T11:21:41.345703+00:00","level":"INFO","message":"processing targets","num":2,"command":"build"}
 {"timestamp":"2024-11-10T11:21:41.345719+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"rust"}
 {"timestamp":"2024-11-10T11:21:41.345729+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"python/app3"}
-{"timestamp":"2024-11-10T11:21:41.347199+00:00","failed":false,"invocation":"-v run -c hello build","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/7","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3","python/app3":"585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7","proto":"1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6"}}},"results":[{"command":"hello","target_groups":[{"proto":{"status":"success","code":0,"runtime_secs":0.001693833}},{"python/app3":{"status":"success","code":0,"runtime_secs":0.02183325},"rust":{"status":"success","code":0,"runtime_secs":0.5603645}}]},{"command":"build","target_groups":[{"proto":{"status":"undefined"}},{"python/app3":{"status":"undefined"},"rust":{"status":"undefined"}}]}]}
+{"timestamp":"2024-11-10T11:21:41.347199+00:00","checkpointed":true,"failed":false,"invocation":"-v run -c hello build","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/7","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3","python/app3":"585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7","proto":"1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6"}}},"results":[{"command":"hello","target_groups":[{"proto":{"status":"success","code":0,"runtime_secs":0.001693833}},{"python/app3":{"status":"success","code":0,"runtime_secs":0.02183325},"rust":{"status":"success","code":0,"runtime_secs":0.5603645}}]},{"command":"build","target_groups":[{"proto":{"status":"undefined"}},{"python/app3":{"status":"undefined"},"rust":{"status":"undefined"}}]}]}
 ```
 
 You might notice the exit code of 0 and `"failed":false`, and that's because by default it is not required for a target to define a command. You can override this behavior with `--fail-on-undefined`, but in general this allows targets to define only the commands they need and eliminates the need for "stubs" that may never be implemented.
@@ -750,7 +759,7 @@ monorail -v run -s dev
 {"timestamp":"2024-11-10T11:23:31.231144+00:00","level":"INFO","message":"processing targets","num":2,"command":"build"}
 {"timestamp":"2024-11-10T11:23:31.231158+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"rust"}
 {"timestamp":"2024-11-10T11:23:31.231171+00:00","level":"INFO","message":"task","status":"undefined","command":"build","target":"python/app3"}
-{"timestamp":"2024-11-10T11:23:31.232863+00:00","failed":false,"invocation":"-v run -s dev","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/8","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"proto":"1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6","rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3","python/app3":"585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7"}}},"results":[{"command":"hello","target_groups":[{"proto":{"status":"success","code":0,"runtime_secs":0.00200725}},{"python/app3":{"status":"success","code":0,"runtime_secs":0.023067666},"rust":{"status":"success","code":0,"runtime_secs":0.56926215}}]},{"command":"build","target_groups":[{"proto":{"status":"undefined"}},{"rust":{"status":"undefined"},"python/app3":{"status":"undefined"}}]}]}
+{"timestamp":"2024-11-10T11:23:31.232863+00:00","checkpointed":true,"failed":false,"invocation":"-v run -s dev","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/8","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{"proto":"1cafa6d851c65817d04c841673d025dcf4ed498435407058d3a36608d17e32b6","rust":"521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3","python/app3":"585b3a9bcac009158d3e5df009aab9e31ab98ee466a2e818a8753736aefdfda7"}}},"results":[{"command":"hello","target_groups":[{"proto":{"status":"success","code":0,"runtime_secs":0.00200725}},{"python/app3":{"status":"success","code":0,"runtime_secs":0.023067666},"rust":{"status":"success","code":0,"runtime_secs":0.56926215}}]},{"command":"build","target_groups":[{"proto":{"status":"undefined"}},{"rust":{"status":"undefined"},"python/app3":{"status":"undefined"}}]}]}
 ```
 
 When you run a sequence, it is first expanded into the commands it maps to. Then, any commands provided with `--commands` or `-c` are added to this list. For example, `monorail run -s dev -c foo bar` is equivalent to `monorail run -c hello build foo bar`. Sequences are useful for defining commands for use in specific contexts, such as setting up a repository for a new user, general development, and CI/CD.
@@ -874,7 +883,8 @@ monorail analyze | jq
 ```json
 {
   "timestamp": "2024-11-10T11:24:30.349076+00:00",
-  "targets": []
+  "targets": [],
+  "checkpointed": true
 }
 ```
 
@@ -889,7 +899,7 @@ monorail -v run -c hello build
 {"timestamp":"2024-11-10T11:25:21.766272+00:00","level":"INFO","message":"processing commands","num":2}
 {"timestamp":"2024-11-10T11:25:21.766282+00:00","level":"INFO","message":"processing target groups","num":0,"command":"hello"}
 {"timestamp":"2024-11-10T11:25:21.766285+00:00","level":"INFO","message":"processing target groups","num":0,"command":"build"}
-{"timestamp":"2024-11-10T11:25:21.766730+00:00","failed":false,"invocation":"-v run -c hello build","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/9","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{}}},"results":[{"command":"hello","target_groups":[]},{"command":"build","target_groups":[]}]}
+{"timestamp":"2024-11-10T11:25:21.766730+00:00","checkpointed":true,"failed":false,"invocation":"-v run -c hello build","out":{"run":{"path":"/private/tmp/monorail-tutorial/monorail-out/run/9","files":{"result":"result.json.zst","stdout":"stdout.zst","stderr":"stderr.zst"},"targets":{}}},"results":[{"command":"hello","target_groups":[]},{"command":"build","target_groups":[]}]}
 ```
 
 You can also freely `monorail checkpoint delete` and essentially bypass change detection entirely, causing all targets will be considered changed. You can also manually set the checkpoint with `monorail checkpoint update -i <id>`, where `<id>` is a change provider reference (e.g. for git, this is usually a commit SHA).

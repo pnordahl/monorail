@@ -83,18 +83,17 @@ async fn checkpoint_update_git<'a>(
     };
 
     if input.pending {
-        // get all changes with no checkpoint, so diff will return [HEAD, staging area]
-        let pending_changes = git::get_git_all_changes(&input.git_opts, &None, work_path).await?;
-        if let Some(pending_changes) = pending_changes {
-            if !pending_changes.is_empty() {
-                let mut pending = HashMap::new();
-                for change in pending_changes.iter() {
-                    let p = work_path.join(&change.name);
+        // get all changes with default checkpoint, i.e. [HEAD, staging area]
+        let pending_changes =
+            git::get_git_all_changes(&input.git_opts, &Default::default(), work_path).await?;
+        if !pending_changes.is_empty() {
+            let mut pending = HashMap::new();
+            for change in pending_changes.iter() {
+                let p = work_path.join(&change.name);
 
-                    pending.insert(change.name.clone(), file::get_file_checksum(&p).await?);
-                }
-                checkpoint.pending = Some(pending);
+                pending.insert(change.name.clone(), file::get_file_checksum(&p).await?);
             }
+            checkpoint.pending = Some(pending);
         }
     }
     checkpoint.save()?;

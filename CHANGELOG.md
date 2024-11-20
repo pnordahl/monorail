@@ -1,6 +1,24 @@
 # Change Log
 
-## [3.5.3] - 2024-11-17
+## [3.5.4] - 2024-11-20
+
+### Added
+- `checkpointed` boolean on `run` and `analyze` output, indicating if the checkpoint was used
+
+### Fixed
+- `checkpoint update` run without args always forced a help message
+
+### Changed
+- `analyze` and `run` no longer query the change provider when a checkpoint does not exist
+- `--changes` and `--change-targets` flags on `analyze` are disabled if no checkpoint is available to guide change detection
+- (internal) `Cargo.lock` to git
+- (internal) Removed `hex` dependency
+- (internal) Removed `flume` dependency
+- (internal) Changed resolver to "2"
+- (internal) Update CI to use locked cargo commands
+
+
+## [3.5.3] - 2024-11-19
 
 ### Added
 - `config generate` API for generating a configuration file that is synchronized with its source file

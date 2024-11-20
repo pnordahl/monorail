@@ -20,11 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
       - run: |
           sudo chown -R $USER:$USER ${{ github.workspace }}
           mkdir -p "$MONORAIL_TEST_DIR"
           git config --global user.name "FIRST_NAME LAST_NAME"
           git config --global user.email "MY_NAME@example.com"
-      - run: cargo clippy -- -D warnings
-      - run: cargo build --verbose --all
-      - run: cargo test -- --nocapture
+      - run: cargo clippy --locked -- -D warnings
+      - run: cargo build --locked --verbose --all
+      - run: cargo test --locked -- --nocapture

@@ -42,6 +42,7 @@ pub(crate) struct AnalyzeOutput {
     pub(crate) targets: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) target_groups: Option<Vec<Vec<String>>>,
+    pub(crate) checkpointed: bool,
 }
 
 #[derive(Serialize, Debug, Eq, PartialEq)]
@@ -97,7 +98,13 @@ pub(crate) async fn handle_analyze<'a>(
                         return Err(e);
                     }
                 };
-                git::get_git_all_changes(&input.git_opts, &checkpoint, work_path).await?
+                // Only check the change provider if a checkpoint is informing us
+                match checkpoint {
+                    Some(checkpoint) => Some(
+                        git::get_git_all_changes(&input.git_opts, &checkpoint, work_path).await?,
+                    ),
+                    None => None,
+                }
             }
         },
     };
@@ -214,7 +221,8 @@ pub(crate) fn analyze(
     index: &mut core::Index<'_>,
     changes: Option<Vec<Change>>,
 ) -> Result<AnalyzeOutput, MonorailError> {
-    let mut analyzed_changes = if input.show_changes {
+    let checkpointed = changes.is_some();
+    let mut analyzed_changes = if input.show_changes && changes.is_some() {
         Some(vec![])
     } else {
         None
@@ -377,6 +385,7 @@ pub(crate) fn analyze(
         changes: analyzed_changes,
         targets,
         target_groups,
+        checkpointed,
     })
 }
 
