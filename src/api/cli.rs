@@ -169,7 +169,6 @@ pub fn build() -> clap::Command {
         Command::new(CMD_UPDATE)
             .about("Update the tracking checkpoint")
             .after_help(r#"This command updates the tracking checkpoint with data appropriate for the configured vcs."#)
-            .arg_required_else_help(true)
             .arg(arg_git_path.clone())
             .arg(
                 Arg::new(ARG_PENDING)
