@@ -54,21 +54,6 @@ impl FromStr for ChangeProviderKind {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LogConfig {
-    // Tick frequency for flushing accumulated logs to stream
-    // and compression tasks
-    pub(crate) flush_interval_ms: u64,
-}
-impl Default for LogConfig {
-    fn default() -> Self {
-        Self {
-            flush_interval_ms: 500,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) enum AlgorithmKind {
     #[serde(rename = "sha256")]
     Sha256,
@@ -83,6 +68,13 @@ pub(crate) struct ConfigSource {
     pub(crate) algorithm: Option<AlgorithmKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) checksum: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ServerConfig {
+    pub(crate) log: server::LogServerConfig,
+    pub(crate) lock: server::LockServerConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -101,9 +93,7 @@ pub(crate) struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) sequences: Option<HashMap<String, Vec<String>>>,
     #[serde(default)]
-    pub(crate) log: LogConfig,
-    #[serde(default)]
-    pub(crate) server: server::ServerConfig,
+    pub(crate) server: ServerConfig,
 
     // sha256 of the file used to deserialize
     #[serde(skip)]

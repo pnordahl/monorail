@@ -15,7 +15,7 @@ use tracing::{debug, error, info, instrument};
 
 use crate::app::{analyze, log, result, target};
 use crate::core::error::MonorailError;
-use crate::core::{self, file, git, tracking, ChangeProviderKind, Target};
+use crate::core::{self, file, git, server, tracking, ChangeProviderKind, Target};
 
 #[derive(Debug)]
 pub(crate) struct HandleRunInput<'a> {
@@ -492,10 +492,9 @@ struct CommandTask {
     token: sync::Arc<tokio_util::sync::CancellationToken>,
     target: sync::Arc<String>,
     command: sync::Arc<String>,
-    log_config: sync::Arc<core::LogConfig>,
     stdout_client: log::CompressorClient,
     stderr_client: log::CompressorClient,
-    log_stream_client: Option<log::StreamClient>,
+    log_stream_client: Option<log::LogServerClient>,
 }
 impl CommandTask {
     #[allow(clippy::too_many_arguments)]
@@ -533,7 +532,6 @@ impl CommandTask {
             true,
         );
         let stdout_fut = log::process_reader(
-            &self.log_config,
             tokio::io::BufReader::new(
                 child
                     .stdout
@@ -558,7 +556,6 @@ impl CommandTask {
             true,
         );
         let stderr_fut = log::process_reader(
-            &self.log_config,
             tokio::io::BufReader::new(
                 child
                     .stderr
@@ -656,8 +653,8 @@ fn get_all_commands<'a>(
     Ok(all_commands)
 }
 
-async fn initialize_log_stream(addr: &str) -> Option<log::StreamClient> {
-    match log::StreamClient::connect(addr).await {
+async fn initialize_log_stream(cfg: &server::LogServerConfig) -> Option<log::LogServerClient> {
+    match log::LogServerClient::connect(cfg).await {
         Ok(client) => Some(client),
         Err(e) => {
             debug!(error = e.to_string(), "Log streaming disabled");
@@ -898,7 +895,7 @@ async fn process_plan(
     fail_on_undefined: bool,
 ) -> Result<(Vec<CommandRunResult>, bool), MonorailError> {
     // TODO: parameterize addr from cfg
-    let log_stream_client = initialize_log_stream("127.0.0.1:9201").await;
+    let log_stream_client = initialize_log_stream(&cfg.server.log).await;
 
     let mut results = Vec::new();
     let mut failed = false;
@@ -923,7 +920,6 @@ async fn process_plan(
             continue;
         }
 
-        let log_config = sync::Arc::new(cfg.log.clone());
         let mut crr = CommandRunResult::new(command);
 
         for plan_targets in plan_command_target_group.target_groups.iter() {
@@ -949,7 +945,6 @@ async fn process_plan(
                         token: token.clone(),
                         target,
                         command,
-                        log_config: log_config.clone(),
                         stdout_client: clients.0.clone(),
                         stderr_client: clients.1.clone(),
                         log_stream_client: log_stream_client.clone(),

@@ -1,5 +1,10 @@
 # Change Log
 
+## [3.5.5] - 2024-11-21
+
+### Added
+- `server.log` config
+
 ## [3.5.4] - 2024-11-20
 
 ### Added
