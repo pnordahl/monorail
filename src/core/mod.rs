@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use trie_rs::{Trie, TrieBuilder};
 
-use crate::core::error::{GraphError, MonorailError};
+use crate::core::error::MonorailError;
 use tracing::error;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -387,12 +387,9 @@ impl<'a> Index<'a> {
             targets.push(target.path.to_owned());
             let target_path_str = target.path.as_str();
             file::contains_file(&work_path.join(target_path_str))?;
-            if dag.label2node.contains_key(target_path_str) {
-                return Err(MonorailError::DependencyGraph(GraphError::DuplicateLabel(
-                    target.path.to_owned(),
-                )));
-            }
-            dag.set_label(&target.path, i);
+
+            dag.set_label(&target.path, i)
+                .map_err(MonorailError::from)?;
             targets_builder.push(&target.path);
 
             if let Some(ignores) = target.ignores.as_ref() {
@@ -404,7 +401,7 @@ impl<'a> Index<'a> {
                         .push(target_path_str);
                 });
             }
-            Ok(())
+            Ok::<(), MonorailError>(())
         })?;
 
         let targets_trie = targets_builder.build();
@@ -416,11 +413,7 @@ impl<'a> Index<'a> {
             let mut nodes = targets_trie
                 .common_prefix_search(target_path_str)
                 .filter(|t: &String| t != &target.path)
-                .map(|t| {
-                    dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
-                        MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t))
-                    })
-                })
+                .map(|t| dag.get_node_by_label(&t).map_err(MonorailError::from))
                 .collect::<Result<Vec<usize>, MonorailError>>()?;
 
             if let Some(uses) = &target.uses {
@@ -436,13 +429,7 @@ impl<'a> Index<'a> {
                         matching_targets
                             .iter()
                             .filter(|&t| t != &target.path)
-                            .map(|t| {
-                                dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
-                                    MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(
-                                        t.to_owned(),
-                                    ))
-                                })
-                            })
+                            .map(|t| dag.get_node_by_label(t).map_err(MonorailError::from))
                             .collect::<Result<Vec<usize>, MonorailError>>()?,
                     );
                 }
@@ -455,9 +442,7 @@ impl<'a> Index<'a> {
 
         // now that the graph is fully constructed, set subtree visibility
         for t in visible_targets {
-            let node = dag.label2node.get(t.as_str()).copied().ok_or_else(|| {
-                MonorailError::DependencyGraph(GraphError::LabelNodeNotFound(t.to_owned().clone()))
-            })?;
+            let node = dag.get_node_by_label(t)?;
             dag.set_subtree_visibility(node, true)?;
         }
 

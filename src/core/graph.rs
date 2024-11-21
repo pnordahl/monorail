@@ -1,7 +1,40 @@
-use crate::core::error::{GraphError, MonorailError};
 use std::cmp::{Eq, PartialEq};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::Write;
+use std::{fmt, io::Write, str};
+
+#[derive(Debug)]
+pub enum GraphError {
+    DotFileIo(std::io::Error),
+    LabelNotFound(usize),
+    Cycle(usize, String),
+    Connected,
+    DuplicateLabel(String),
+    LabelNodeNotFound(String),
+}
+impl fmt::Display for GraphError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GraphError::DotFileIo(error) => {
+                write!(f, "Dot file i/o error: {}", error)
+            }
+            GraphError::LabelNotFound(node) => {
+                write!(f, "Label not found for node: {}", node)
+            }
+            GraphError::Cycle(node, label) => {
+                write!(f, "Cycle detected at node: {}, label: {}", node, label)
+            }
+            GraphError::Connected => {
+                write!(f, "Graph is fully connected, with no free nodes",)
+            }
+            GraphError::DuplicateLabel(label) => {
+                write!(f, "Duplicate label provided: {}", label)
+            }
+            GraphError::LabelNodeNotFound(label) => {
+                write!(f, "Node not found for label: {}", label)
+            }
+        }
+    }
+}
 
 #[derive(Debug, Eq, PartialEq)]
 enum CycleState {
@@ -37,15 +70,13 @@ impl Dag {
     }
 
     // TODO: test
-    pub fn get_labeled_groups(&mut self) -> Result<Vec<Vec<String>>, MonorailError> {
+    pub fn get_labeled_groups(&mut self) -> Result<Vec<Vec<String>>, GraphError> {
         let groups = self.get_groups()?;
         let mut o = Vec::with_capacity(groups.len());
         for group in groups.iter().rev() {
             let mut labels = vec![];
             for node in group {
-                let label = self.node2label.get(node).ok_or_else(|| {
-                    MonorailError::DependencyGraph(GraphError::LabelNotFound(*node))
-                })?;
+                let label = self.get_label_by_node(node)?;
                 labels.push(label.to_owned());
             }
             o.push(labels);
@@ -58,21 +89,34 @@ impl Dag {
         self.adj_list[node] = nodes;
     }
 
-    pub fn set_label(&mut self, label: &str, node: usize) {
+    pub fn set_label(&mut self, label: &str, node: usize) -> Result<(), GraphError> {
+        if self.label2node.contains_key(label) {
+            return Err(GraphError::DuplicateLabel(label.to_owned()));
+        }
         // update internal hashmaps
         let l = label.to_owned();
         self.label2node.insert(l.clone(), node);
         self.node2label.insert(node, l);
+        Ok(())
+    }
+
+    pub(crate) fn get_node_by_label(&self, label: &str) -> Result<usize, GraphError> {
+        self.label2node
+            .get(label)
+            .copied()
+            .ok_or(GraphError::LabelNodeNotFound(label.to_owned()))
+    }
+
+    pub(crate) fn get_label_by_node(&self, node: &usize) -> Result<&String, GraphError> {
+        self.node2label
+            .get(node)
+            .ok_or_else(|| GraphError::LabelNotFound(*node))
     }
 
     // Walk the graph from node and mark all descendents with the provided visibility.
     // By default, all nodes are false, and calling this is required to make a
     // subtree visible during graph traversals.
-    pub fn set_subtree_visibility(
-        &mut self,
-        node: usize,
-        visible: bool,
-    ) -> Result<(), MonorailError> {
+    pub fn set_subtree_visibility(&mut self, node: usize, visible: bool) -> Result<(), GraphError> {
         let mut work: VecDeque<usize> = VecDeque::new();
         let mut visited = HashSet::new();
         let mut active = HashSet::new();
@@ -83,13 +127,8 @@ impl Dag {
             active.remove(&n);
             for &depn in &self.adj_list[n] {
                 if active.contains(&depn) {
-                    let label = self.node2label.get(&depn).ok_or_else(|| {
-                        MonorailError::DependencyGraph(GraphError::LabelNotFound(depn))
-                    })?;
-                    return Err(MonorailError::DependencyGraph(GraphError::Cycle(
-                        depn,
-                        label.to_owned(),
-                    )));
+                    let label = self.get_label_by_node(&depn)?;
+                    return Err(GraphError::Cycle(depn, label.to_owned()));
                 }
                 if !visited.contains(&depn) {
                     work.push_back(depn);
@@ -102,7 +141,7 @@ impl Dag {
     }
 
     // Uses Kahn's Algorithm to walk the graph and build lists of nodes that are independent of each other at that level. In addition, this function will compute a cycle detection if it is not yet known.
-    pub fn get_groups(&mut self) -> Result<Vec<Vec<usize>>, MonorailError> {
+    pub fn get_groups(&mut self) -> Result<Vec<Vec<usize>>, GraphError> {
         self.check_acyclic()?;
 
         let mut groups = Vec::new();
@@ -152,15 +191,10 @@ impl Dag {
         Ok(groups)
     }
 
-    fn check_acyclic(&self) -> Result<(), MonorailError> {
+    fn check_acyclic(&self) -> Result<(), GraphError> {
         if let CycleState::Yes(cycle_node) = self.cycle_state {
-            let label = self.node2label.get(&cycle_node).ok_or_else(|| {
-                MonorailError::DependencyGraph(GraphError::LabelNotFound(cycle_node))
-            })?;
-            return Err(MonorailError::DependencyGraph(GraphError::Cycle(
-                cycle_node,
-                label.to_owned(),
-            )));
+            let label = self.get_label_by_node(&cycle_node)?;
+            return Err(GraphError::Cycle(cycle_node, label.to_owned()));
         }
         Ok(())
     }
@@ -176,12 +210,13 @@ impl Dag {
     }
 
     // Render the graph as a .dot file for use with graphviz, etc.
-    pub(crate) fn render_dotfile(&self, p: &std::path::Path) -> Result<(), MonorailError> {
+    pub(crate) fn render_dotfile(&self, p: &std::path::Path) -> Result<(), GraphError> {
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
-            .open(p)?;
+            .open(p)
+            .map_err(GraphError::DotFileIo)?;
         let mut s = String::new();
         s.push_str("digraph DAG {\n");
 
@@ -191,9 +226,7 @@ impl Dag {
             s.push_str(&format!(
                 "{} [label=\"{}\"];\n",
                 n,
-                self.node2label
-                    .get(&n)
-                    .ok_or(MonorailError::DependencyGraph(GraphError::LabelNotFound(n)))?
+                self.get_label_by_node(&n)?
             ));
         }
         // emit edges
@@ -210,7 +243,7 @@ impl Dag {
         s.push('}');
 
         // write string to file
-        write!(f, "{}", s)?;
+        write!(f, "{}", s).map_err(GraphError::DotFileIo)?;
         Ok(())
     }
 }
@@ -220,16 +253,21 @@ mod tests {
     use super::*;
     use crate::core::testing::*;
 
-    fn fill_dag(data: Vec<(&str, usize, Vec<usize>, bool)>) -> Dag {
+    fn fill_dag(data: Vec<(&str, usize, Vec<usize>, bool)>) -> Result<Dag, GraphError> {
         let mut dag = Dag::new(data.len());
         for d in data.iter() {
-            dag.set_label(d.0, d.1);
+            dag.set_label(d.0, d.1)?;
             dag.set(d.1, d.2.clone());
             dag.visibility[d.1] = d.3;
         }
-        dag
+        Ok(dag)
     }
 
+    #[test]
+    fn test_label_exists_err() {
+        let mut dag = fill_dag(vec![("0", 0, vec![1, 2], true), ("1", 1, vec![2], true)]).unwrap();
+        assert!(dag.set_label("1", 0).is_err())
+    }
     #[test]
     fn test_dag_render_dotfile() {
         let td = new_testdir().unwrap();
@@ -240,7 +278,8 @@ mod tests {
             ("1", 1, vec![2], true),
             ("2", 2, vec![], true),
             ("3", 3, vec![1], true),
-        ]);
+        ])
+        .unwrap();
 
         let res = dag.render_dotfile(&p);
         assert!(res.is_ok());
@@ -263,7 +302,8 @@ mod tests {
             ("1", 1, vec![2], true),
             ("2", 2, vec![], true),
             ("3", 3, vec![1], true),
-        ]);
+        ])
+        .unwrap();
 
         let g = dag.get_groups().unwrap();
         assert_eq!(g[0], &[0, 3]);
@@ -273,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_dag_get_groups_err_cyclic() {
-        let mut dag = fill_dag(vec![("0", 0, vec![1], true), ("1", 1, vec![0], true)]);
+        let mut dag = fill_dag(vec![("0", 0, vec![1], true), ("1", 1, vec![0], true)]).unwrap();
 
         assert!(dag.get_groups().is_err());
     }
@@ -285,7 +325,8 @@ mod tests {
             ("1", 1, vec![2], true),
             ("2", 2, vec![], true),
             ("3", 3, vec![1], true),
-        ]);
+        ])
+        .unwrap();
 
         dag.set_subtree_visibility(1, false).unwrap();
         assert!(dag.visibility[0]);
@@ -301,7 +342,8 @@ mod tests {
             ("1", 1, vec![2], false),
             ("2", 2, vec![0], false),
             ("3", 3, vec![1], false),
-        ]);
+        ])
+        .unwrap();
         assert!(dag.set_subtree_visibility(0, true).is_err());
     }
 }

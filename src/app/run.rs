@@ -14,7 +14,7 @@ use sha2::Digest;
 use tracing::{debug, error, info, instrument};
 
 use crate::app::{analyze, log, result, target};
-use crate::core::error::{GraphError, MonorailError};
+use crate::core::error::MonorailError;
 use crate::core::{self, file, git, tracking, ChangeProviderKind, Target};
 
 #[derive(Debug)]
@@ -409,14 +409,7 @@ fn get_plan<'a>(
                     .targets
                     .insert(target_path.to_string(), target_hash.clone());
                 let logs = Logs::new(run_path, cmd.as_str(), &target_hash)?;
-                let target_index = index
-                    .dag
-                    .label2node
-                    .get(target_path.as_str())
-                    .copied()
-                    .ok_or(MonorailError::DependencyGraph(
-                        GraphError::LabelNodeNotFound(target_path.to_owned()),
-                    ))?;
+                let target_index = index.dag.get_node_by_label(target_path)?;
                 let tar = targets
                     .get(target_index)
                     .ok_or(MonorailError::from("Target not found"))?;
