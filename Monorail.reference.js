@@ -147,6 +147,27 @@ const reference = {
 		]
 	},
 	"server": {
+		// Log server for command output streams
+		"log": {
+			/*
+			Host to bind.
+
+			Optional: default: "127.0.0.1"
+			*/
+			"host": "127.0.0.1",
+			/*
+			Port to bind.
+
+			Optional: default: 5917
+			*/
+			"port": 5918,
+			/*
+			Milliseconds to wait for a successful bind of the host:port.
+
+			Optional: default: 1000
+			*/
+			"bind_timeout_ms": 1000,
+		},
 		// Lock server used for concurrency control of a subset of monorail APIs.
 		"lock": {
 			/*

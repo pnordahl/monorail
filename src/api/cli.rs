@@ -897,12 +897,12 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::log::LogTailInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            filter_input: app::log::LogFilterInput::try_from(cmd)?,
+            filter_input: core::server::LogFilterInput::try_from(cmd)?,
         })
     }
 }
 
-impl<'a> TryFrom<&'a clap::ArgMatches> for app::log::LogFilterInput {
+impl<'a> TryFrom<&'a clap::ArgMatches> for core::server::LogFilterInput {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -928,7 +928,7 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::log::LogShowInput<'a> {
     type Error = MonorailError;
     fn try_from(cmd: &'a clap::ArgMatches) -> Result<Self, Self::Error> {
         Ok(Self {
-            filter_input: app::log::LogFilterInput::try_from(cmd)?,
+            filter_input: core::server::LogFilterInput::try_from(cmd)?,
             id: cmd.get_one::<usize>(ARG_ID),
         })
     }

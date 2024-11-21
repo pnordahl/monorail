@@ -2,37 +2,7 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
 use std::{fmt, io, num, str};
 
-use crate::core::server;
-
-#[derive(Debug, Serialize)]
-pub enum GraphError {
-    LabelNotFound(usize),
-    Cycle(usize, String),
-    Connected,
-    DuplicateLabel(String),
-    LabelNodeNotFound(String),
-}
-impl fmt::Display for GraphError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            GraphError::LabelNotFound(node) => {
-                write!(f, "Label not found for node: {}", node)
-            }
-            GraphError::Cycle(node, label) => {
-                write!(f, "Cycle detected at node: {}, label: {}", node, label)
-            }
-            GraphError::Connected => {
-                write!(f, "Graph is fully connected, with no free nodes",)
-            }
-            GraphError::DuplicateLabel(label) => {
-                write!(f, "Duplicate label provided: {}", label)
-            }
-            GraphError::LabelNodeNotFound(label) => {
-                write!(f, "Node not found for label: {}", label)
-            }
-        }
-    }
-}
+use crate::core::{graph, server};
 
 #[derive(Debug)]
 pub enum MonorailError {
@@ -43,7 +13,7 @@ pub enum MonorailError {
     SerdeJSON(serde_json::error::Error),
     Utf8(str::Utf8Error),
     ParseInt(num::ParseIntError),
-    DependencyGraph(GraphError),
+    Graph(graph::GraphError),
     Join(tokio::task::JoinError),
     TrackingCheckpointNotFound(io::Error),
     TrackingRunNotFound(io::Error),
@@ -56,6 +26,11 @@ pub enum MonorailError {
 impl From<server::ServerError> for MonorailError {
     fn from(error: server::ServerError) -> Self {
         MonorailError::Server(error)
+    }
+}
+impl From<graph::GraphError> for MonorailError {
+    fn from(error: graph::GraphError) -> Self {
+        MonorailError::Graph(error)
     }
 }
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for MonorailError {
@@ -109,7 +84,7 @@ impl fmt::Display for MonorailError {
             MonorailError::SerdeJSON(error) => write!(f, "{}", error),
             MonorailError::Utf8(error) => write!(f, "{}", error),
             MonorailError::ParseInt(error) => write!(f, "{}", error),
-            MonorailError::DependencyGraph(error) => {
+            MonorailError::Graph(error) => {
                 write!(f, "{}", error)
             }
             MonorailError::Join(error) => write!(f, "Task join error; {}", error),
@@ -170,8 +145,8 @@ impl Serialize for MonorailError {
                 state.serialize_field("type", "parse_int")?;
                 state.serialize_field("message", &self.to_string())?;
             }
-            MonorailError::DependencyGraph(_) => {
-                state.serialize_field("type", "dependency_graph")?;
+            MonorailError::Graph(_) => {
+                state.serialize_field("type", "graph")?;
                 state.serialize_field("message", &self.to_string())?;
             }
             MonorailError::PathDNE(_) => {

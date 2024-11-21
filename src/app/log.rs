@@ -3,7 +3,7 @@ use std::io::Write;
 use std::result::Result;
 use std::{path, sync};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::Digest;
 use std::io::BufRead;
 
@@ -11,27 +11,24 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tracing::{debug, info, instrument, trace};
 
-use crate::core::{self, error::MonorailError, tracking};
+use crate::core::{self, error::MonorailError, server, tracking};
 
 pub(crate) const STDOUT_FILE: &str = "stdout.zst";
 pub(crate) const STDERR_FILE: &str = "stderr.zst";
 pub(crate) const RESET_COLOR: &str = "\x1b[0m";
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(crate) struct LogFilterInput {
-    pub(crate) commands: HashSet<String>,
-    pub(crate) targets: HashSet<String>,
-    pub(crate) include_stdout: bool,
-    pub(crate) include_stderr: bool,
-}
+// How often to flush accumulated logs to clients and compressors.
+// While this could technically be configurable, a user is unlikely
+// to know what to set this to, so we'll leave it a constant for now.
+const FLUSH_INTERVAL_MS: u64 = 500_u64;
 
 #[derive(Serialize)]
 pub(crate) struct LogTailInput {
-    pub(crate) filter_input: LogFilterInput,
+    pub(crate) filter_input: server::LogFilterInput,
 }
 
 pub(crate) async fn log_tail<'a>(
-    _cfg: &'a core::Config,
+    cfg: &'a core::Config,
     input: &LogTailInput,
 ) -> Result<(), MonorailError> {
     // require at least one of the log types be opted into
@@ -40,14 +37,14 @@ pub(crate) async fn log_tail<'a>(
             "No stream selected; provide one or both of: --stdout, --stderr",
         ));
     }
-    let mut lss = StreamServer::new("127.0.0.1:9201", &input.filter_input);
-    lss.listen().await
+    let ls = server::LogServer::new(cfg.server.log.clone(), &input.filter_input);
+    ls.serve().await.map_err(MonorailError::from)
 }
 
 #[derive(Serialize)]
 pub(crate) struct LogShowInput<'a> {
     pub(crate) id: Option<&'a usize>,
-    pub(crate) filter_input: LogFilterInput,
+    pub(crate) filter_input: server::LogFilterInput,
 }
 
 pub(crate) fn log_show<'a>(
@@ -174,48 +171,12 @@ fn stream_archive_file_to_stdout(
     Ok(())
 }
 
-pub(crate) struct StreamServer<'a> {
-    address: &'a str,
-    args: &'a LogFilterInput,
-}
-impl<'a> StreamServer<'a> {
-    pub(crate) fn new(address: &'a str, args: &'a LogFilterInput) -> Self {
-        Self { address, args }
-    }
-    pub(crate) async fn listen(&mut self) -> Result<(), MonorailError> {
-        let listener = tokio::net::TcpListener::bind(self.address).await?;
-        let args_data = serde_json::to_vec(&self.args)?;
-        debug!("Log stream server listening");
-        loop {
-            let (mut socket, _) = listener.accept().await?;
-            debug!("Client connected");
-            // first, write to the client what we're interested in receiving
-            socket.write_all(&args_data).await?;
-            _ = socket.write(b"\n").await?;
-            debug!("Sent log stream arguments");
-            Self::process(socket).await?;
-        }
-    }
-    #[instrument]
-    async fn process(socket: tokio::net::TcpStream) -> Result<(), MonorailError> {
-        let br = tokio::io::BufReader::new(socket);
-        let mut lines = br.lines();
-        let mut stdout = tokio::io::stdout();
-        while let Some(line) = lines.next_line().await? {
-            stdout.write_all(line.as_bytes()).await?;
-            _ = stdout.write(b"\n").await?;
-            stdout.flush().await?;
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone)]
-pub(crate) struct StreamClient {
+pub(crate) struct LogServerClient {
     stream: sync::Arc<tokio::sync::Mutex<tokio::net::TcpStream>>,
-    pub(crate) args: LogFilterInput,
+    pub(crate) args: server::LogFilterInput,
 }
-impl StreamClient {
+impl LogServerClient {
     #[instrument]
     pub(crate) async fn data(
         &mut self,
@@ -230,14 +191,14 @@ impl StreamClient {
         Ok(())
     }
     #[instrument]
-    pub(crate) async fn connect(addr: &str) -> Result<Self, MonorailError> {
-        let mut stream = tokio::net::TcpStream::connect(addr).await?;
-        info!(address = addr, "Connected to log stream server");
+    pub(crate) async fn connect(cfg: &server::LogServerConfig) -> Result<Self, MonorailError> {
+        let mut stream = tokio::net::TcpStream::connect(cfg.address().as_str()).await?;
+        info!(address = cfg.address(), "Connected to log stream server");
         let mut args_data = Vec::new();
         // pull arg preferences from the server on connect
         let mut br = tokio::io::BufReader::new(&mut stream);
         br.read_until(b'\n', &mut args_data).await?;
-        let args: LogFilterInput = serde_json::from_slice(args_data.as_slice())?;
+        let args: server::LogFilterInput = serde_json::from_slice(args_data.as_slice())?;
         debug!("Received log stream arguments");
         if args.include_stdout || args.include_stderr {
             let targets = if args.targets.is_empty() {
@@ -271,18 +232,16 @@ impl StreamClient {
 }
 
 pub(crate) async fn process_reader<R>(
-    config: &core::LogConfig,
     mut reader: tokio::io::BufReader<R>,
     compressor_client: CompressorClient,
     header: String,
-    mut log_stream_client: Option<StreamClient>,
+    mut log_stream_client: Option<LogServerClient>,
     token: sync::Arc<tokio_util::sync::CancellationToken>,
 ) -> Result<(), MonorailError>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let mut interval =
-        tokio::time::interval(tokio::time::Duration::from_millis(config.flush_interval_ms));
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(FLUSH_INTERVAL_MS));
     loop {
         let mut bufs = Vec::new();
         loop {
@@ -321,7 +280,7 @@ async fn process_bufs(
     header: &str,
     bufs: Vec<Vec<u8>>,
     compressor_client: &CompressorClient,
-    log_stream_client: &mut Option<StreamClient>,
+    log_stream_client: &mut Option<LogServerClient>,
     should_end: bool,
 ) -> Result<(), MonorailError> {
     if !bufs.is_empty() {

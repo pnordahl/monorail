@@ -76,13 +76,22 @@ monorail config show | jq
       }
     }
   ],
-  "log": {
-    "flush_interval_ms": 500
+  "server": {
+    "log": {
+      "host": "127.0.0.1",
+      "port": 5918,
+      "bind_timeout_ms": 1000
+    },
+    "lock": {
+      "host": "127.0.0.1",
+      "port": 5917,
+      "bind_timeout_ms": 1000
+    }
   }
 }
 ```
 
-This output includes some default values for things not specified, but otherwise reflects what we have entered. An additional note about the location of the `Monorail.json` file; you can specify an absolute path with `-c`, e.g. `monorail -c </path/to/your/config/file>`, and this will be used instead of the default (`$(pwd)/Monorail.json`). All of `monorail`s commands are executed, and internal tracking files and logs stored, _relative to this path_.
+This output includes some default values for things not specified (irrelevant for the purposes of this tutorial), but otherwise reflects what we have entered. An additional note about the location of the `Monorail.json` file; you can specify an absolute path with `-c`, e.g. `monorail -c </path/to/your/config/file>`, and this will be used instead of the default (`$(pwd)/Monorail.json`). All of `monorail`s commands are executed, and internal tracking files and logs stored, _relative to this path_.
 
 Before we continue, let's create an initial `checkpoint`. The checkpoint will be described in more detail in a later section of this tutorial, but think of it as a "marker" for the beginning of a change detection window. For now, just run the command:
 

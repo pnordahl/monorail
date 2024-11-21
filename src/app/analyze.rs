@@ -5,7 +5,7 @@ use std::result::Result;
 
 use serde::Serialize;
 
-use crate::core::error::{GraphError, MonorailError};
+use crate::core::error::MonorailError;
 use crate::core::{self, Change, ChangeProviderKind};
 use crate::core::{git, tracking};
 
@@ -357,9 +357,7 @@ pub(crate) fn analyze(
             for group in groups.iter().rev() {
                 let mut pg: Vec<String> = vec![];
                 for id in group {
-                    let label = index.dag.node2label.get(id).ok_or_else(|| {
-                        MonorailError::DependencyGraph(GraphError::LabelNotFound(*id))
-                    })?;
+                    let label = index.dag.get_label_by_node(id)?;
                     if output_targets.contains::<String>(label) {
                         pg.push(label.to_owned());
                     }
