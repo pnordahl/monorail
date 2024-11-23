@@ -24,12 +24,13 @@ At this time, Windows is unsupported. However, there are no technical limitation
 
 ## Overview
 
-`monorail` blends features of build systems like `bazel` and `buck` with the simplicity and flexibility of command runners like `make` and `just` to create a lightweight monorepo development system. It combines a graph representation of your repository with incremental change tracking, enabling guided and efficient parallel execution across any subset of your monorepo.
+`monorail` is a tool best classified as a "development orchestrator". It is designed to be generic and minimally opinionated, allowing you to flexibly define the components of your repository in virtually any way. Similarly, it makes no requirements about the tooling you use; shell scripts, interpreters, compilers, or even a large monorepo build system such as `bazel` are equally supported. At its core, `monorail` is a means of fine-tuning how and when your preferred tools are invoked, making it an effective abstraction for building efficient parallelized workflows for development and CI/CD.
 
-`monorail` is internally driven by two things:
+`monorail` is internally driven by three things:
 
 1. A graph representation of your repository, built from a list of `target` entries and each target's `uses` list. 
 2. A change detection provider, which provides a view of changes in the repository
+3. A scheduler and parallel execution engine for user-defined executables
 
 Changes are mapped to affected targets, and a graph traversal powers various dependency-related tasks such as target grouping for parallel execution, "depended upon by" analysis, and so forth.
 
@@ -40,7 +41,7 @@ Monorail has a small lexicon:
 * `target`: a unique container that can be referenced by change detection and command execution
 * `uses`: a set of paths that a target depends upon
 * `ignores`: a set of paths that should not affect a target during change detection
-* `command`: executable code written in any language and invoked per target
+* `command`: executable code written in any language
 * `sequence`: a named list of commands
 
 See the [Tutorial](./TUTORIAL.md) for a practical walkthrough of using `monorail` to build a toy monorepo, or [Monorail Example Repo](https://github.com/pnordahl/monorail-example) for a pre-built example.

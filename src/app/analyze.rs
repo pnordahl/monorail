@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use std::path;
 use std::result::Result;
 
+use rayon::prelude::*;
 use serde::Serialize;
+use tracing::{info, trace};
 
 use crate::core::error::MonorailError;
 use crate::core::{self, Change, ChangeProviderKind};
@@ -52,7 +54,7 @@ pub(crate) struct AnalyzedChange {
     pub(crate) targets: Option<Vec<AnalyzedChangeTarget>>,
 }
 
-#[derive(Serialize, Debug, Eq, PartialEq)]
+#[derive(Hash, Serialize, Debug, Eq, PartialEq)]
 pub(crate) struct AnalyzedChangeTarget {
     pub(crate) path: String,
     pub(crate) reason: AnalyzedChangeTargetReason,
@@ -68,16 +70,12 @@ impl PartialOrd for AnalyzedChangeTarget {
     }
 }
 
-#[derive(Serialize, Debug, Eq, PartialEq)]
+#[derive(Hash, Serialize, Debug, Eq, PartialEq)]
 pub(crate) enum AnalyzedChangeTargetReason {
     #[serde(rename = "target")]
     Target,
-    #[serde(rename = "target_parent")]
-    TargetParent,
-    #[serde(rename = "uses")]
-    Uses,
-    #[serde(rename = "uses_target_parent")]
-    UsesTargetParent,
+    #[serde(rename = "uses_target")]
+    UsesTarget,
     #[serde(rename = "ignores")]
     Ignores,
 }
@@ -113,240 +111,60 @@ pub(crate) async fn handle_analyze<'a>(
     analyze(&input.analyze_input, &mut index, changes)
 }
 
-// Gets the targets that would be ignored by this change.
-fn get_ignore_targets<'a>(index: &'a core::Index<'_>, name: &'a str) -> HashSet<&'a str> {
-    let mut ignore_targets = HashSet::new();
-    index
-        .ignores
-        .common_prefix_search(name)
-        .for_each(|m: String| {
-            if let Some(v) = index.ignore2targets.get(m.as_str()) {
-                v.iter().for_each(|target| {
-                    ignore_targets.insert(*target);
-                });
-            }
-        });
-    ignore_targets
-}
-
-// // todo various stuff aroudn porting analysis show to analyze, factor out some of the internals of analyze
-
-// fn analyze<'a>(
-//     input: &AnalyzeInput<'a>,
-//     index: &mut core::Index<'_>,
-//     changes: Option<Vec<Change>>,
-// ) -> Result<AnalyzeOutput, MonorailError> {
-//     let mut output = AnalyzeOutput {
-//         changes: if input.show_changes {
-//             Some(vec![])
-//         } else {
-//             None
-//         },
-//         targets: vec![],
-//         target_groups: None,
-//     };
-
-//     // determine which targets are affected by this change
-//     let change_targets = match changes {
-//         Some(changes) => {
-//             let mut targets = HashSet::new();
-//             changes.iter().for_each(|c| {
-//                 let mut change_targets = if input.show_change_targets {
-//                     Some(vec![])
-//                 } else {
-//                     None
-//                 };
-//                 let ignore_targets = get_ignore_targets(index, &c.name);
-//                 analyze_change_targets_and_ancestors(
-//                     &c.name,
-//                     &index,
-//                     &ignore_targets,
-//                     &mut targets,
-//                     &mut output,
-//                 );
-
-//                 let use_matches = index.uses_trie.common_prefix_search(&c.name);
-//                 use_matches.for_each(|u: String| {
-//                     if !ignore_targets.contains(u.as_str()) {
-//                         if let Some(v) = index.use2targets.get(u.as_str()) {
-//                             v.iter().for_each(|target| {
-//                                 analyze_change_targets_and_ancestors(
-//                                     target,
-//                                     &index,
-//                                     &ignore_targets,
-//                                     &mut targets,
-//                                     &mut output,
-//                                 );
-//                             });
-//                         }
-//                     }
-//                 });
-//             });
-//             Some(targets)
-//         }
-//         None => None,
-//     };
-// }
-
-// fn analyze_change_targets_and_ancestors(
-//     change: &Change,
-//     index: &core::Index<'_>,
-//     ignore_targets: &HashSet<&str>,
-//     targets: &mut HashSet<&str>,
-//     output: &mut AnalyzeOutput,
-// ) {
-//     let target_matches = index.targets_trie.common_prefix_search(&change.name);
-//     target_matches.for_each(|target: String| {
-//         if !ignore_targets.contains(target.as_str()) {
-//             targets.insert(target);
-//             trace!(target = &target, "Added");
-//             // additionally check any target path ancestors
-//             let ancestor_target_matches = index.targets_trie.common_prefix_search(&target);
-//             ancestor_target_matches.for_each(|target2: String| {
-//                 if target2 != target && !ignore_targets.contains(target2.as_str()) {
-//                     targets.insert(target2);
-//                     trace!(target = &target, ancestor = &target2, "Added ancestor");
-//                 } else {
-//                     trace!(target = &target, ancestor = &target2, "Ignored ancestor");
-//                 }
-//             });
-//         } else {
-//             trace!(target = &target, "Ignored");
-//         }
-//     });
-// }
-
 pub(crate) fn analyze(
     input: &AnalyzeInput,
     index: &mut core::Index<'_>,
     changes: Option<Vec<Change>>,
 ) -> Result<AnalyzeOutput, MonorailError> {
-    let checkpointed = changes.is_some();
-    let mut analyzed_changes = if input.show_changes && changes.is_some() {
-        Some(vec![])
-    } else {
-        None
+    info!("Starting analysis");
+    let t1 = std::time::Instant::now();
+    let mut checkpointed = false;
+    let (analyzed_changes, changed_targets) = match changes {
+        Some(ref changes) => changes
+            .par_chunks(50)
+            .map(|chunk| {
+                let mut analyzed_changes = Vec::new();
+                let mut chunk_targets = HashSet::new();
+                for change in chunk {
+                    let change_targets = analyze_change(
+                        change,
+                        index,
+                        &mut chunk_targets,
+                        input.show_change_targets,
+                    );
+                    if input.show_changes {
+                        analyzed_changes.push(AnalyzedChange {
+                            path: change.name.clone(),
+                            targets: change_targets.map(|hs| {
+                                let mut v: Vec<AnalyzedChangeTarget> = hs.into_iter().collect();
+                                v.sort();
+                                v
+                            }),
+                        });
+                    }
+                }
+                (analyzed_changes, chunk_targets)
+            })
+            .reduce(
+                || (Vec::new(), HashSet::new()),
+                |mut acc, (chunk_changes, chunk_targets)| {
+                    acc.0.extend(chunk_changes);
+                    for target in chunk_targets {
+                        acc.1.insert(target);
+                    }
+                    acc
+                },
+            ),
+        None => (Vec::new(), HashSet::new()),
     };
+
+    // build up output from analysis results
     let mut targets = vec![];
     let mut target_groups = None;
-    let output_targets = match changes {
-        Some(changes) => {
-            let mut output_targets = HashSet::new();
-            changes.iter().for_each(|c| {
-                let mut change_targets = if input.show_change_targets {
-                    Some(vec![])
-                } else {
-                    None
-                };
-                let ignore_targets = get_ignore_targets(index, &c.name);
-                index
-                    .targets_trie
-                    .common_prefix_search(&c.name)
-                    .for_each(|target: String| {
-                        if !ignore_targets.contains(target.as_str()) {
-                            // additionally, add any targets that lie further up from this target
-                            index.targets_trie.common_prefix_search(&target).for_each(
-                                |target2: String| {
-                                    if target2 != target {
-                                        if !ignore_targets.contains(target2.as_str()) {
-                                            if let Some(change_targets) = change_targets.as_mut() {
-                                                change_targets.push(AnalyzedChangeTarget {
-                                                    path: target2.to_owned(),
-                                                    reason:
-                                                        AnalyzedChangeTargetReason::TargetParent,
-                                                });
-                                            }
-                                            output_targets.insert(target2);
-                                        } else if let Some(change_targets) = change_targets.as_mut() {
-                                            change_targets.push(AnalyzedChangeTarget {
-                                                path: target.to_owned(),
-                                                reason: AnalyzedChangeTargetReason::Ignores,
-                                            });
-                                        }
-                                    }
-                                },
-                            );
-                            if let Some(change_targets) = change_targets.as_mut() {
-                                change_targets.push(AnalyzedChangeTarget {
-                                    path: target.to_owned(),
-                                    reason: AnalyzedChangeTargetReason::Target,
-                                });
-                            }
-                            output_targets.insert(target);
-                        } else if let Some(change_targets) = change_targets.as_mut() {
-                            change_targets.push(AnalyzedChangeTarget {
-                                path: target.to_owned(),
-                                reason: AnalyzedChangeTargetReason::Ignores,
-                            });
-                        }
-                    });
-                index
-                    .uses
-                    .common_prefix_search(&c.name)
-                    .for_each(|m: String| {
-                        if !ignore_targets.contains(m.as_str()) {
-                            if let Some(v) = index.use2targets.get(m.as_str()) {
-                                v.iter().for_each(|target| {
-                                    if !ignore_targets.contains(target) {
-                                        // additionally, add any targets that lie further up from this target
-                                        index.targets_trie.common_prefix_search(target).for_each(
-                                            |target2: String| {
-                                                if &target2 != target {
-                                                    if !ignore_targets.contains(target2.as_str()) {
-                                                        if let Some(change_targets) = change_targets.as_mut() {
-                                                            change_targets.push(AnalyzedChangeTarget {
-                                                                path: target2.to_owned(),
-                                                                reason: AnalyzedChangeTargetReason::UsesTargetParent,
-                                                            });
-                                                        }
-                                                        output_targets.insert(target2);
-                                                } else if let Some(change_targets) = change_targets.as_mut() {
-                                                        change_targets.push(AnalyzedChangeTarget {
-                                                            path: target.to_string(),
-                                                            reason: AnalyzedChangeTargetReason::Ignores,
-                                                        });
-                                                    }
-                                                }
-                                            },
-                                        );
-                                        if let Some(change_targets) = change_targets.as_mut() {
-                                            change_targets.push(AnalyzedChangeTarget {
-                                                path: target.to_string(),
-                                                reason: AnalyzedChangeTargetReason::Uses,
-                                            });
-                                        }
-                                        output_targets.insert(target.to_string());
-                                    } else if let Some(change_targets) = change_targets.as_mut() {
-                                        change_targets.push(AnalyzedChangeTarget {
-                                            path: target.to_string(),
-                                            reason: AnalyzedChangeTargetReason::Ignores,
-                                        });
-                                    }
-                                });
-                            }
-                        }
-                    });
-
-                if let Some(change_targets) = change_targets.as_mut() {
-                    change_targets.sort();
-                }
-
-                if let Some(output_changes) = analyzed_changes.as_mut() {
-                    output_changes.push(AnalyzedChange {
-                        path: c.name.to_owned(),
-                        targets: change_targets,
-                    });
-                }
-            });
-            Some(output_targets)
-        }
-        None => None,
-    };
-
-    // todo; copy this into analyze factored
-    if let Some(output_targets) = output_targets {
+    if changes.is_some() {
+        checkpointed = true;
         // copy the hashmap into the output vector
-        for t in output_targets.iter() {
+        for t in changed_targets.iter() {
             targets.push(t.clone());
         }
         if input.show_target_groups {
@@ -358,7 +176,7 @@ pub(crate) fn analyze(
                 let mut pg: Vec<String> = vec![];
                 for id in group {
                     let label = index.dag.get_label_by_node(id)?;
-                    if output_targets.contains::<String>(label) {
+                    if changed_targets.contains::<String>(label) {
                         pg.push(label.to_owned());
                     }
                 }
@@ -378,13 +196,132 @@ pub(crate) fn analyze(
         }
     }
     targets.sort();
-
+    info!(
+        elapsed_secs = t1.elapsed().as_secs_f32(),
+        num_changes = if let Some(c) = &changes { c.len() } else { 0 },
+        num_targets = targets.len(),
+        num_target_groups = if let Some(tg) = &target_groups {
+            tg.len()
+        } else {
+            0
+        },
+        "Analysis complete"
+    );
     Ok(AnalyzeOutput {
-        changes: analyzed_changes,
+        changes: if input.show_changes {
+            Some(analyzed_changes)
+        } else {
+            None
+        },
         targets,
         target_groups,
         checkpointed,
     })
+}
+
+// Gets the targets that would be ignored by this change.
+fn get_ignore_targets<'a>(index: &'a core::Index<'_>, name: &'a str) -> HashSet<&'a str> {
+    let mut ignore_targets = HashSet::new();
+    index
+        .ignores
+        .common_prefix_search(name)
+        .for_each(|m: String| {
+            if let Some(v) = index.ignore2targets.get(m.as_str()) {
+                v.iter().for_each(|target| {
+                    ignore_targets.insert(*target);
+                });
+            }
+        });
+    ignore_targets
+}
+
+// Search the index for targets affected by a change, updating the accumulator
+// HashSet provided. Optionally, returns a HashSet containing the targets
+// affected by this change - primarily for debugging and display purposes.
+fn analyze_change<'a>(
+    change: &Change,
+    index: &'a core::Index<'a>,
+    targets: &mut HashSet<String>,
+    show_change_targets: bool,
+) -> Option<HashSet<AnalyzedChangeTarget>> {
+    let ignore_targets = get_ignore_targets(index, &change.name);
+    let mut change_targets = if show_change_targets {
+        Some(HashSet::new())
+    } else {
+        None
+    };
+
+    index
+        .targets_trie
+        .common_prefix_search(&change.name)
+        .for_each(|target: String| {
+            // find the target and its ancestors affected by this change
+            if !ignore_targets.contains(target.as_str()) {
+                targets.insert(target.to_string());
+                update_change_targets(
+                    &mut change_targets,
+                    &target,
+                    AnalyzedChangeTargetReason::Target,
+                );
+                trace!(target = &target, "Added target");
+            } else {
+                update_change_targets(
+                    &mut change_targets,
+                    &target,
+                    AnalyzedChangeTargetReason::Ignores,
+                );
+                trace!(target = &target, "Ignored target");
+            }
+        });
+    index
+        .uses
+        .common_prefix_search(&change.name)
+        .for_each(|m: String| {
+            // find any targets mapped to this use
+            if !ignore_targets.contains(m.as_str()) {
+                if let Some(use_targets) = index.use2targets.get(m.as_str()) {
+                    use_targets.iter().for_each(|target| {
+                        if !ignore_targets.contains(target) {
+                            // each mapped target and its ancestors are added
+                            index.targets_trie.common_prefix_search(target).for_each(
+                                |target2: String| {
+                                    if !ignore_targets.contains(target2.as_str()) {
+                                        targets.insert(target.to_string());
+                                        update_change_targets(
+                                            &mut change_targets,
+                                            &target2,
+                                            AnalyzedChangeTargetReason::UsesTarget,
+                                        );
+                                        trace!(target = &target2, "Added uses target");
+                                    } else {
+                                        update_change_targets(
+                                            &mut change_targets,
+                                            &target2,
+                                            AnalyzedChangeTargetReason::Ignores,
+                                        );
+                                        trace!(target = &target2, "Ignored uses target");
+                                    }
+                                },
+                            );
+                        }
+                    });
+                }
+            }
+        });
+    change_targets
+}
+
+fn update_change_targets(
+    change_targets: &mut Option<HashSet<AnalyzedChangeTarget>>,
+    target: &str,
+    reason: AnalyzedChangeTargetReason,
+) {
+    if let Some(change_targets) = change_targets {
+        change_targets.insert(AnalyzedChangeTarget {
+            path: target.to_owned(),
+            reason,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -393,7 +330,22 @@ mod tests {
     use crate::core::testing::*;
 
     #[tokio::test]
-    async fn test_analyze_empty() {
+    async fn test_analyze_changes_none() {
+        let td = new_testdir().unwrap();
+        let work_path = &td.path();
+        let c = new_test_repo(work_path).await;
+        let mut index = core::Index::new(&c, &c.get_target_path_set(), work_path).unwrap();
+        let ai = AnalyzeInput::new(true, false, false);
+        let o = analyze(&ai, &mut index, None).unwrap();
+
+        assert!(o.changes.unwrap().is_empty());
+        // all targets because changes is None
+        assert!(!o.targets.is_empty());
+        assert!(!o.checkpointed);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_changes_empty() {
         let changes = vec![];
         let td = new_testdir().unwrap();
         let work_path = &td.path();
@@ -404,6 +356,7 @@ mod tests {
 
         assert!(o.changes.unwrap().is_empty());
         assert!(o.targets.is_empty());
+        assert!(o.checkpointed);
     }
 
     #[tokio::test]
@@ -428,6 +381,7 @@ mod tests {
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
         assert_eq!(o.target_groups, Some(vec![]));
+        assert!(o.checkpointed);
     }
 
     #[tokio::test]
@@ -457,6 +411,7 @@ mod tests {
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
         assert_eq!(o.target_groups, Some(expected_target_groups));
+        assert!(o.checkpointed);
     }
     #[tokio::test]
     async fn test_analyze_parent_target() {
@@ -485,6 +440,7 @@ mod tests {
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
         assert_eq!(o.target_groups, Some(expected_target_groups));
+        assert!(o.checkpointed);
     }
 
     #[tokio::test]
@@ -505,10 +461,6 @@ mod tests {
                     reason: AnalyzedChangeTargetReason::Target,
                 },
                 AnalyzedChangeTarget {
-                    path: target1.to_string(),
-                    reason: AnalyzedChangeTargetReason::TargetParent,
-                },
-                AnalyzedChangeTarget {
                     path: target2.to_string(),
                     reason: AnalyzedChangeTargetReason::Target,
                 },
@@ -525,28 +477,29 @@ mod tests {
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
         assert_eq!(o.target_groups, Some(expected_target_groups));
+        assert!(o.checkpointed);
     }
 
     #[tokio::test]
     async fn test_analyze_target_uses() {
-        let change1 = "target2/file.txt";
+        let change = "target2/file.txt";
         let changes = vec![Change {
-            name: change1.to_string(),
+            name: change.to_string(),
         }];
-        let target1 = "target2";
-        let target2 = "target3";
-        let expected_targets = vec![target1.to_string(), target2.to_string()];
-        let expected_target_groups = vec![vec![target1.to_string()], vec![target2.to_string()]];
+        let target2 = "target2";
+        let target3 = "target3";
+        let expected_targets = vec![target2.to_string(), target3.to_string()];
+        let expected_target_groups = vec![vec![target2.to_string()], vec![target3.to_string()]];
         let expected_changes = vec![AnalyzedChange {
-            path: change1.to_string(),
+            path: change.to_string(),
             targets: Some(vec![
                 AnalyzedChangeTarget {
-                    path: target1.to_string(),
+                    path: target2.to_string(),
                     reason: AnalyzedChangeTargetReason::Target,
                 },
                 AnalyzedChangeTarget {
-                    path: target2.to_string(),
-                    reason: AnalyzedChangeTargetReason::Uses,
+                    path: target3.to_string(),
+                    reason: AnalyzedChangeTargetReason::UsesTarget,
                 },
             ]),
         }];
@@ -561,6 +514,7 @@ mod tests {
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
         assert_eq!(o.target_groups, Some(expected_target_groups));
+        assert!(o.checkpointed);
     }
 
     #[tokio::test]
@@ -575,14 +529,14 @@ mod tests {
                 name: change2.to_string(),
             },
         ];
-        let target1 = "target4";
-        let target2 = "target4/target5";
-        let expected_targets: Vec<String> = vec![target1.to_string()];
+        let target4 = "target4";
+        let target5 = "target4/target5";
+        let expected_targets: Vec<String> = vec![target4.to_string()];
         let expected_changes = vec![
             AnalyzedChange {
                 path: change1.to_string(),
                 targets: Some(vec![AnalyzedChangeTarget {
-                    path: target1.to_string(),
+                    path: target4.to_string(),
                     reason: AnalyzedChangeTargetReason::Target,
                 }]),
             },
@@ -590,11 +544,11 @@ mod tests {
                 path: change2.to_string(),
                 targets: Some(vec![
                     AnalyzedChangeTarget {
-                        path: target1.to_string(),
+                        path: target4.to_string(),
                         reason: AnalyzedChangeTargetReason::Target,
                     },
                     AnalyzedChangeTarget {
-                        path: target2.to_string(),
+                        path: target5.to_string(),
                         reason: AnalyzedChangeTargetReason::Ignores,
                     },
                 ]),
@@ -610,6 +564,7 @@ mod tests {
 
         assert_eq!(o.changes.unwrap(), expected_changes);
         assert_eq!(o.targets, expected_targets);
-        assert_eq!(o.target_groups, Some(vec![vec![target1.to_string()]]));
+        assert_eq!(o.target_groups, Some(vec![vec![target4.to_string()]]));
+        assert!(o.checkpointed);
     }
 }
