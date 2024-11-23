@@ -7,7 +7,7 @@ repository = "https://github.com/pnordahl/monorail"
 version = "3.5.6"
 authors = ["Patrick Nordahl <plnordahl@gmail.com>"]
 edition = "2021"
-keywords = ["monorail", "monorepo", "build", "cli", "build-tool", "development-orchestrator"]
+keywords = ["monorail", "monorepo", "build", "cli", "build-tool"]
 resolver = "2"
 
 [dependencies]
