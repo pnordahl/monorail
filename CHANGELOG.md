@@ -1,5 +1,10 @@
 # Change Log
 
+## [3.5.6] - 2024-11-23
+
+### Changed
+- (internal) Parallelized analyze
+
 ## [3.5.5] - 2024-11-21
 
 ### Added
