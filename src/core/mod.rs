@@ -22,7 +22,7 @@ use trie_rs::{Trie, TrieBuilder};
 use crate::core::error::MonorailError;
 use tracing::error;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Hash, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Change {
     pub(crate) name: String,
 }
