@@ -1,5 +1,10 @@
 # Change Log
 
+## [3.5.7] - 2024-11-26
+
+### Fixed
+- Issue preventing symlinked directories from working with `checkpoint update --pending`
+
 ## [3.5.6] - 2024-11-23
 
 ### Changed
