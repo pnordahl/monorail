@@ -74,8 +74,8 @@ impl PartialOrd for AnalyzedChangeTarget {
 pub(crate) enum AnalyzedChangeTargetReason {
     #[serde(rename = "target")]
     Target,
-    #[serde(rename = "uses_target")]
-    UsesTarget,
+    #[serde(rename = "uses")]
+    Uses,
     #[serde(rename = "ignores")]
     Ignores,
 }
@@ -290,7 +290,7 @@ fn analyze_change<'a>(
                                         update_change_targets(
                                             &mut change_targets,
                                             &target2,
-                                            AnalyzedChangeTargetReason::UsesTarget,
+                                            AnalyzedChangeTargetReason::Uses,
                                         );
                                         trace!(target = &target2, "Added uses target");
                                     } else {
@@ -499,7 +499,7 @@ mod tests {
                 },
                 AnalyzedChangeTarget {
                     path: target3.to_string(),
-                    reason: AnalyzedChangeTargetReason::UsesTarget,
+                    reason: AnalyzedChangeTargetReason::Uses,
                 },
             ]),
         }];
