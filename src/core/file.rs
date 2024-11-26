@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::os::unix::fs::PermissionsExt;
+use std::path;
 use std::result::Result;
-use std::{io, path};
 
 use sha2::Digest;
 use tokio::io::AsyncReadExt;
@@ -56,13 +56,33 @@ pub(crate) fn contains_file(p: &path::Path) -> Result<(), MonorailError> {
 // TODO: configure buffer size based on file size?
 // TODO: pass in open file instead of path?
 pub(crate) async fn get_file_checksum(p: &path::Path) -> Result<String, MonorailError> {
+    let md = match tokio::fs::metadata(p).await {
+        Ok(md) => md,
+        Err(_) => {
+            // non-existent/failed to stat files have an empty checksum
+            return Ok(String::new());
+        }
+    };
     let mut file = match tokio::fs::File::open(p).await {
         Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok("".to_string()),
         Err(e) => {
+            // TODO: once io::ErrorKind::IsADirectory, use that
+            // empty directories have no checksum; this is required here
+            // because opening a normal directory would return an error
+            if md.is_dir() {
+                return Ok(String::new());
+            }
             return Err(MonorailError::from(e));
         }
     };
+
+    // check for symlink directory; this is because File::open won't fail to
+    // open the symlink, but attempting to read it will fail
+    if md.is_dir() {
+        return Ok(String::new());
+    }
+
+    // hash the file
     let mut hasher = sha2::Sha256::new();
 
     let mut buffer = [0u8; 64 * 1024];
@@ -234,11 +254,18 @@ mod tests {
 
         // files that don't exist have an empty checksum
         let p = &repo_path.join("test.txt");
-        assert_eq!(get_file_checksum(p).await.unwrap(), "".to_string());
+        assert_eq!(get_file_checksum(p).await.unwrap(), String::new());
 
         // write file and compare checksums
         let checksum = write_with_checksum(p, &[1, 2, 3]).await.unwrap();
         assert_eq!(get_file_checksum(p).await.unwrap(), checksum);
+
+        // empty directories have an empty checksum
+        tokio::fs::create_dir_all(repo_path.join("link"))
+            .await
+            .unwrap();
+        let p = &repo_path.join("link");
+        assert_eq!(get_file_checksum(p).await.unwrap(), String::new());
     }
 
     #[test]
