@@ -297,11 +297,13 @@ dot -Ksfdp -Tpng target.dot -o target.png
 
 ### APIs
 
-#### `target render [--output-file, -f] [--type, -t]`
+#### `target render`
+##### `target render [--output-file, -f] [--type, -t]`
 
 Generate a visual representation of the target graph, and write it to an output file. Use `monorail target render -h` for details.
 
-#### `target show [--target-groups, -g] [--commands, -c]`
+#### `target show`
+##### `target show [--target-groups, -g] [--commands, -c]`
 
 Display configured targets, target groupings, and target commands. Use `monorail target show -h` for details.
 
@@ -468,7 +470,8 @@ This is equivalent to `monorail run -c check build unit-test integration-test`.
 
 ### APIs
 
-#### `run [--target, -t <1> <2> ... <M>] <--commands, -c <1> <2> ... <N> | --sequences, -s <1> <2> ... <P>>`
+#### `run`
+##### `run [--target, -t <1> <2> ... <M>] <--commands, -c <1> <2> ... <N> | --sequences, -s <1> <2> ... <P>>`
 
 Runs commands or sequences for targets. At least one command or sequence is required. For more details, see `monorail run -h`.
 
@@ -500,11 +503,13 @@ When this is running in a separate shell process, `run` commands will connect to
 
 ### APIs
 
-#### `log show [--target, -t <1> <2> ... <M>] [--commands, -c <1> <2> ... <N>] <--stdout | --stderr>`
+#### `log show`
+##### `log show [--target, -t <1> <2> ... <M>] [--commands, -c <1> <2> ... <N>] <--stdout | --stderr>`
 
 Retrieves compressed historical logs for the provided stream types, targets and/or commands, and prints them. For more details, see `monorail log show -h`.
 
-#### `log tail [--target, -t <1> <2> ... <M>] [--commands, -c <1> <2> ... <N>] <--stdout | --stderr>`
+#### `log tail`
+##### `log tail [--target, -t <1> <2> ... <M>] [--commands, -c <1> <2> ... <N>] <--stdout | --stderr>`
 
 Starts a socket server with filters for the provided stream types, targets and/or commands, and prints them as received. This must be run as a separate process. For more details, see `monorail log tail -h`.
 
@@ -568,7 +573,8 @@ For the `git` change provider, this will update the checkpoint with the current 
 
 Displays the current checkpoint.
 
-#### `checkpoint update [--id, i <id>] [--pending, -p]`
+#### `checkpoint update`
+##### `checkpoint update [--id, i <id>] [--pending, -p]`
 
 Updates the checkpoint id and pending array. For more details, see `monorail checkpoint update -h`.
 
@@ -592,7 +598,8 @@ This will display the currently affected targets and how they fall into target g
 
 ### APIs
 
-#### `analyze [[--changes] [--change-targets] [--target-groups] | --all] [--targets, -t <1> <2> ... <N>`
+#### `analyze`
+##### `analyze [[--changes] [--change-targets] [--target-groups] | --all] [--targets, -t <1> <2> ... <N>`
 
 Display an analysis containing changes, change targets, and/or target groups. Can be optionally scoped to subtrees of targets intead of the entire graph.
 
