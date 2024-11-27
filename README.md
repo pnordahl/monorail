@@ -72,13 +72,26 @@ Some APIs support multiple levels of workflow and debug logging. Enable them wit
 Some APIs require a [configuration file](#config). Manually specifying the file is done with `monorail -f </path/to/Monorail.json>`.
 
 - [Config](#config)
+  - [config generate](#config-generate)
+  - [config show](#config-show)
 - [Targets](#targets)
+  - [target render](#target-render)
+  - [target show](#target-show)  
 - [Commands](#commands)
+  - [run](#run)
 - [Logs](#logs)
+  - [log show](#log-show)
+  - [log tail](#log-tail)
 - [Results](#results)
-- [Analyze](#analyze)
+  - [result show](#result-show)
 - [Checkpoint](#checkpoint)
+  - [checkpoint show](#checkpoint-show)
+  - [checkpoint update](#checkpoint-update)
+  - [checkpoint delete](#checkpoint-delete)
+- [Analyze](#analyze)
+  - [analyze](#analyze)
 - [Out](#out)
+  - [out delete](#out-delete)
 
 ## Config
 
@@ -599,6 +612,8 @@ This will delete the checkpoint, all results, and all logs.
 In the future, more selective deletion will be supported.
 
 ### APIs
+
+#### `out delete`
 
 # Development setup
 
