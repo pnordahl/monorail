@@ -110,7 +110,7 @@ impl Dag {
     pub(crate) fn get_label_by_node(&self, node: &usize) -> Result<&String, GraphError> {
         self.node2label
             .get(node)
-            .ok_or_else(|| GraphError::LabelNotFound(*node))
+            .ok_or(GraphError::LabelNotFound(*node))
     }
 
     // Walk the graph from node and mark all descendents with the provided visibility.
