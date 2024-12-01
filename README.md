@@ -72,13 +72,26 @@ Some APIs support multiple levels of workflow and debug logging. Enable them wit
 Some APIs require a [configuration file](#config). Manually specifying the file is done with `monorail -f </path/to/Monorail.json>`.
 
 - [Config](#config)
+  - [config generate](#config-generate)
+  - [config show](#config-show)
 - [Targets](#targets)
+  - [target render](#target-render)
+  - [target show](#target-show)  
 - [Commands](#commands)
+  - [run](#run)
 - [Logs](#logs)
+  - [log show](#log-show)
+  - [log tail](#log-tail)
 - [Results](#results)
-- [Analyze](#analyze)
+  - [result show](#result-show)
 - [Checkpoint](#checkpoint)
+  - [checkpoint show](#checkpoint-show)
+  - [checkpoint update](#checkpoint-update)
+  - [checkpoint delete](#checkpoint-delete)
+- [Analyze](#analyze)
+  - [analyze](#analyze)
 - [Out](#out)
+  - [out delete](#out-delete)
 
 ## Config
 
@@ -284,11 +297,13 @@ dot -Ksfdp -Tpng target.dot -o target.png
 
 ### APIs
 
-#### `target render [--output-file, -f] [--type, -t]`
+#### `target render`
+##### `target render [--output-file, -f] [--type, -t]`
 
 Generate a visual representation of the target graph, and write it to an output file. Use `monorail target render -h` for details.
 
-#### `target show [--target-groups, -g] [--commands, -c]`
+#### `target show`
+##### `target show [--target-groups, -g] [--commands, -c]`
 
 Display configured targets, target groupings, and target commands. Use `monorail target show -h` for details.
 
@@ -382,57 +397,78 @@ This will run `build` first for `dep1`, and then `target1` and `target2` in para
 
 #### Arguments
 
-Commands can be provided with positional arguments at runtime. There are two mechanism for doing this; the base argmap, and as flags provided to `monorail run`. In your command executables, capture these positional arguments as you would in any program in that language. As is common, index 0 of the positional arguments is always an absolute path to the executable, so any additional arguments begin at index 1.
+Commands can be provided with positional arguments at runtime. Arguments are provided with either `--args` or `--argmaps` flags passed to `monorail run`. In your command executables, capture these positional arguments as you would in any program in that language. As is standard, index 0 of the positional arguments is always an absolute path to the executable, so any additional arguments begin at index 1.
 
-##### Base argmap
-The base argmap is an optional file containing argument mappings, which, if provided, is automatically loaded before any other argument mappings provided to `monorail run`. This is useful for specifying static parameterization for commands, especially when a command executable is generic and reused among multiple targets. An example of this useful pattern is shown in https://github.com/pnordahl/monorail-example in the rust crate targets.
+##### Args
 
-For example, here `target1` has a base argmap in the default location:
+The simplest way to provide arguments is with `--args`. For example:
 
-`target1/monorail/argmap/base.json`
+```sh
+monorail run -c build -t target1 --args foo bar baz
+```
+
+This provides `foo`, `bar`, and `baz` to the `build` command of `target1` as positional arg indexes 1, 2, and 3 respectively. As mentioned, this is the least useful way to provide arguments; `--args` can only be used when exactly one command and one target are provided.
+
+##### Argmaps
+
+For more flexibility, `--argmaps` allows for providing a list of named files containing argmap JSON, which map command names to lists of arguments. This JSON has the following structure:
+
 ```json
 {
-  "build": [
-    "--all"
+  "<command1 name>": [
+    "arg1",
+    "arg2",
+    "...",
+    "argN"
+  ],
+  "<command2 name>": [
+    "..."
   ]
 }
 ```
 
-You can change both the argmap search path and the base argmap file by specifying them in `Monorail.json`. Refer to the `argmaps` section of `Monorail.reference.js` for more details.
-
-Finally, while base argmaps are often required by commands that are built to expect them, you can disable base argmaps during a `monorail run` with the `--no-base-argmaps` switch.
-
-##### Runtime flags
-
-In addition to the base argmap, `monorail run` accepts `--arg (-a)`, `--target-argmap (-m)`, and `--target-argmap-file (-f)` flags for providing additional argument mappings. 
+Each target may define or reference argmap files (by default, stored in the targets `monorail/argmap` directory; this can be adjusted in `Monorail.json` per-target), and they are loaded when requested during `monorail run`. For example:
 
 ```sh
-monorail run -c build -t target1 --arg '--release' --arg '-v'
+monorail run -c build --argmaps ci
 ```
 
-This will first provide `-all` from the base argmap as the first positional argument, and then `--release` and `-v` as the second and third positional arguments to the `build` command for `target1`.
+This will load the `ci.json` argmap file for every target involved in this run. If a target does not have that file, execution continues normally without error. 
 
-Note that when using `--arg`, you must specify exactly one command and target. For more flexibility, use `--target-argmap` and/or `--target-argmap-file`, which allow for specifying argument arrays for specific command-target combinations. For example:
+There is, however, another argmap that is loaded by default (again, if defined for a given target): The `base` argmap. If provided, it is automatically loaded before any other argument mappings provided to `monorail run`. This is especially useful for parameterizing reusable commands. An example of this pattern is shown in https://github.com/pnordahl/monorail-example in the rust crate targets, to re-use the same `test` command file for each crate.
+
+Automatic loading of the `base` argmap can be disabled with `monorail run --no-base-argmaps`.
+
+##### Argument merging
+
+Whether arguments come from `--args` or `--argmaps`, or both, they are merged from left-to-right in the following order:
+
+  * The `base` argmap
+  * `--argmaps`
+  * `--args`
+
+For example:
 
 ```sh
-monorail run -c build test --target-argmap '{"target1":{"build":["--release"],"test":["--release"]}}'
+monorail run -c build -t target1 --args baz --argmaps ci
 ```
 
-This will provide the specified arguments to the appropriate command-target combinations. Multiple `--target-argmap` flags may be provided, and if so keys that appear in both have their arrays appended to each other in the order specified. For example:
-
-```sh
-monorail run -c build test --target-argmap '{"target1":{"build":["--release"],"test":["--release"]}}' --target-argmap '{"target1":{"build":["-v"]}}'
+`target1/monorail/argmap/base.json`
+```json
+{
+  "build": ["foo"]
+}
 ```
 
-In this case, `build` appears twice for `target1` so the arrays are combined in order, and the final arguments array for `target1` is `[--release, -v]`.
-
-Additionally, you can provide the `--target-argmap-file` flag zero or more times with a filesystem path to a JSON file containing an argument mapping. The structure of this file is identical to the one described above for `--target-argmap`. As with that flag, files provided are merged from left to right. For example
-
-```sh
-monorail run -c build -f target1/monorail/argmap/foo.json -f target1/monorail/argmap/bar.json
+`target1/monorail/argmap/ci.json`
+```json
+{
+  "build": ["bar"]
+}
 ```
 
-Would merge the keys and values from each file in turn in order.
+This would provide the arguments `["foo", "bar", "baz"]` to the `build` command of `target1`.
+
 
 #### Sequences
 
@@ -455,7 +491,8 @@ This is equivalent to `monorail run -c check build unit-test integration-test`.
 
 ### APIs
 
-#### `run [--target, -t <1> <2> ... <M>] <--commands, -c <1> <2> ... <N> | --sequences, -s <1> <2> ... <P>>`
+#### `run`
+##### `run [--target, -t <1> <2> ... <M>] <--commands, -c <1> <2> ... <N> | --sequences, -s <1> <2> ... <P>> | [--args, -a <1> <2> ... <Q>>] | [--argmaps, -m <1> <2> ... <R>>]`
 
 Runs commands or sequences for targets. At least one command or sequence is required. For more details, see `monorail run -h`.
 
@@ -487,11 +524,13 @@ When this is running in a separate shell process, `run` commands will connect to
 
 ### APIs
 
-#### `log show [--target, -t <1> <2> ... <M>] [--commands, -c <1> <2> ... <N>] <--stdout | --stderr>`
+#### `log show`
+##### `log show [--target, -t <1> <2> ... <M>] [--commands, -c <1> <2> ... <N>] <--stdout | --stderr>`
 
 Retrieves compressed historical logs for the provided stream types, targets and/or commands, and prints them. For more details, see `monorail log show -h`.
 
-#### `log tail [--target, -t <1> <2> ... <M>] [--commands, -c <1> <2> ... <N>] <--stdout | --stderr>`
+#### `log tail`
+##### `log tail [--target, -t <1> <2> ... <M>] [--commands, -c <1> <2> ... <N>] <--stdout | --stderr>`
 
 Starts a socket server with filters for the provided stream types, targets and/or commands, and prints them as received. This must be run as a separate process. For more details, see `monorail log tail -h`.
 
@@ -555,7 +594,8 @@ For the `git` change provider, this will update the checkpoint with the current 
 
 Displays the current checkpoint.
 
-#### `checkpoint update [--id, i <id>] [--pending, -p]`
+#### `checkpoint update`
+##### `checkpoint update [--id, i <id>] [--pending, -p]`
 
 Updates the checkpoint id and pending array. For more details, see `monorail checkpoint update -h`.
 
@@ -579,7 +619,8 @@ This will display the currently affected targets and how they fall into target g
 
 ### APIs
 
-#### `analyze [[--changes] [--change-targets] [--target-groups] | --all] [--targets, -t <1> <2> ... <N>`
+#### `analyze`
+##### `analyze [[--changes] [--change-targets] [--target-groups] | --all] [--targets, -t <1> <2> ... <N>`
 
 Display an analysis containing changes, change targets, and/or target groups. Can be optionally scoped to subtrees of targets intead of the entire graph.
 
@@ -599,6 +640,8 @@ This will delete the checkpoint, all results, and all logs.
 In the future, more selective deletion will be supported.
 
 ### APIs
+
+#### `out delete`
 
 # Development setup
 

@@ -22,10 +22,6 @@ pub(crate) fn get_stem(p: &path::Path) -> Result<&str, MonorailError> {
         )))
 }
 
-pub(crate) async fn exists(path: &path::Path) -> bool {
-    tokio::fs::metadata(path).await.is_ok()
-}
-
 pub(crate) fn contains_file(p: &path::Path) -> Result<(), MonorailError> {
     if p.is_file() {
         return Ok(());
@@ -143,6 +139,13 @@ pub(crate) fn is_executable(p: impl AsRef<path::Path>) -> bool {
         return permissions.mode() & 0o111 != 0;
     }
     false
+}
+
+pub(crate) fn permissions(p: impl AsRef<path::Path>) -> Option<String> {
+    match std::fs::metadata(p) {
+        Ok(md) => Some(format!("{:o}", md.permissions().mode() & 0o777)),
+        Err(_) => None,
+    }
 }
 
 #[cfg(test)]

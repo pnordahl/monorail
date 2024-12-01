@@ -34,6 +34,8 @@ pub const ARG_CONFIG_FILE: &str = "config-file";
 pub const ARG_OUTPUT_FORMAT: &str = "output-format";
 pub const ARG_PENDING: &str = "pending";
 pub const ARG_COMMANDS: &str = "commands";
+pub const ARG_ARGS: &str = "args";
+pub const ARG_ARGMAPS: &str = "argmaps";
 pub const ARG_TARGETS: &str = "targets";
 pub const ARG_CHANGES: &str = "changes";
 pub const ARG_CHANGE_TARGETS: &str = "change-targets";
@@ -45,9 +47,6 @@ pub const ARG_STDERR: &str = "stderr";
 pub const ARG_STDOUT: &str = "stdout";
 pub const ARG_ID: &str = "id";
 pub const ARG_DEPS: &str = "deps";
-pub const ARG_ARG: &str = "arg";
-pub const ARG_ARGMAP: &str = "argmap";
-pub const ARG_ARGMAP_FILE: &str = "argmap-file";
 pub const ARG_FAIL_ON_UNDEFINED: &str = "fail-on-undefined";
 pub const ARG_NO_BASE_ARGMAPS: &str = "no-base-argmaps";
 pub const ARG_FORMAT: &str = "format";
@@ -239,23 +238,27 @@ pub fn build() -> clap::Command {
                     .help("Display information for the commands that are defined for this target.")
                     .action(ArgAction::SetTrue),
             )
+            .arg(
+                Arg::new(ARG_ARGMAPS)
+                    .short('m')
+                    .long(ARG_ARGMAPS)
+                    .help("Display information for the argmaps that are defined for this target.")
+                    .action(ArgAction::SetTrue),
+            )
     ))
 
     .subcommand(Command::new(CMD_RUN)
-        .about("Run target-defined commands.")
+        .about("Run target commands.")
         .after_help(r#"
-When --target-argmap-file, --target-argmap, and/or --arg are provided, keys that appear multiple times will have their respective arrays concatenated in the following order, after any base argmaps for targets involved in the run:
+When --argmaps, and/or --args are provided, keys that appear multiple times will have their respective arrays concatenated in the following order:
 
-    1. Each --target-argmap-file, in the order provided
-    2. Each --target-argmap literal, in the order provided
-    3. Each --arg, in the order provided
+    1. All mappings in the `base` argmap, unless disabled with --no-base-argmaps
+    2. All mappings in the files specified by --argmaps, in the order provided
+    3. Each element of the --args array, in the order provided
 
 Refer to --help for more information on these options.
 "#)
         .arg_required_else_help(true)
-        .arg(arg_git_path.clone())
-        .arg(arg_begin.clone())
-        .arg(arg_end.clone())
         .arg(
             Arg::new(ARG_COMMANDS)
                 .short('c')
@@ -274,13 +277,7 @@ Refer to --help for more information on these options.
                 .num_args(1..)
                 .value_delimiter(' ')
                 .action(ArgAction::Append)
-                .help("A list of command sequences that will be expanded and executed in the order provided. If one or more commands are provided, they will be executed after all sequences.")
-        )
-        .group(
-            ArgGroup::new("commands_and_or_sequences")
-                .args([ARG_COMMANDS, ARG_SEQUENCES])
-                .required(true)
-                .multiple(true),
+                .help("A list of command sequences that will be expanded and executed in the order provided. If one or more --commands are provided, they will be executed after all sequences.")
         )
         .arg(
             Arg::new(ARG_TARGETS)
@@ -291,6 +288,41 @@ Refer to --help for more information on these options.
                 .required(false)
                 .action(ArgAction::Append)
                 .help("A list of targets for which commands will be executed. If not provided, target groups will be inferred from the target graph.")
+        )
+        .arg(
+            Arg::new(ARG_ARGS)
+                .short('a')
+                .long(ARG_ARGS)
+                .num_args(1..)
+                .required(false)
+                .action(ArgAction::Append)
+                .help("A list of runtime arguments to be provided when executing one command for a single target.")
+                .long_help("This is a shorthand form of the more expressive '--argmaps', designed for testing and single command + single target use. Providing this flag without specifying exactly one command and one target will result in an error.")
+        )
+        .arg(
+            Arg::new(ARG_ARGMAPS)
+                .long(ARG_ARGMAPS)
+                .short('m')
+                .num_args(1..)
+                .required(false)
+                .action(ArgAction::Append)
+                .help("A list of argmap names to load when executing commands.")
+                .long_help(r#"Each name provided is resolved to a respective {{name}}.json file in the target's argmap directory. Each object is merged from left to right, and keys that appear in multiple mappings have their arrays of arguments concatenated according to the order of the lists provided.
+
+An argmap has the following form:
+
+{
+    "<command>": [
+        "arg1",
+        "arg2",
+        ...
+        "argN"
+    ]
+}
+
+See `monorail run -h` for information on how this interacts with other arg-related options.
+
+"#),
         )
         .arg(
             Arg::new(ARG_DEPS)
@@ -310,70 +342,15 @@ Refer to --help for more information on these options.
                 .long_help("Disable loading base argmaps for run targets. By default, all base argmaps are loaded.")
                 .action(ArgAction::SetTrue),
         )
-        .arg(
-            Arg::new(ARG_ARG)
-                .short('a')
-                .long(ARG_ARG)
-                .num_args(1..)
-                .required(false)
-                .action(ArgAction::Append)
-                .help("One or more runtime argument(s) to be provided when executing a command for a single target.")
-                .long_help("This is a shorthand form of the more expressive '--target-argmap' and '--target-argmap-file', designed for single command + single target use. Providing this flag without specifying exactly one command and one target will result in an error.")
+        .arg(arg_git_path.clone())
+        .arg(arg_begin.clone())
+        .arg(arg_end.clone())
+        .group(
+            ArgGroup::new("commands_and_or_sequences")
+                .args([ARG_COMMANDS, ARG_SEQUENCES])
+                .required(true)
+                .multiple(true),
         )
-        .arg(
-            Arg::new(ARG_ARGMAP)
-                .long(ARG_ARGMAP)
-                .short('m')
-                .num_args(1..)
-                .required(false)
-                .action(ArgAction::Append)
-                .help("A list of JSON literals containing nested command-target-argument mappings to use when executing commands.")
-                .long_help(r#"Each object provided is merged from left to right, and keys that appear in multiple mappings have their arrays of arguments concatenated according to the order of the lists provided.
-
-An argmap has the following form:
-
-{
-    "<target>": {
-        "<command>": [
-            "arg1",
-            "arg2",
-            ...
-            "argN"
-        ]
-    }
-}
-
-See `monorail run -h` for information on how this interacts with other arg-related options.
-
-"#),
-        )
-        .arg(
-            Arg::new(ARG_ARGMAP_FILE)
-                .long(ARG_ARGMAP_FILE)
-                .short('f')
-                .num_args(1..)
-                .required(false)
-                .action(ArgAction::Append)
-                .help("A list of files containing nested command-target-args mappings to use when executing commands.")
-                .long_help(r#"Each file provided is merged from left to right, and keys that appear in multiple files have their arrays of arguments concatenated according to the order of the lists provided.
-
-An argmap has the following form:
-
-{
-    "<target>": {
-        "<command>": [
-            "arg1",
-            "arg2",
-            ...
-            "argN"
-        ]
-    }
-}
-
-See `monorail run -h` for information on how this interacts with other arg-related options.
-"#),
-        )
-
     )
     .subcommand(Command::new(CMD_RESULT)
         .about("Show historical results from runs")
@@ -499,10 +476,12 @@ pub fn handle<'a>(
                         "Config file {} has no parent directory",
                         config_file_path.display()
                     )))?;
-            let config = core::Config::new(config_file_path)?;
+            let mut config = core::Config::new(config_file_path)?;
             config.check(config_file_path, work_path)?;
             if let Some(config_matches) = matches.subcommand_matches(CMD_CONFIG) {
                 if config_matches.subcommand_matches(CMD_SHOW).is_some() {
+                    // fill all runtime derived values in prior to serializing
+                    config.fill();
                     write_result(&Ok(config), output_options)?;
                     return Ok(HANDLE_OK);
                 }
@@ -530,7 +509,12 @@ pub fn handle<'a>(
             }
             if let Some(target_matches) = matches.subcommand_matches(CMD_TARGET) {
                 if let Some(show_matches) = target_matches.subcommand_matches(CMD_SHOW) {
-                    return handle_target_show(&config, show_matches, output_options, work_path);
+                    return handle_target_show(
+                        &mut config,
+                        show_matches,
+                        output_options,
+                        work_path,
+                    );
                 }
                 if let Some(render_matches) = target_matches.subcommand_matches(CMD_RENDER) {
                     return handle_target_render(
@@ -727,7 +711,7 @@ fn handle_target_render<'a>(
     Ok(get_code(res.is_err()))
 }
 fn handle_target_show<'a>(
-    config: &'a core::Config,
+    config: &'a mut core::Config,
     matches: &'a ArgMatches,
     output_options: &OutputOptions<'a>,
     work_path: &'a path::Path,
@@ -737,6 +721,7 @@ fn handle_target_show<'a>(
         app::target::TargetShowInput {
             show_target_groups: matches.get_flag(ARG_TARGET_GROUPS),
             show_commands: matches.get_flag(ARG_COMMANDS),
+            show_argmaps: matches.get_flag(ARG_ARGMAPS),
         },
         work_path,
     );
@@ -853,17 +838,12 @@ impl<'a> TryFrom<&'a clap::ArgMatches> for app::run::HandleRunInput<'a> {
                 .flatten()
                 .collect(),
             args: cmd
-                .get_many::<String>(ARG_ARG)
+                .get_many::<String>(ARG_ARGS)
                 .into_iter()
                 .flatten()
                 .collect(),
-            argmap: cmd
-                .get_many::<String>(ARG_ARGMAP)
-                .into_iter()
-                .flatten()
-                .collect(),
-            argmap_file: cmd
-                .get_many::<String>(ARG_ARGMAP_FILE)
+            argmaps: cmd
+                .get_many::<String>(ARG_ARGMAPS)
                 .into_iter()
                 .flatten()
                 .collect(),

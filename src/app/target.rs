@@ -53,6 +53,7 @@ pub(crate) fn target_render(
 pub(crate) struct TargetShowInput {
     pub(crate) show_target_groups: bool,
     pub(crate) show_commands: bool,
+    pub(crate) show_argmaps: bool,
 }
 #[derive(Debug, Serialize)]
 pub(crate) struct TargetShowOutput<'a> {
@@ -72,44 +73,54 @@ pub(crate) struct AppTarget<'a> {
     pub(crate) ignores: &'a Option<Vec<String>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) commands: Option<HashMap<String, AppTargetCommand>>,
+    pub(crate) commands: Option<HashMap<String, AppTargetFile>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) argmaps: Option<HashMap<String, AppTargetFile>>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct AppTargetCommand {
-    pub(crate) name: String,
+pub(crate) struct AppTargetFile {
     pub(crate) path: Option<path::PathBuf>,
-    pub(crate) is_executable: bool,
+    pub(crate) permissions: Option<String>,
 }
-impl AppTargetCommand {
+impl AppTargetFile {
     pub(crate) fn new(
         name: &str,
-        def: Option<&core::CommandDefinition>,
-        target_command_path: &path::Path,
+        def: Option<&core::FileDefinition>,
+        search_path: &path::Path,
         work_path: &path::Path,
     ) -> Self {
         let p = match def {
             Some(def) => {
                 if def.path.is_empty() {
                     // if no path is provided, attempt to discover it
-                    file::find_file_by_stem(name, target_command_path)
+                    file::find_file_by_stem(name, search_path)
                 } else {
                     // otherwise, use what was provided instead
                     Some(work_path.join(&def.path))
                 }
             }
-            None => file::find_file_by_stem(name, target_command_path),
+            None => file::find_file_by_stem(name, search_path),
         };
-        let is_executable = if let Some(ref p) = p {
-            file::is_executable(p)
-        } else {
-            false
-        };
-        Self {
-            name: name.to_owned(),
-            path: p,
-            is_executable,
+        let mut permissions = None;
+        if let Some(ref p) = p {
+            permissions = file::permissions(p);
         }
+        Self {
+            path: p,
+            permissions,
+        }
+    }
+    // Strip the internal path of the given prefix, mainly for display.
+    pub(crate) fn strip_path_prefix(&mut self, prefix: &path::Path) -> Result<(), MonorailError> {
+        if let Some(ref mut path) = self.path {
+            *path = path
+                .strip_prefix(prefix)
+                .map_err(|e| MonorailError::Generic(format!("Error stripping path prefix: {}", e)))?
+                .to_path_buf();
+        }
+        Ok(())
     }
 }
 
@@ -128,14 +139,25 @@ pub(crate) fn target_show<'a>(
             uses: &t.uses,
             ignores: &t.ignores,
             commands: None,
+            argmaps: None,
         };
         if input.show_target_groups {
             target_set.insert(&t.path);
         }
         if input.show_commands {
-            let target_command_path = work_path.join(&t.path).join(&t.commands.path);
-            let found = find_target_commands(t, &target_command_path, work_path)?;
-            out_target.commands = Some(found);
+            let target_command_path = work_path.join(t.commands.get_path(path::Path::new(&t.path)));
+            let found =
+                find_target_files(&t.commands.definitions, &target_command_path, work_path)?;
+            if !found.is_empty() {
+                out_target.commands = Some(found);
+            }
+        }
+        if input.show_argmaps {
+            let target_argmap_path = work_path.join(t.argmaps.get_path(path::Path::new(&t.path)));
+            let found = find_target_files(&t.argmaps.definitions, &target_argmap_path, work_path)?;
+            if !found.is_empty() {
+                out_target.argmaps = Some(found);
+            }
         }
         targets.push(out_target);
     }
@@ -153,32 +175,31 @@ pub(crate) fn target_show<'a>(
 
 // Merges the target's command definitions with a filesytem walk to
 // create a complete view of a targets available commands.
-fn find_target_commands(
-    target: &core::Target,
-    target_command_path: &path::Path,
+fn find_target_files(
+    definitions: &Option<HashMap<String, core::FileDefinition>>,
+    search_path: &path::Path,
     work_path: &path::Path,
-) -> Result<HashMap<String, AppTargetCommand>, MonorailError> {
+) -> Result<HashMap<String, AppTargetFile>, MonorailError> {
     let mut o = HashMap::new();
     let mut def_paths = HashSet::new();
 
     // first, process any defined commands and note the paths we've seen
-    if let Some(defs) = &target.commands.definitions {
+    if let Some(defs) = &definitions {
         for (name, def) in defs {
             // if def.path is specified, we will use that instead
             let def_path = if def.path.is_empty() {
-                target_command_path.to_path_buf()
+                search_path.to_path_buf()
             } else {
                 work_path.join(&def.path)
             };
-            o.insert(
-                name.to_string(),
-                AppTargetCommand::new(name, Some(def), target_command_path, work_path),
-            );
+            let mut atf = AppTargetFile::new(name, Some(def), search_path, work_path);
+            atf.strip_path_prefix(work_path)?;
+            o.insert(name.to_string(), atf);
             def_paths.insert(def_path);
         }
     }
     // now walk the target.commands.path looking for files that we haven't already seen
-    if let Ok(entries) = std::fs::read_dir(target_command_path) {
+    if let Ok(entries) = std::fs::read_dir(search_path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && !def_paths.contains(&path) {
@@ -190,10 +211,9 @@ fn find_target_commands(
                             stem
                         )))?
                         .to_string();
-                    o.insert(
-                        stem_str.clone(),
-                        AppTargetCommand::new(&stem_str, None, target_command_path, work_path),
-                    );
+                    let mut atf = AppTargetFile::new(&stem_str, None, search_path, work_path);
+                    atf.strip_path_prefix(work_path)?;
+                    o.insert(stem_str.clone(), atf);
                 }
             }
         }

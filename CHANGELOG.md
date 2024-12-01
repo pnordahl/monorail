@@ -1,5 +1,14 @@
 # Change Log
 
+## [3.6.0] - 2024-12-01
+
+### Changed
+- Replaced `--argmap` JSON literals with `--argmaps`, which accepts a list of argmap names to load
+- Replaced `--arg` with `--args` for consistency with other option pluralization
+- Removed `--argmap-file` direct loading in favor of `--argmaps`
+- Changed target `argmaps` configuration to align with new autoloading API
+- Replaced `is_executable` boolean in `target show --commands` to `permissions` showing octal mode
+
 ## [3.5.7] - 2024-11-26
 
 ### Fixed
@@ -56,7 +65,6 @@
 ## [3.5.0] - 2024-11-13
 
 ### Changed
-- `--arg, --arg-map, and --arg-map` are now `--target-argmap, and --target-argmap`
 - Default commands directory from `monorail` to `monorail/cmd`
 
 ### Added

@@ -24,8 +24,7 @@ pub(crate) struct HandleRunInput<'a> {
     pub(crate) sequences: Vec<&'a String>,
     pub(crate) targets: HashSet<&'a String>,
     pub(crate) args: Vec<&'a String>,
-    pub(crate) argmap: Vec<&'a String>,
-    pub(crate) argmap_file: Vec<&'a String>,
+    pub(crate) argmaps: Vec<&'a String>,
     pub(crate) include_deps: bool,
     pub(crate) fail_on_undefined: bool,
     pub(crate) use_base_argmaps: bool,
@@ -155,9 +154,12 @@ impl ArgMap {
             }
         }
     }
-    // Loads an argmap containing only commands. Specifically useful for a target's
-    // base argmap, which defines only command -> [arg].
-    fn merge_target_commands(&mut self, target: &str, p: &path::Path) -> Result<(), MonorailError> {
+    // Loads an argmap containing commands, and merges it using the target key. If
+    // the path doesn't exist, then nothing is done.
+    fn merge_target_argmap(&mut self, target: &str, p: &path::Path) -> Result<(), MonorailError> {
+        if !p.exists() {
+            return Ok(());
+        }
         let f = fs::File::open(p).map_err(MonorailError::from)?;
         let br = io::BufReader::new(f);
         let src = serde_json::from_reader(br).map_err(|e| {
@@ -170,35 +172,8 @@ impl ArgMap {
         self.merge(HashMap::from([(target.to_string(), src)]));
         Ok(())
     }
-    fn merge_file(&mut self, p: &path::Path) -> Result<(), MonorailError> {
-        let f = fs::File::open(p).map_err(MonorailError::from)?;
-        let br = io::BufReader::new(f);
-        let src = serde_json::from_reader(br).map_err(|e| {
-            MonorailError::Generic(format!(
-                "File arg map at {} contains invalid JSON; {}",
-                p.display(),
-                e
-            ))
-        })?;
-        self.merge(src);
-        Ok(())
-    }
+
     fn merge_run_input(&mut self, input: &HandleRunInput) -> Result<(), MonorailError> {
-        // first process files
-        for f in &input.argmap_file {
-            self.merge_file(path::Path::new(f))?;
-        }
-
-        // next, argmap literals
-        for s in &input.argmap {
-            let src: HashMap<String, HashMap<String, Vec<String>>> = serde_json::from_str(s)
-                .map_err(|e| {
-                    MonorailError::Generic(format!("Inline arg map contains invalid JSON; {}", e))
-                })?;
-            self.merge(src);
-        }
-
-        // finally, args
         if !input.args.is_empty() {
             if input.commands.len() != 1 {
                 return Err(MonorailError::from(
@@ -282,15 +257,10 @@ pub(crate) async fn handle_run<'a>(
             let target_groups = ao
                 .target_groups
                 .ok_or(MonorailError::from("No target groups found"))?;
-            if input.use_base_argmaps {
-                for t in ao.targets.iter() {
-                    let base =
-                        cfg.targets[*index.get_target_index(t)?].get_argmap_base_path(work_path);
-                    if file::exists(&base).await {
-                        argmap.merge_target_commands(t, &base)?;
-                    }
-                }
+            for t in ao.targets.iter() {
+                merge_target_argmaps(cfg, &index, input, t, work_path, &mut argmap)?;
             }
+
             (index, target_groups)
         }
         _ => {
@@ -298,14 +268,8 @@ pub(crate) async fn handle_run<'a>(
             let target_groups = if input.include_deps {
                 let ai = analyze::AnalyzeInput::new(false, false, true);
                 let ao = analyze::analyze(&ai, &mut index, None)?;
-                if input.use_base_argmaps {
-                    for t in ao.targets.iter() {
-                        let base = cfg.targets[*index.get_target_index(t)?]
-                            .get_argmap_base_path(work_path);
-                        if file::exists(&base).await {
-                            argmap.merge_target_commands(t, &base)?;
-                        }
-                    }
+                for t in ao.targets.iter() {
+                    merge_target_argmaps(cfg, &index, input, t, work_path, &mut argmap)?;
                 }
 
                 ao.target_groups
@@ -315,13 +279,7 @@ pub(crate) async fn handle_run<'a>(
                 // we will make synthetic serialized length 1 groups that ignore the graph
                 let mut tg = vec![];
                 for t in input.targets.iter() {
-                    if input.use_base_argmaps {
-                        let base = cfg.targets[*index.get_target_index(t)?]
-                            .get_argmap_base_path(work_path);
-                        if file::exists(&base).await {
-                            argmap.merge_target_commands(t, &base)?;
-                        }
-                    }
+                    merge_target_argmaps(cfg, &index, input, t, work_path, &mut argmap)?;
                     tg.push(vec![t.to_string()]);
                 }
                 debug!("Synthesized target groups");
@@ -359,6 +317,28 @@ pub(crate) async fn handle_run<'a>(
     // Update the run counter
     tracking_run.save()?;
     Ok(run_output)
+}
+
+// Parse and merge all requested argmaps for the given target.
+fn merge_target_argmaps<'a>(
+    cfg: &'a core::Config,
+    index: &'a core::Index,
+    input: &'a HandleRunInput<'a>,
+    target: &String,
+    work_path: &path::Path,
+    argmap: &mut ArgMap,
+) -> Result<(), MonorailError> {
+    if input.use_base_argmaps || !input.argmaps.is_empty() {
+        let cfg_target = &cfg.targets[*index.get_target_index(target)?];
+        let argmap_path = work_path.join(cfg_target.argmaps.get_path(path::Path::new(target)));
+        if input.use_base_argmaps {
+            argmap.merge_target_argmap(target, &argmap_path.join("base.json"))?;
+        }
+        for m in &input.argmaps {
+            argmap.merge_target_argmap(target, &argmap_path.join(format!("{}.json", m)))?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -413,11 +393,12 @@ fn get_plan<'a>(
                 let tar = targets
                     .get(target_index)
                     .ok_or(MonorailError::from("Target not found"))?;
-                let commands_path = work_path.join(target_path).join(&tar.commands.path);
+                let commands_path =
+                    work_path.join(tar.commands.get_path(path::Path::new(target_path)));
                 let command_path = match &tar.commands.definitions {
                     Some(definitions) => match definitions.get(cmd.as_str()) {
                         Some(def) => {
-                            let app_target_command = target::AppTargetCommand::new(
+                            let app_target_command = target::AppTargetFile::new(
                                 cmd,
                                 Some(def),
                                 &commands_path,
@@ -1071,8 +1052,7 @@ mod tests {
         commands: Vec<&'a String>,
         targets: HashSet<&'a String>,
         args: Vec<&'a String>,
-        argmap: Vec<&'a String>,
-        argmap_file: Vec<&'a String>,
+        argmaps: Vec<&'a String>,
     ) -> HandleRunInput<'a> {
         HandleRunInput {
             git_opts: git::GitOptions::default(),
@@ -1080,8 +1060,7 @@ mod tests {
             sequences: vec![],
             targets,
             args,
-            argmap,
-            argmap_file,
+            argmaps,
             include_deps: false,
             fail_on_undefined: false,
             use_base_argmaps: true,
@@ -1089,19 +1068,15 @@ mod tests {
     }
 
     const ARGMAP_JSON: &str = r#"{
-      "rust/crate1": {
         "build": [
           "--release"
         ]
-      }
     }"#;
 
     const ARGMAP_JSON2: &str = r#"{
-      "rust/crate1": {
         "build": [
           "--force"
         ]
-      }
     }"#;
 
     // test_handle_run_cmd_error (failed == true)
@@ -1114,13 +1089,8 @@ mod tests {
         let command = "cmd1".to_string();
         let t1 = "target1".to_string();
         let t2 = "target2".to_string();
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&t1, &t2]),
-            vec![],
-            vec![],
-            vec![],
-        );
+        let input =
+            setup_handle_run_input(vec![&command], HashSet::from([&t1, &t2]), vec![], vec![]);
 
         let o = handle_run(&c, &input, "x", work_path).await.unwrap();
         assert!(o.failed);
@@ -1145,7 +1115,7 @@ mod tests {
         let work_path = &td.path();
         let c = new_test_repo(work_path).await;
         let command = "cmd0".to_string();
-        let input = setup_handle_run_input(vec![&command], HashSet::new(), vec![], vec![], vec![]);
+        let input = setup_handle_run_input(vec![&command], HashSet::new(), vec![], vec![]);
 
         let o = handle_run(&c, &input, "x", work_path).await.unwrap();
         assert!(!o.failed);
@@ -1196,22 +1166,23 @@ mod tests {
         let command = "build".to_string();
         let target = "rust/crate1".to_string();
         let arg1 = "--plorp".to_string();
-        let argmap = ARGMAP_JSON.to_string();
+        let argmap1 = "argmap".to_string();
 
-        let path = td.path().join("test_argmap.json");
-        std::fs::write(&path, r#"{"rust/crate1":{"build":["--burp"]}}"#)
-            .expect("Failed to write test file");
-        let path_str = path.display().to_string();
+        let argmap1_path = td.path().join(format!("{}.json", &argmap1));
+        std::fs::write(&argmap1_path, r#"{"build":["--burp"]}"#)
+            .expect("Failed to write argmap file");
 
         let input = setup_handle_run_input(
             vec![&command],
             HashSet::from([&target]),
             vec![&arg1],
-            vec![&argmap],
-            vec![&path_str],
+            vec![],
         );
 
         let mut argmap = ArgMap::new();
+        argmap
+            .merge_target_argmap(&target, &argmap1_path)
+            .expect("Expected argmap merge to succeed");
         argmap
             .merge_run_input(&input)
             .expect("Expected argmap merge to succeed");
@@ -1219,10 +1190,7 @@ mod tests {
             .get_args("rust/crate1", "build")
             .expect("Args not found");
 
-        assert_eq!(
-            args,
-            &vec!["--burp".to_string(), "--release".to_string(), arg1]
-        );
+        assert_eq!(args, &vec!["--burp".to_string(), arg1]);
     }
 
     #[test]
@@ -1236,7 +1204,6 @@ mod tests {
             vec![&command],
             HashSet::from([&target]),
             vec![&arg1, &arg2],
-            vec![],
             vec![],
         );
 
@@ -1263,7 +1230,6 @@ mod tests {
             HashSet::from([&target]),
             vec![&arg],
             vec![],
-            vec![],
         );
 
         let mut argmap = ArgMap::new();
@@ -1283,37 +1249,7 @@ mod tests {
             HashSet::from([&target1, &target2]),
             vec![&arg],
             vec![],
-            vec![],
         );
-
-        let mut argmap = ArgMap::new();
-        let result = argmap.merge_run_input(&input);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_argmap_valid_inline_json() {
-        let json = ARGMAP_JSON.to_string();
-        let json2 = ARGMAP_JSON2.to_string();
-        let input =
-            setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&json, &json2], vec![]);
-
-        let mut argmap = ArgMap::new();
-        argmap
-            .merge_run_input(&input)
-            .expect("Expected argmap merge to succeed");
-        let args = argmap
-            .get_args("rust/crate1", "build")
-            .expect("Args not found");
-
-        assert_eq!(args, &vec!["--release".to_string(), "--force".to_string()]);
-    }
-
-    #[test]
-    fn test_argmap_invalid_inline_json() {
-        let invalid_json = r#"{lkjsdf"#.to_string();
-        let input =
-            setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&invalid_json], vec![]);
 
         let mut argmap = ArgMap::new();
         let result = argmap.merge_run_input(&input);
@@ -1323,61 +1259,38 @@ mod tests {
     #[test]
     fn test_argmap_valid_file() {
         let td = new_testdir().unwrap();
-        let command = "build".to_string();
+        let command = "build";
         let target = "rust/crate1".to_string();
 
-        let path = td.path().join("test_argmap.json");
-        std::fs::write(&path, ARGMAP_JSON).expect("Failed to write test file");
-        let path_str = path.display().to_string();
-
-        let path2 = td.path().join("test_argmap2.json");
-        std::fs::write(&path2, ARGMAP_JSON2).expect("Failed to write test file");
-        let path_str2 = path2.display().to_string();
-
-        let input = setup_handle_run_input(
-            vec![&command],
-            HashSet::from([&target]),
-            vec![],
-            vec![],
-            vec![&path_str, &path_str2],
-        );
         let mut argmap = ArgMap::new();
+
+        let argmap1_path = td.path().join("argmap.json");
+        std::fs::write(&argmap1_path, ARGMAP_JSON).expect("Failed to write test file");
         argmap
-            .merge_run_input(&input)
+            .merge_target_argmap(&target, &argmap1_path)
             .expect("Expected argmap merge to succeed");
 
+        let argmap2_path = td.path().join("argmap.json");
+        std::fs::write(&argmap2_path, ARGMAP_JSON2).expect("Failed to write test file");
+        argmap
+            .merge_target_argmap(&target, &argmap2_path)
+            .expect("Expected argmap merge to succeed");
         let args = argmap
-            .get_args("rust/crate1", "build")
+            .get_args("rust/crate1", command)
             .expect("Args not found");
         assert_eq!(args, &vec!["--release".to_string(), "--force".to_string()]);
     }
 
     #[test]
-    fn test_argmap_invalid_file() {
+    fn test_argmap_malformed_file() {
         let td = new_testdir().unwrap();
-        let path = td.path().join("invalid_argmap.json");
-        std::fs::write(&path, r#"{lksjdfklj"#).expect("Failed to write test file");
-        let path_str = path.display().to_string();
-
-        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], vec![], vec![&path_str]);
+        let target = "rust/crate1".to_string();
+        let file_path = td.path().join("malformed.json");
+        std::fs::write(&file_path, r#"{lksjdfklj"#).expect("Failed to write test file");
         let mut argmap = ArgMap::new();
-        let result = argmap.merge_run_input(&input);
+        let result = argmap.merge_target_argmap(&target, &file_path);
 
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_argmap_get_args_nonexistent() {
-        let json = ARGMAP_JSON.to_string();
-        let input = setup_handle_run_input(vec![], HashSet::new(), vec![], vec![&json], vec![]);
-
-        let mut argmap = ArgMap::new();
-        argmap
-            .merge_run_input(&input)
-            .expect("Expected argmap merge to succeed");
-        let args = argmap.get_args("nonexistent_target", "nonexistent_command");
-
-        assert!(args.is_none());
     }
 
     async fn prep_process_plan_test(
