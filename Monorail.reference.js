@@ -88,21 +88,26 @@ const reference = {
 			"argmaps": {
 				/*
 				Default location within this target path containing argmap 
-				definition files. This is used when locating argmaps for this
-				target automatically when it is changed.
+				definition files. This is used when locating argmaps when
+				no definition path for that argmap is specified.
 
-				Optional, default: "monorail/argmap"
+				Optional, default: "path/to/target/monorail/argmap"
 				*/
-				"path": "path/within/this/target",
+				"path": "path/within/repository",
 
 				/*
-				Path to the default argmap to load for this target. This argmap
-				is loaded prior to any arguments supplied by use of 
-				--arg, --target-argmap, and --target-argmap-file switches on `monorail run`.
+				Overrides for this targets argmaps.
 
-				Optional, default: "base.json"
+				Optional, default: {}
 				*/
-				"base": "path/within/target/argmaps/path"
+				"definitions": {
+					"<argmap name>": {
+						// Path to a JSON file to use for this argmap.
+						// Required, if the parent key is specified. 
+						// Default: <argmaps.path>/<argmap name>.json
+						"path": "path/within/repository"
+					}
+				}
 			}
 
 
@@ -116,20 +121,20 @@ const reference = {
 				executables. This is used when locating executables for a
 				command when no definition path for that command is specified.
 
-				Optional, default: "monorail/cmd"
+				Optional, default: "path/to/target/monorail/cmd"
 				*/
-				"path": "path/within/this/target"
+				"path": "path/within/repository"
 
 				/*
-				Overrides for this targets command executables and
-				their arguments.
+				Overrides for this targets command executables.
 
 				Optional, default: {}
 				*/
 				"definitions": {
 					"<command_name>": {
 						// Path to an executable to use for this command.
-						// Optional. default: <commands.path>/<command_name>.<extension>,
+						// Required, if the parent key is specified.
+						// Default: <commands.path>/<command_name>.<extension>,
 						// where <extension> is discovered on the filesystem.
 						"path": "path/within/repository"
 					}

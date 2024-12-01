@@ -199,6 +199,11 @@ impl Config {
             None => Ok(()),
         }
     }
+    pub(crate) fn fill(&mut self) {
+        for t in &mut self.targets {
+            t.fill();
+        }
+    }
     pub(crate) fn get_target_path_set(&self) -> HashSet<&String> {
         let mut o = HashSet::new();
         for t in &self.targets {
@@ -220,12 +225,6 @@ impl Config {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CommandDefinition {
-    #[serde(default)]
-    pub(crate) path: String,
-}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Target {
@@ -243,79 +242,80 @@ pub(crate) struct Target {
     // Configuration and optional overrides for commands.
     #[serde(default)]
     pub(crate) commands: TargetCommands,
-
     // Configuration and optional overrides for argmaps.
     #[serde(default)]
     pub(crate) argmaps: TargetArgMaps,
 }
+
 impl Target {
-    pub(crate) fn get_argmap_base_path(&self, work_path: &path::Path) -> path::PathBuf {
-        work_path
-            .join(&self.path)
-            .join(&self.argmaps.path)
-            .join(&self.argmaps.base)
+    pub(crate) fn fill(&mut self) {
+        self.commands.fill(path::Path::new(&self.path));
+        self.argmaps.fill(path::Path::new(&self.path));
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TargetArgMaps {
     // Relative path from this target's `path` to a directory containing
-    // base argmap files to be used when this target is involved in
-    // `monorail run`. These argmaps are the first loaded, so any runtime
-    // instances of --args, --target-argmap, and/or --target-argmap-files are merged
-    // into
-    #[serde(default = "TargetArgMaps::default_path")]
-    pub(crate) path: String,
+    // argmap files to be used when this target is involved in
+    // `monorail run`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) path: Option<String>,
 
-    // A default argmap to load for this target.
-    #[serde(default = "TargetArgMaps::default_base")]
-    pub(crate) base: String,
+    // Mappings of argmap names to files defining argmap JSON. If a name
+    // is not mapped here, monorail will fall back to looking for {{name}}.json
+    // within the argmaps directory path specified above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) definitions: Option<HashMap<String, FileDefinition>>,
 }
-
-impl Default for TargetArgMaps {
-    fn default() -> Self {
-        Self {
-            path: Self::default_path(),
-            base: Self::default_base(),
+impl TargetArgMaps {
+    // Fill all optional fields with runtime values, for debugging and display purposes.
+    pub(crate) fn fill(&mut self, target_path: &path::Path) {
+        self.path = Some(self.get_path(target_path).display().to_string());
+    }
+    pub(crate) fn get_path(&self, target_path: &path::Path) -> path::PathBuf {
+        match &self.path {
+            Some(p) => path::Path::new(&p).to_path_buf(),
+            None => target_path.join("monorail/argmap"),
         }
     }
 }
-impl TargetArgMaps {
-    fn default_path() -> String {
-        "monorail/argmap".into()
-    }
-    fn default_base() -> String {
-        "base.json".into()
-    }
-}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TargetCommands {
     // Relative path from this target's `path` to a directory containing
     // commands that can be executed by `monorail run`. Used for
-    // any commands that are not mapped to other paths in CommandDefinition.
-    #[serde(default = "TargetCommands::default_path")]
-    pub(crate) path: String,
+    // any commands that are not mapped to other paths in FileDefinition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) path: Option<String>,
     // Mappings of command names to executable statements; these
     // statements will be used when spawning tasks, and if unspecified
     // monorail will try to use an executable named {{command}}*.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) definitions: Option<HashMap<String, CommandDefinition>>,
+    pub(crate) definitions: Option<HashMap<String, FileDefinition>>,
 }
-impl Default for TargetCommands {
-    fn default() -> Self {
-        Self {
-            path: Self::default_path(),
-            definitions: None,
+
+impl TargetCommands {
+    // Fill all optional fields with runtime values, for debugging and display purposes.
+    pub(crate) fn fill(&mut self, target_path: &path::Path) {
+        let p = self.get_path(target_path);
+        self.path = Some(p.display().to_string());
+    }
+    pub(crate) fn get_path(&self, target_path: &path::Path) -> path::PathBuf {
+        match &self.path {
+            Some(p) => path::Path::new(&p).to_path_buf(),
+            None => target_path.join("monorail/cmd"),
         }
     }
 }
-impl TargetCommands {
-    fn default_path() -> String {
-        "monorail/cmd".into()
-    }
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FileDefinition {
+    #[serde(default)]
+    pub(crate) path: String,
 }
 
 #[derive(Deserialize, Serialize)]

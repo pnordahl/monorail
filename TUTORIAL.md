@@ -23,7 +23,7 @@ echo 'monorail-out' > .gitignore
 
 _NOTE_: the commit is to create a valid HEAD reference, which is needed in a later part of the tutorial.
 
-First, we will set up some toy projects to help get a feel for using `monorail`. Since `rust` is already installed, we'll use that in addition to `python` (which you likely also have installed; if not, go ahead and do so). The third project will not include any real code, because it's just going to illustrate how shared dependencies are considered during execution of commands. Finally, each will get an empty `monorail.sh` file that we will add code to as the tutorial proceeds.
+First, we will set up some toy projects to help get a feel for using `monorail`. Since `rust` is already installed, we'll use that in addition to `python` (which you likely also have installed; if not, go ahead and do so). The third project will not include any real code, because it's just going to illustrate how shared dependencies are considered during execution of commands.
 
 ### Initial configuration and mapping tagets
 
@@ -41,7 +41,7 @@ cat <<EOF > Monorail.json
 EOF
 ```
 
-This is how you generally specify targets; a unique filesystem path relative to the root of your repository.
+This is how you generally specify targets (and any other path in `Monorail.json`); a unique filesystem path relative to the root of your repository.
 
 Run the following, to show our config and ensure our input is well-formed:
 
@@ -60,19 +60,33 @@ monorail config show | jq
     {
       "path": "rust",
       "commands": {
-        "path": "monorail"
+        "path": "rust/monorail/cmd"
+      },
+      "argmaps": {
+        "path": "rust/monorail/argmap",
+        "definitions": {
+          "base": "rust/monorail/argmap/base.json"
+        }
       }
     },
     {
       "path": "python/app3",
       "commands": {
-        "path": "monorail"
+        "path": "python/app3/monorail/cmd"
+      },
+      "argmaps": {
+        "path": "python/app3/monorail/argmap",
+        "base": "python/app3/monorail/argmap/base.json"
       }
     },
     {
       "path": "proto",
       "commands": {
-        "path": "monorail"
+        "path": "proto/monorail/cmd"
+      },
+      "argmaps": {
+        "path": "proto/monorail/argmap",
+        "base": "proto/monorail/argmap/base.json"
       }
     }
   ],
@@ -793,7 +807,6 @@ monorail target show --commands | jq
         "hello": {
           "name": "hello",
           "path": "/private/tmp/monorail-tutorial/rust/monorail/cmd/hello.sh",
-          "args": null,
           "is_executable": true
         }
       }
@@ -807,7 +820,6 @@ monorail target show --commands | jq
         "hello": {
           "name": "hello",
           "path": "/private/tmp/monorail-tutorial/python/app3/monorail/cmd/hello.py",
-          "args": null,
           "is_executable": true
         }
       }
@@ -821,7 +833,6 @@ monorail target show --commands | jq
         "hello": {
           "name": "hello",
           "path": "/private/tmp/monorail-tutorial/proto/monorail/cmd/hello.awk",
-          "args": null,
           "is_executable": true
         }
       }

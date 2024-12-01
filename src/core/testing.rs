@@ -11,7 +11,7 @@ pub(crate) const TEST_CONFIG: &str = r#"
         {
             "path": "target1",
             "commands": {
-                "path": "commands",
+                "path": "target1/commands",
                 "definitions": {
                     "cmd1": {},
                     "cmd2": {
@@ -190,9 +190,6 @@ pub(crate) async fn new_test_repo(rp: &path::Path) -> core::Config {
         .await
         .unwrap();
     tokio::fs::create_dir_all(rp.join("target2")).await.unwrap();
-    tokio::fs::create_dir_all(rp.join("target2/argmap"))
-        .await
-        .unwrap();
     tokio::fs::create_dir_all(rp.join("target3/monorail/cmd"))
         .await
         .unwrap();
