@@ -112,6 +112,16 @@ impl AppTargetFile {
             permissions,
         }
     }
+    // Strip the internal path of the given prefix, mainly for display.
+    pub(crate) fn strip_path_prefix(&mut self, prefix: &path::Path) -> Result<(), MonorailError> {
+        if let Some(ref mut path) = self.path {
+            *path = path
+                .strip_prefix(prefix)
+                .map_err(|e| MonorailError::Generic(format!("Error stripping path prefix: {}", e)))?
+                .to_path_buf();
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn target_show<'a>(
@@ -138,12 +148,16 @@ pub(crate) fn target_show<'a>(
             let target_command_path = work_path.join(t.commands.get_path(path::Path::new(&t.path)));
             let found =
                 find_target_files(&t.commands.definitions, &target_command_path, work_path)?;
-            out_target.commands = Some(found);
+            if !found.is_empty() {
+                out_target.commands = Some(found);
+            }
         }
         if input.show_argmaps {
             let target_argmap_path = work_path.join(t.argmaps.get_path(path::Path::new(&t.path)));
             let found = find_target_files(&t.argmaps.definitions, &target_argmap_path, work_path)?;
-            out_target.argmaps = Some(found);
+            if !found.is_empty() {
+                out_target.argmaps = Some(found);
+            }
         }
         targets.push(out_target);
     }
@@ -178,10 +192,9 @@ fn find_target_files(
             } else {
                 work_path.join(&def.path)
             };
-            o.insert(
-                name.to_string(),
-                AppTargetFile::new(name, Some(def), search_path, work_path),
-            );
+            let mut atf = AppTargetFile::new(name, Some(def), search_path, work_path);
+            atf.strip_path_prefix(work_path)?;
+            o.insert(name.to_string(), atf);
             def_paths.insert(def_path);
         }
     }
@@ -198,10 +211,9 @@ fn find_target_files(
                             stem
                         )))?
                         .to_string();
-                    o.insert(
-                        stem_str.clone(),
-                        AppTargetFile::new(&stem_str, None, search_path, work_path),
-                    );
+                    let mut atf = AppTargetFile::new(&stem_str, None, search_path, work_path);
+                    atf.strip_path_prefix(work_path)?;
+                    o.insert(stem_str.clone(), atf);
                 }
             }
         }

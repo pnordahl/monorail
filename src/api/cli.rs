@@ -240,7 +240,7 @@ pub fn build() -> clap::Command {
             )
             .arg(
                 Arg::new(ARG_ARGMAPS)
-                    .short('c')
+                    .short('m')
                     .long(ARG_ARGMAPS)
                     .help("Display information for the argmaps that are defined for this target.")
                     .action(ArgAction::SetTrue),
