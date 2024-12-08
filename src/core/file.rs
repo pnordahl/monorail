@@ -1,5 +1,9 @@
 use std::collections::{HashMap, VecDeque};
+#[cfg(not(target_os = "windows"))]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "windows")]
+use std::os::windows::fs::MetadataExt;
+
 use std::path;
 use std::result::Result;
 
@@ -133,17 +137,30 @@ pub(crate) fn find_file_by_stem(name: &str, dir: &path::Path) -> Option<path::Pa
     None
 }
 
-pub(crate) fn is_executable(p: impl AsRef<path::Path>) -> bool {
+pub(crate) fn is_executable(p: &path::Path) -> bool {
+    #[cfg(not(target_os = "windows"))]
     if let Ok(metadata) = std::fs::metadata(p) {
         let permissions = metadata.permissions();
         return permissions.mode() & 0o111 != 0;
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(extension) = p.extension() {
+        match extension.to_str().unwrap_or("").to_lowercase().as_str() {
+            "exe" | "bat" | "cmd" | "com" | "msi" => return true,
+            _ => return false,
+        }
     }
     false
 }
 
 pub(crate) fn permissions(p: impl AsRef<path::Path>) -> Option<String> {
     match std::fs::metadata(p) {
-        Ok(md) => Some(format!("{:o}", md.permissions().mode() & 0o777)),
+        Ok(md) => {
+            #[cfg(target_os = "windows")]
+            return Some(format!("{:o}", md.file_attributes()));
+            #[cfg(not(target_os = "windows"))]
+            return Some(format!("{:o}", md.permissions().mode() & 0o777));
+        }
         Err(_) => None,
     }
 }
