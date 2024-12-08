@@ -170,6 +170,7 @@ mod tests {
     use super::*;
     use crate::core::testing::*;
     use std::fs::{self, set_permissions, File};
+    #[cfg(not(target_os = "windows"))]
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use tempfile::tempdir;
@@ -289,6 +290,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_executable_file() {
         let dir = tempdir().expect("Failed to create temp dir");
         let file_path = dir.path().join("executable_file");
@@ -304,6 +306,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_non_executable_file() {
         let dir = tempdir().expect("Failed to create temp dir");
         let file_path = dir.path().join("non_executable_file");
