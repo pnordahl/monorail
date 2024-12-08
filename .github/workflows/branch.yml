@@ -41,7 +41,9 @@ jobs:
         with:
           rustflags: ""
       - run: |
-          mkdir -p "%MONORAIL_TEST_DIR%"
+          mkdir "%MONORAIL_TEST_DIR%"
+          echo "%MONORAIL_TEST_DIR%"
+          dir "%MONORAIL_TEST_DIR%"
           git config --global user.name "a b"
           git config --global user.email "a@b.com"
       - run: cargo clippy --locked -- -D warnings
