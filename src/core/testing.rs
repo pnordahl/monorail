@@ -1,6 +1,7 @@
 use crate::core;
 use sha2::Digest;
 use std::collections::HashMap;
+#[cfg(not(target_os = "windows"))]
 use std::os::unix::fs::PermissionsExt;
 use std::path;
 use tokio::io::AsyncWriteExt;
@@ -148,6 +149,7 @@ pub(crate) async fn create_file(
         .await
         .unwrap();
     file.write_all(content).await.unwrap();
+    #[cfg(not(target_os = "windows"))]
     if executable {
         let mut permissions = file.metadata().await.unwrap().permissions();
         permissions.set_mode(0o755);
